@@ -1,18 +1,34 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 
 definePageMeta({ layout: false })
 
 const password = ref('')
-const error = ref('')
 const loading = ref(false)
+const dark = ref(false)
 
 const token = useCookie('youzai_token', { maxAge: 60 * 60 * 24 * 7 })
+
+const { showToast } = useToast()
+
+function applyTheme(isDark: boolean) {
+  document.documentElement.dataset.theme = isDark ? 'dark' : 'light'
+  localStorage.setItem('theme', isDark ? 'dark' : 'light')
+}
+
+function toggleTheme() {
+  dark.value = !dark.value
+  applyTheme(dark.value)
+}
+
+onMounted(() => {
+  dark.value = localStorage.getItem('theme') === 'dark'
+  applyTheme(dark.value)
+})
 
 async function login() {
   if (loading.value) return
   loading.value = true
-  error.value = ''
   try {
     const res = await $fetch<{ token: string }>('/api/auth/login', {
       method: 'POST',
@@ -21,7 +37,7 @@ async function login() {
     token.value = res.token
     await navigateTo('/')
   } catch (e: any) {
-    error.value = e?.data?.statusMessage || '登录失败'
+    showToast(e?.data?.statusMessage || '登录失败', 'error')
   } finally {
     loading.value = false
   }
@@ -30,8 +46,13 @@ async function login() {
 
 <template>
   <div class="login-page">
+    <div class="theme-toggle">
+      <md-icon-button :aria-label="dark ? '切换浅色' : '切换深色'" @click="toggleTheme">
+        <md-icon>{{ dark ? 'light_mode' : 'dark_mode' }}</md-icon>
+      </md-icon-button>
+    </div>
+
     <div class="login-card">
-      <h1>YouzaiWorld 管理后台</h1>
       <md-outlined-text-field
         type="password"
         label="密码"
@@ -39,7 +60,6 @@ async function login() {
         @input="password = ($event.target as HTMLInputElement).value"
         @keydown.enter="login"
       ></md-outlined-text-field>
-      <p v-if="error" class="login-error">{{ error }}</p>
       <md-filled-button :disabled="loading" @click="login">
         {{ loading ? '登录中…' : '登录' }}
       </md-filled-button>
@@ -56,6 +76,12 @@ async function login() {
   background: var(--md-sys-color-surface);
 }
 
+.theme-toggle {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+}
+
 .login-card {
   width: 320px;
   display: flex;
@@ -64,19 +90,5 @@ async function login() {
   padding: 32px;
   border-radius: 16px;
   background: var(--md-sys-color-surface-container);
-}
-
-.login-card h1 {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 600;
-  text-align: center;
-  color: var(--md-sys-color-on-surface);
-}
-
-.login-error {
-  margin: -8px 0 0;
-  font-size: 13px;
-  color: #b3261e;
 }
 </style>

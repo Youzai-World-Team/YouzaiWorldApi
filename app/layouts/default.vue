@@ -32,6 +32,17 @@ function onNav(e: Event) {
   if (href) navigateTo(href)
 }
 
+const token = useCookie('youzai_token')
+
+async function logout() {
+  try {
+    await $fetch('/api/auth/logout', { method: 'POST' })
+  } finally {
+    token.value = null
+    await navigateTo('/login')
+  }
+}
+
 onMounted(async () => {
   syncDrawer()
   mq?.addEventListener('change', syncDrawer)
@@ -69,19 +80,25 @@ onBeforeUnmount(() => {
 
     <div class="body">
       <md-navigation-drawer :opened="drawerOpen" pivot="start">
-        <md-list class="nav-list">
-          <md-list-item
-            v-for="item in navItems"
-            :key="item.to"
-            type="link"
-            :href="item.to"
-            :selected="route.path === item.to"
-            @click="onNav"
-          >
-            <md-icon slot="start">{{ item.icon }}</md-icon>
-            <span slot="headline">{{ item.label }}</span>
+        <div class="drawer-content">
+          <md-list class="nav-list">
+            <md-list-item
+              v-for="item in navItems"
+              :key="item.to"
+              type="link"
+              :href="item.to"
+              :selected="route.path === item.to"
+              @click="onNav"
+            >
+              <md-icon slot="start">{{ item.icon }}</md-icon>
+              <span slot="headline">{{ item.label }}</span>
+            </md-list-item>
+          </md-list>
+          <md-list-item type="button" class="logout-item" @click="logout">
+            <md-icon slot="start">logout</md-icon>
+            <span slot="headline">登出</span>
           </md-list-item>
-        </md-list>
+        </div>
       </md-navigation-drawer>
 
       <main class="content">
@@ -133,8 +150,19 @@ md-navigation-drawer {
   flex-shrink: 0;
 }
 
+.drawer-content {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
 .nav-list {
+  flex: 1;
   padding-top: 8px;
+}
+
+.logout-item {
+  margin-bottom: 8px;
 }
 
 md-list {
