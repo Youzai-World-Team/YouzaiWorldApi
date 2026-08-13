@@ -1,0 +1,120 @@
+:root,
+:root[data-theme='light'] {
+  color-scheme: light;
+  --md-sys-color-primary: #8bc34a;
+  --md-sys-color-on-primary: #1e3300;
+  --md-sys-color-primary-container: #d9f2b0;
+  --md-sys-color-on-primary-container: #1c3a00;
+  --md-sys-color-secondary-container: #d9f2b0;
+  --md-sys-color-on-secondary-container: #1c3a00;
+  --md-sys-color-surface: #fbfef6;
+  --md-sys-color-surface-container: #f0f7e6;
+  --md-sys-color-surface-container-high: #eaf0dd;
+  --md-sys-color-on-surface: #191d14;
+  --md-sys-color-on-surface-variant: #44483b;
+  --md-sys-color-outline: #737968;
+  --md-sys-color-outline-variant: #c2c9b4;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --md-sys-color-primary: #b7e08d;
+  --md-sys-color-on-primary: #1d3500;
+  --md-sys-color-primary-container: #3a5c00;
+  --md-sys-color-on-primary-container: #d4f2a8;
+  --md-sys-color-secondary-container: #3a5c00;
+  --md-sys-color-on-secondary-container: #d4f2a8;
+  --md-sys-color-surface: #101408;
+  --md-sys-color-surface-container: #1a1f12;
+  --md-sys-color-surface-container-high: #252a1c;
+  --md-sys-color-on-surface: #e2e5d5;
+  --md-sys-color-on-surface-variant: #c3c9b3;
+  --md-sys-color-outline: #8d927e;
+  --md-sys-color-outline-variant: #42493a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#__nuxt {
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+}
+
+body {
+  background: var(--md-sys-color-surface);
+  color: var(--md-sys-color-on-surface);
+  font-family: 'Roboto', system-ui, -apple-system, 'Segoe UI', 'PingFang SC',
+    'Microsoft YaHei', sans-serif;
+}
+
+md-icon {
+  --md-icon-size: 22px;
+}
+
+.page {
+  padding: 24px;
+  max-width: 1100px;
+}
+
+.page-title {
+  font-size: 22px;
+  font-weight: 500;
+  margin: 0 0 20px;
+  color: var(--md-sys-color-on-surface);
+}
+
+.card {
+  background: var(--md-sys-color-surface-container);
+  border-radius: 16px;
+  padding: 24px;
+}
+
+.card-title {
+  font-size: 16px;
+  font-weight: 500;
+  margin: 0 0 16px;
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.stat-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.stat-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--md-sys-color-primary-container);
+  color: var(--md-sys-color-on-primary-container);
+}
+
+.stat-icon md-icon {
+  --md-icon-size: 26px;
+}
+
+.stat-value {
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.stat-label {
+  font-size: 13px;
+  color: var(--md-sys-color-on-surface-variant);
+}
