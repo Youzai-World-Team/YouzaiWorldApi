@@ -58,7 +58,6 @@ onBeforeUnmount(() => {
       <md-icon-button aria-label="菜单" @click="drawerOpen = !drawerOpen">
         <md-icon>menu</md-icon>
       </md-icon-button>
-      <span class="app-bar-title">YouzaiWorld 管理后台</span>
       <div class="app-bar-actions">
         <md-icon-button :aria-label="dark ? '切换浅色' : '切换深色'" @click="toggleTheme">
           <md-icon>{{ dark ? 'light_mode' : 'dark_mode' }}</md-icon>
@@ -119,12 +118,6 @@ onBeforeUnmount(() => {
   gap: 8px;
   padding: 0 16px;
   background: var(--md-sys-color-surface-container);
-}
-
-.app-bar-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--md-sys-color-on-surface);
 }
 
 .app-bar-actions {
