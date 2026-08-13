@@ -23,5 +23,8 @@ logs
 .env.*
 !.env.example
 
+# Server runtime data
+server/data
+
 .workbuddy
 .claude

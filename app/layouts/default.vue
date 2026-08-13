@@ -32,12 +32,20 @@ function onNav(e: Event) {
   if (href) navigateTo(href)
 }
 
-onMounted(() => {
+onMounted(async () => {
   syncDrawer()
   mq?.addEventListener('change', syncDrawer)
   const saved = localStorage.getItem('theme')
   dark.value = saved === 'dark'
   applyTheme(dark.value)
+
+  try {
+    await $fetch('/api/auth/me')
+  } catch {
+    const token = useCookie('youzai_token')
+    token.value = null
+    await navigateTo('/login')
+  }
 })
 
 onBeforeUnmount(() => {
