@@ -31,6 +31,10 @@ function onNav(e: Event, to: string) {
   navigateTo(to)
 }
 
+function isActive(to: string) {
+  return route.path === to
+}
+
 onMounted(async () => {
   syncDrawer()
   mq?.addEventListener('change', syncDrawer)
@@ -74,22 +78,22 @@ onBeforeUnmount(() => {
               :key="item.to"
               type="link"
               :href="item.to"
-              :selected="route.path === item.to"
+              :class="{ 'nav-item--active': isActive(item.to) }"
               @click="onNav($event, item.to)"
             >
-              <md-icon slot="start">{{ item.icon }}</md-icon>
-              <span slot="headline">{{ item.label }}</span>
+              <md-icon slot="start" :class="{ 'icon--active': isActive(item.to) }">{{ item.icon }}</md-icon>
+              <span slot="headline" :class="{ 'label--active': isActive(item.to) }">{{ item.label }}</span>
             </md-list-item>
           </md-list>
           <md-list-item
             type="link"
             href="/account"
-            :selected="route.path === '/account'"
+            :class="{ 'nav-item--active': isActive('/account') }"
             @click="onNav($event, '/account')"
             class="logout-item"
           >
-            <md-icon slot="start">account_circle</md-icon>
-            <span slot="headline">账户</span>
+            <md-icon slot="start" :class="{ 'icon--active': isActive('/account') }">account_circle</md-icon>
+            <span slot="headline" :class="{ 'label--active': isActive('/account') }">账户</span>
           </md-list-item>
         </div>
       </md-navigation-drawer>
@@ -150,6 +154,16 @@ md-navigation-drawer {
 
 .logout-item {
   margin-bottom: 8px;
+}
+
+.icon--active {
+  color: var(--md-sys-color-primary);
+  font-variation-settings: 'FILL' 1;
+}
+
+.label--active {
+  color: var(--md-sys-color-primary);
+  font-weight: 600;
 }
 
 md-list {
