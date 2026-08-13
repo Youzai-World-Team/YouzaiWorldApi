@@ -13,5 +13,10 @@ export default defineEventHandler(async (event) => {
   sessions[token] = Date.now()
   await writeJson('sessions.json', sessions)
 
+  const ip = getRequestIP(event) || 'unknown'
+  const history = await readJson<{ ip: string; time: number }[]>('login-history.json', [])
+  history.push({ ip, time: Date.now() })
+  await writeJson('login-history.json', history.slice(-10))
+
   return { token }
 })
