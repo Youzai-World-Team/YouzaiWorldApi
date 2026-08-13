@@ -26,21 +26,9 @@ function toggleTheme() {
   applyTheme(dark.value)
 }
 
-function onNav(e: Event) {
+function onNav(e: Event, to: string) {
   e.preventDefault()
-  const href = (e.currentTarget as HTMLElement).getAttribute('href')
-  if (href) navigateTo(href)
-}
-
-const token = useCookie('youzai_token')
-
-async function logout() {
-  try {
-    await $fetch('/api/auth/logout', { method: 'POST' })
-  } finally {
-    token.value = null
-    await navigateTo('/login')
-  }
+  navigateTo(to)
 }
 
 onMounted(async () => {
@@ -88,15 +76,21 @@ onBeforeUnmount(() => {
               type="link"
               :href="item.to"
               :selected="route.path === item.to"
-              @click="onNav"
+              @click="onNav($event, item.to)"
             >
               <md-icon slot="start">{{ item.icon }}</md-icon>
               <span slot="headline">{{ item.label }}</span>
             </md-list-item>
           </md-list>
-          <md-list-item type="button" class="logout-item" @click="logout">
-            <md-icon slot="start">logout</md-icon>
-            <span slot="headline">登出</span>
+          <md-list-item
+            type="link"
+            href="/account"
+            :selected="route.path === '/account'"
+            @click="onNav($event, '/account')"
+            class="logout-item"
+          >
+            <md-icon slot="start">account_circle</md-icon>
+            <span slot="headline">账户</span>
           </md-list-item>
         </div>
       </md-navigation-drawer>

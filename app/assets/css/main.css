@@ -16,6 +16,8 @@
   --md-sys-color-outline-variant: #c2c9b4;
   --md-sys-color-inverse-surface: #322f35;
   --md-sys-color-inverse-on-surface: #f5eff7;
+  --md-sys-color-error: #b3261e;
+  --md-sys-color-on-error: #ffffff;
 }
 
 :root[data-theme='dark'] {
@@ -35,6 +37,8 @@
   --md-sys-color-outline-variant: #42493a;
   --md-sys-color-inverse-surface: #e6e0e9;
   --md-sys-color-inverse-on-surface: #322f35;
+  --md-sys-color-error: #f2b8b5;
+  --md-sys-color-on-error: #601410;
 }
 
 * {
