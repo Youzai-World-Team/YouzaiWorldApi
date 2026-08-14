@@ -15,8 +15,10 @@ const endpoint = '/api/donors'
 const donors = ref<Donor[]>([])
 const loading = ref(true)
 
-// 添加弹窗
+// 添加 / 编辑弹窗
 const formOpen = ref(false)
+const formMode = ref<'add' | 'edit'>('add')
+const editingId = ref<string | null>(null)
 const formName = ref('')
 const formIntro = ref('')
 const formAvatar = ref('')
@@ -54,9 +56,20 @@ async function load() {
 }
 
 function openAdd() {
+  formMode.value = 'add'
+  editingId.value = null
   formName.value = ''
   formIntro.value = ''
   formAvatar.value = ''
+  formOpen.value = true
+}
+
+function openEdit(d: Donor) {
+  formMode.value = 'edit'
+  editingId.value = d.id
+  formName.value = d.name
+  formIntro.value = d.intro
+  formAvatar.value = d.avatar
   formOpen.value = true
 }
 
@@ -121,19 +134,24 @@ async function submitForm() {
   }
   submitting.value = true
   try {
-    const donor = await $fetch<Donor>(endpoint, {
-      method: 'POST',
-      body: {
-        avatar: formAvatar.value,
-        name: formName.value.trim(),
-        intro: formIntro.value.trim(),
-      },
-    })
-    donors.value.unshift(donor)
+    const payload = {
+      avatar: formAvatar.value,
+      name: formName.value.trim(),
+      intro: formIntro.value.trim(),
+    }
+    if (formMode.value === 'add') {
+      const donor = await $fetch<Donor>(endpoint, { method: 'POST', body: payload })
+      donors.value.unshift(donor)
+      showToast('已添加')
+    } else {
+      const updated = await $fetch<Donor>(`${endpoint}/${editingId.value}`, { method: 'PATCH', body: payload })
+      const idx = donors.value.findIndex((d) => d.id === updated.id)
+      if (idx !== -1) donors.value[idx] = updated
+      showToast('已保存')
+    }
     formOpen.value = false
-    showToast('已添加')
   } catch (e: any) {
-    showToast(e?.data?.statusMessage || '添加失败', 'error')
+    showToast(e?.data?.statusMessage || '操作失败', 'error')
   } finally {
     submitting.value = false
   }
@@ -201,6 +219,10 @@ async function confirmDelete() {
             <td class="cell-name">{{ d.name }}</td>
             <td class="cell-intro">{{ d.intro || '—' }}</td>
             <td class="cell-actions">
+              <md-text-button @click="openEdit(d)">
+                <md-icon slot="icon">edit</md-icon>
+                编辑
+              </md-text-button>
               <md-text-button class="delete-btn" @click="openDelete(d)">
                 <md-icon slot="icon">delete</md-icon>
                 删除
@@ -213,7 +235,7 @@ async function confirmDelete() {
     </div>
 
     <md-dialog ref="formDialog" :open="formOpen" @closed="onFormClosed">
-      <div slot="headline">添加捐赠者</div>
+      <div slot="headline">{{ formMode === 'add' ? '添加捐赠者' : '编辑捐赠者' }}</div>
       <div slot="content">
         <div class="dialog-form">
           <div class="avatar-picker" role="button" tabindex="0" @click="pickAvatar" @keydown.enter="pickAvatar">
@@ -242,7 +264,7 @@ async function confirmDelete() {
       <div slot="actions">
         <md-text-button @click="closeForm">取消</md-text-button>
         <md-filled-button :disabled="submitting || uploadingAvatar" @click="submitForm">
-          {{ submitting ? '添加中…' : '添加' }}
+          {{ formMode === 'add' ? (submitting ? '添加中…' : '添加') : (submitting ? '保存中…' : '保存') }}
         </md-filled-button>
       </div>
     </md-dialog>
@@ -343,7 +365,7 @@ async function confirmDelete() {
 }
 
 .cell-actions {
-  width: 120px;
+  width: 200px;
   white-space: nowrap;
 }
 

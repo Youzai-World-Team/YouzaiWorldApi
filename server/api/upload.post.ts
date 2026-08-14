@@ -37,7 +37,7 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: '只支持图片文件（PNG/JPG/WebP/GIF 等）' })
   }
 
-  const uploadDir = path.resolve(process.cwd(), 'server/data/upload')
+  const uploadDir = path.resolve(process.cwd(), 'server/data/uploads')
   await fs.mkdir(uploadDir, { recursive: true })
   const filename = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}.${ext}`
   await fs.writeFile(path.join(uploadDir, filename), file.data)

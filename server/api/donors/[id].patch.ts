@@ -25,23 +25,37 @@ export default defineEventHandler(async (event) => {
   }
 
   const id = getRouterParam(event, 'id')
+  const body = await readBody<{ avatar?: string; name?: string; intro?: string }>(event)
+
+  if (!body.name || typeof body.name !== 'string' || !body.name.trim()) {
+    throw createError({ statusCode: 400, statusMessage: '名称不能为空' })
+  }
+
   const donors = await readJson<Donor[]>('donors.json', [])
-  const target = donors.find((d) => d.id === id)
-  if (!target) {
+  const idx = donors.findIndex((d) => d.id === id)
+  if (idx === -1) {
     throw createError({ statusCode: 404, statusMessage: '记录不存在' })
   }
 
-  const next = donors.filter((d) => d.id !== id)
-  await writeJson('donors.json', next)
+  const prevAvatar = donors[idx].avatar
+  const nextAvatar = typeof body.avatar === 'string' ? body.avatar : ''
+  const updated: Donor = {
+    ...donors[idx],
+    avatar: nextAvatar,
+    name: body.name.trim(),
+    intro: typeof body.intro === 'string' ? body.intro.trim() : '',
+  }
+  donors[idx] = updated
+  await writeJson('donors.json', donors)
 
-  // 删除关联的头像文件
-  if (target.avatar.startsWith(UPLOAD_PREFIX)) {
-    const filename = target.avatar.slice(UPLOAD_PREFIX.length)
+  // 若头像被替换成新的上传文件，删除旧的头像文件
+  if (prevAvatar && prevAvatar !== nextAvatar && prevAvatar.startsWith(UPLOAD_PREFIX)) {
+    const filename = prevAvatar.slice(UPLOAD_PREFIX.length)
     if (/^[A-Za-z0-9._-]+$/.test(filename)) {
       const uploadDir = path.resolve(process.cwd(), 'server/data/uploads')
       await fs.rm(path.join(uploadDir, filename), { force: true }).catch(() => {})
     }
   }
 
-  return { ok: true }
+  return updated
 })

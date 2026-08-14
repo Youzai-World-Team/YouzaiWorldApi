@@ -18,7 +18,7 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: '无效文件名' })
   }
 
-  const uploadDir = path.resolve(process.cwd(), 'server/data/upload')
+  const uploadDir = path.resolve(process.cwd(), 'server/data/uploads')
   const filePath = path.resolve(uploadDir, name)
   if (!filePath.startsWith(uploadDir)) {
     throw createError({ statusCode: 400, statusMessage: '无效文件名' })
