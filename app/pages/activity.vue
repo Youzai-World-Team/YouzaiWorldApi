@@ -212,7 +212,7 @@ async function confirmDelete() {
     <h1 class="page-title">服务器动态</h1>
 
     <div class="endpoint">
-      <span class="endpoint-label">数据表格 JSON API：</span>
+      <span class="endpoint-label">API：</span>
       <code class="endpoint-url">
         <a :href="endpoint" target="_blank" rel="noopener">GET {{ endpoint }}</a>
       </code>
