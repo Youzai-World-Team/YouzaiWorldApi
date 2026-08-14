@@ -6,7 +6,8 @@ const route = useRoute()
 const navItems = [
   { label: '仪表盘', icon: 'dashboard', to: '/' },
   { label: '服务器动态', icon: 'monitoring', to: '/activity' },
-  { label: '捐赠列表', icon: 'redeem', to: '/donors' }
+  { label: '捐赠列表', icon: 'redeem', to: '/donors' },
+  { label: '封禁列表', icon: 'gavel', to: '/bans' }
 ]
 
 const drawerOpen = ref(true)
