@@ -43,49 +43,7 @@ const formDialog = ref<HTMLElement | null>(null)
 const deleteDialog = ref<HTMLElement | null>(null)
 
 const { showToast } = useToast()
-
-const dialogOpenAnimation = () => ({
-  dialog: [
-    [
-      [
-        { transform: 'scale(0.9)', opacity: '0' },
-        { transform: 'scale(1)', opacity: '1' },
-      ],
-      { duration: 200, easing: 'cubic-bezier(0.2, 0, 0, 1)' },
-    ],
-  ],
-  scrim: [
-    [
-      [{ opacity: 0 }, { opacity: 0.32 }],
-      { duration: 200, easing: 'linear' },
-    ],
-  ],
-})
-
-const dialogCloseAnimation = () => ({
-  dialog: [
-    [
-      [
-        { transform: 'scale(1)', opacity: '1' },
-        { transform: 'scale(0.9)', opacity: '0' },
-      ],
-      { duration: 150, easing: 'cubic-bezier(0.4, 0, 1, 1)' },
-    ],
-  ],
-  scrim: [
-    [
-      [{ opacity: 0.32 }, { opacity: 0 }],
-      { duration: 150, easing: 'linear' },
-    ],
-  ],
-})
-
-function applyDialogAnimation(el: HTMLElement | null) {
-  if (!el) return
-  const dialog = el as any
-  dialog.getOpenAnimation = dialogOpenAnimation
-  dialog.getCloseAnimation = dialogCloseAnimation
-}
+const { apply: applyDialogAnimation } = useDialogAnimation()
 
 onMounted(() => {
   load()
@@ -212,7 +170,7 @@ async function confirmDelete() {
     <h1 class="page-title">服务器动态</h1>
 
     <div class="endpoint">
-      <span class="endpoint-label">API：</span>
+      <span class="endpoint-label">数据 API：</span>
       <code class="endpoint-url">
         <a :href="endpoint" target="_blank" rel="noopener">GET {{ endpoint }}</a>
       </code>
