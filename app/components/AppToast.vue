@@ -8,7 +8,7 @@ const { toasts } = useToast()
   <div class="toast-container">
     <TransitionGroup name="toast">
       <div v-for="t in toasts" :key="t.id" class="toast" :class="`toast--${t.type}`">
-        <md-icon v-if="t.type === 'error'" class="toast-icon">error</md-icon>
+        <md-icon class="toast-icon">{{ t.type === 'error' ? 'error' : 'info' }}</md-icon>
         <span>{{ t.message }}</span>
       </div>
     </TransitionGroup>
@@ -42,8 +42,9 @@ const { toasts } = useToast()
   box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2);
 }
 
-.toast--error .toast-icon {
+.toast-icon {
   --md-icon-size: 18px;
+  font-variation-settings: 'FILL' 1;
   flex-shrink: 0;
 }
 

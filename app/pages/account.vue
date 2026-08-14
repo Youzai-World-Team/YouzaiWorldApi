@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 
+useHead({ title: '账户' })
+
 const oldPassword = ref('')
 const newPassword = ref('')
 const confirmPassword = ref('')

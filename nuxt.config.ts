@@ -11,7 +11,10 @@ export default defineNuxtConfig({
     }
   },
   app: {
+    pageTransition: { name: 'page', mode: 'out-in' },
     head: {
+      title: 'Yzw Api',
+      titleTemplate: '%s - Yzw Api',
       link: [
         {
           rel: 'stylesheet',

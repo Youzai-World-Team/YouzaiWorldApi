@@ -4,7 +4,8 @@ import { ref, onMounted, onBeforeUnmount } from 'vue'
 const route = useRoute()
 
 const navItems = [
-  { label: '仪表盘', icon: 'dashboard', to: '/' }
+  { label: '仪表盘', icon: 'dashboard', to: '/' },
+  { label: '服务器动态', icon: 'monitoring', to: '/activity' }
 ]
 
 const drawerOpen = ref(true)

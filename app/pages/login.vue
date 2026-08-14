@@ -3,6 +3,8 @@ import { ref, onMounted } from 'vue'
 
 definePageMeta({ layout: false })
 
+useHead({ title: '登录' })
+
 const password = ref('')
 const loading = ref(false)
 const dark = ref(false)

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 
+useHead({ title: '仪表盘' })
+
 interface LoginRecord {
   ip: string
   time: number
