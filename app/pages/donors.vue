@@ -8,6 +8,7 @@ interface Donor {
   avatar: string
   name: string
   intro: string
+  amount: number
 }
 
 const endpoint = '/api/donors'
@@ -22,6 +23,7 @@ const editingId = ref<string | null>(null)
 const formName = ref('')
 const formIntro = ref('')
 const formAvatar = ref('')
+const formAmount = ref('')
 const submitting = ref(false)
 const uploadingAvatar = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -61,6 +63,7 @@ function openAdd() {
   formName.value = ''
   formIntro.value = ''
   formAvatar.value = ''
+  formAmount.value = ''
   formOpen.value = true
 }
 
@@ -70,7 +73,15 @@ function openEdit(d: Donor) {
   formName.value = d.name
   formIntro.value = d.intro
   formAvatar.value = d.avatar
+  formAmount.value = d.amount ? String(d.amount) : ''
   formOpen.value = true
+}
+
+function formatAmount(v: number | undefined | null): string {
+  const n = Number(v)
+  if (!Number.isFinite(n)) return '¥0'
+  const fixed = n.toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1')
+  return '¥' + fixed
 }
 
 function closeForm() {
@@ -138,6 +149,7 @@ async function submitForm() {
       avatar: formAvatar.value,
       name: formName.value.trim(),
       intro: formIntro.value.trim(),
+      amount: Number(formAmount.value) || 0,
     }
     if (formMode.value === 'add') {
       const donor = await $fetch<Donor>(endpoint, { method: 'POST', body: payload })
@@ -205,6 +217,7 @@ async function confirmDelete() {
           <tr>
             <th>头像</th>
             <th>名称</th>
+            <th>金额</th>
             <th>介绍</th>
             <th>操作</th>
           </tr>
@@ -218,6 +231,7 @@ async function confirmDelete() {
               </div>
             </td>
             <td class="cell-name">{{ d.name }}</td>
+            <td class="cell-amount">{{ formatAmount(d.amount) }}</td>
             <td class="cell-intro">{{ d.intro || '—' }}</td>
             <td class="cell-actions">
               <md-text-button @click="openEdit(d)">
@@ -253,6 +267,13 @@ async function confirmDelete() {
             label="名称"
             :value="formName"
             @input="formName = ($event.target as HTMLInputElement).value"
+          ></md-outlined-text-field>
+
+          <md-outlined-text-field
+            type="number"
+            label="金额（元）"
+            :value="formAmount"
+            @input="formAmount = ($event.target as HTMLInputElement).value"
           ></md-outlined-text-field>
 
           <md-outlined-text-field
@@ -333,7 +354,7 @@ async function confirmDelete() {
 
 .donor-table {
   width: 100%;
-  min-width: 620px;
+  min-width: 720px;
   border-collapse: collapse;
   font-size: 14px;
 }
@@ -359,6 +380,11 @@ async function confirmDelete() {
 .cell-name {
   width: 180px;
   font-weight: 500;
+  white-space: nowrap;
+}
+
+.cell-amount {
+  width: 120px;
   white-space: nowrap;
 }
 

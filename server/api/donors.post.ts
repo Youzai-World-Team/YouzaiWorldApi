@@ -3,6 +3,7 @@ interface Donor {
   avatar: string
   name: string
   intro: string
+  amount: number
 }
 
 export default defineEventHandler(async (event) => {
@@ -19,11 +20,14 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 401, statusMessage: '会话已失效' })
   }
 
-  const body = await readBody<{ avatar?: string; name?: string; intro?: string }>(event)
+  const body = await readBody<{ avatar?: string; name?: string; intro?: string; amount?: number | string }>(event)
 
   if (!body.name || typeof body.name !== 'string' || !body.name.trim()) {
     throw createError({ statusCode: 400, statusMessage: '名称不能为空' })
   }
+
+  const rawAmount = Number(body.amount)
+  const amount = Number.isFinite(rawAmount) && rawAmount >= 0 ? Math.round(rawAmount * 100) / 100 : 0
 
   const donors = await readJson<Donor[]>('donors.json', [])
   const donor: Donor = {
@@ -31,6 +35,7 @@ export default defineEventHandler(async (event) => {
     avatar: typeof body.avatar === 'string' ? body.avatar : '',
     name: body.name.trim(),
     intro: typeof body.intro === 'string' ? body.intro.trim() : '',
+    amount,
   }
   donors.unshift(donor)
   await writeJson('donors.json', donors)

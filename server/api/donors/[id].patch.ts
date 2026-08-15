@@ -6,6 +6,7 @@ interface Donor {
   avatar: string
   name: string
   intro: string
+  amount: number
 }
 
 const UPLOAD_PREFIX = '/api/uploads/'
@@ -25,7 +26,7 @@ export default defineEventHandler(async (event) => {
   }
 
   const id = getRouterParam(event, 'id')
-  const body = await readBody<{ avatar?: string; name?: string; intro?: string }>(event)
+  const body = await readBody<{ avatar?: string; name?: string; intro?: string; amount?: number | string }>(event)
 
   if (!body.name || typeof body.name !== 'string' || !body.name.trim()) {
     throw createError({ statusCode: 400, statusMessage: '名称不能为空' })
@@ -37,6 +38,9 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 404, statusMessage: '记录不存在' })
   }
 
+  const rawAmount = Number(body.amount)
+  const amount = Number.isFinite(rawAmount) && rawAmount >= 0 ? Math.round(rawAmount * 100) / 100 : 0
+
   const prevAvatar = donors[idx].avatar
   const nextAvatar = typeof body.avatar === 'string' ? body.avatar : ''
   const updated: Donor = {
@@ -44,6 +48,7 @@ export default defineEventHandler(async (event) => {
     avatar: nextAvatar,
     name: body.name.trim(),
     intro: typeof body.intro === 'string' ? body.intro.trim() : '',
+    amount,
   }
   donors[idx] = updated
   await writeJson('donors.json', donors)

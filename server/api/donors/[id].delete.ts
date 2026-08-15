@@ -6,6 +6,7 @@ interface Donor {
   avatar: string
   name: string
   intro: string
+  amount: number
 }
 
 const UPLOAD_PREFIX = '/api/uploads/'
