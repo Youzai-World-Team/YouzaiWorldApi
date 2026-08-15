@@ -87,7 +87,7 @@ function openEdit(u: UpdateEntry) {
   formVersion.value = u.latestVersion
   formType.value = u.type
   formForced.value = u.forcedUpdate
-  formDate.value = u.release_date
+  formDate.value = dateToInput(u.release_date)
   formTime.value = u.release_time
   formChangelog.value = u.changelog.join('\n')
   formOpen.value = true
@@ -123,6 +123,23 @@ function typeColor(t: string) {
 
 function releaseLabel(u: UpdateEntry) {
   return `${u.release_date} ${u.release_time}`
+}
+
+function dateToInput(d: string) {
+  const m = d.match(/^(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})/)
+  if (!m) return d
+  return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`
+}
+
+function dateFromInput(v: string) {
+  const m = v.match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (!m) return v
+  return `${m[1]}.${Number(m[2])}.${Number(m[3])}`
+}
+
+function timeFromInput(v: string) {
+  if (!v) return ''
+  return v.length === 5 ? `${v}:00` : v
 }
 
 function onEndpointClick(e: Event) {
@@ -169,8 +186,8 @@ async function submitForm() {
       latestVersion: formVersion.value.trim(),
       type: formType.value,
       forcedUpdate: formForced.value,
-      release_date: formDate.value.trim(),
-      release_time: formTime.value.trim(),
+      release_date: dateFromInput(formDate.value.trim()),
+      release_time: timeFromInput(formTime.value.trim()),
       changelog: formChangelog.value
         .split('\n')
         .map((s) => s.trim())
@@ -315,19 +332,14 @@ async function confirmDelete() {
             <span>强制用户更新到最新版本</span>
           </label>
 
-          <div class="row-group">
-            <md-outlined-text-field
-              label="发布日期"
-              placeholder="如 2026.7.19"
-              :value="formDate"
-              @input="formDate = ($event.target as HTMLInputElement).value"
-            ></md-outlined-text-field>
-            <md-outlined-text-field
-              label="发布时间"
-              placeholder="如 22:19:30"
-              :value="formTime"
-              @input="formTime = ($event.target as HTMLInputElement).value"
-            ></md-outlined-text-field>
+          <div class="field-group">
+            <label class="field-label">发布日期</label>
+            <input v-model="formDate" type="date" class="date-input" />
+          </div>
+
+          <div class="field-group">
+            <label class="field-label">发布时间</label>
+            <input v-model="formTime" type="time" step="1" class="date-input" />
           </div>
 
           <md-outlined-text-field
@@ -546,11 +558,23 @@ async function confirmDelete() {
   cursor: pointer;
 }
 
-.row-group {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
+.date-input {
   width: 100%;
+  height: 56px;
+  padding: 0 12px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--md-sys-color-on-surface);
+  font: inherit;
+  font-size: 15px;
+  box-sizing: border-box;
+}
+
+.date-input:focus {
+  outline: none;
+  border-color: var(--md-sys-color-primary);
+  border-width: 2px;
 }
 
 .delete-text {
