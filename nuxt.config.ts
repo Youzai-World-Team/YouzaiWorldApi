@@ -5,6 +5,9 @@ export default defineNuxtConfig({
     port: 3800
   },
   css: ['~/assets/css/main.css'],
+  nitro: {
+    errorHandler: '~~/server/error-handler'
+  },
   vue: {
     compilerOptions: {
       isCustomElement: (tag: string) => tag.startsWith('md-')
