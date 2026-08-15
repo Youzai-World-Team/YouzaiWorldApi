@@ -26,6 +26,7 @@ onNuxtReady(() => {
 <template>
   <div>
     <NuxtRouteAnnouncer />
+    <AppLoadingBar />
     <NuxtLayout>
       <NuxtPage />
     </NuxtLayout>
