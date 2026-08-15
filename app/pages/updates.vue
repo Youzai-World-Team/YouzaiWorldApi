@@ -254,7 +254,8 @@ async function confirmDelete() {
         </md-filled-button>
       </div>
 
-      <table class="update-table">
+      <div class="table-wrap">
+        <table class="update-table">
         <thead>
           <tr>
             <th>名称</th>
@@ -291,7 +292,8 @@ async function confirmDelete() {
             </td>
           </tr>
         </tbody>
-      </table>
+        </table>
+      </div>
       <p v-if="!loading && list.length === 0" class="empty">暂无程序，点击右上角添加</p>
     </div>
 
@@ -439,6 +441,7 @@ async function confirmDelete() {
 
 .update-table {
   width: 100%;
+  min-width: 820px;
   border-collapse: collapse;
   font-size: 14px;
 }
@@ -524,7 +527,7 @@ async function confirmDelete() {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  min-width: 320px;
+  min-width: min(320px, 100%);
 }
 
 .dialog-form md-outlined-text-field {

@@ -12,12 +12,14 @@ const navItems = [
 ]
 
 const drawerOpen = ref(true)
+const isDesktop = ref(true)
 const dark = ref(false)
 
 const mq = typeof window !== 'undefined' ? window.matchMedia('(min-width: 900px)') : null
 
 function syncDrawer() {
-  drawerOpen.value = mq ? mq.matches : true
+  isDesktop.value = mq ? mq.matches : true
+  drawerOpen.value = isDesktop.value
 }
 
 function applyTheme(isDark: boolean) {
@@ -32,7 +34,12 @@ function toggleTheme() {
 
 function onNav(e: Event, to: string) {
   e.preventDefault()
+  if (!isDesktop.value) drawerOpen.value = false
   navigateTo(to)
+}
+
+function onDrawerChanged(e: Event) {
+  drawerOpen.value = (e as CustomEvent<{ opened: boolean }>).detail.opened
 }
 
 function isActive(to: string) {
@@ -74,7 +81,12 @@ onBeforeUnmount(() => {
     </header>
 
     <div class="body">
-      <md-navigation-drawer :opened="drawerOpen" pivot="start">
+      <md-navigation-drawer
+        v-if="isDesktop"
+        :opened="drawerOpen"
+        pivot="start"
+        @navigation-drawer-changed="onDrawerChanged"
+      >
         <div class="drawer-content">
           <md-list class="nav-list">
             <md-list-item
@@ -101,6 +113,40 @@ onBeforeUnmount(() => {
           </md-list-item>
         </div>
       </md-navigation-drawer>
+
+      <md-navigation-drawer-modal
+        v-else
+        :opened="drawerOpen"
+        pivot="start"
+        :class="{ 'drawer-modal--open': drawerOpen }"
+        @navigation-drawer-changed="onDrawerChanged"
+      >
+        <div class="drawer-content">
+          <md-list class="nav-list">
+            <md-list-item
+              v-for="item in navItems"
+              :key="item.to"
+              type="link"
+              :href="item.to"
+              :class="{ 'nav-item--active': isActive(item.to) }"
+              @click="onNav($event, item.to)"
+            >
+              <md-icon slot="start" :class="{ 'icon--active': isActive(item.to) }">{{ item.icon }}</md-icon>
+              <span slot="headline" :class="{ 'label--active': isActive(item.to) }">{{ item.label }}</span>
+            </md-list-item>
+          </md-list>
+          <md-list-item
+            type="link"
+            href="/account"
+            :class="{ 'nav-item--active': isActive('/account') }"
+            @click="onNav($event, '/account')"
+            class="logout-item"
+          >
+            <md-icon slot="start" :class="{ 'icon--active': isActive('/account') }">account_circle</md-icon>
+            <span slot="headline" :class="{ 'label--active': isActive('/account') }">账户</span>
+          </md-list-item>
+        </div>
+      </md-navigation-drawer-modal>
 
       <main class="content">
         <NuxtPage />
@@ -143,6 +189,21 @@ md-navigation-drawer {
   --md-navigation-drawer-container-color: var(--md-sys-color-surface-container);
   --md-navigation-drawer-divider-color: transparent;
   flex-shrink: 0;
+}
+
+md-navigation-drawer-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  pointer-events: none;
+  --md-navigation-drawer-modal-container-width: 256px;
+  --md-navigation-drawer-modal-container-color: var(--md-sys-color-surface-container);
+  --md-navigation-drawer-modal-scrim-color: #000;
+  --md-navigation-drawer-modal-scrim-opacity: 0.32;
+}
+
+md-navigation-drawer-modal.drawer-modal--open {
+  pointer-events: auto;
 }
 
 .drawer-content {

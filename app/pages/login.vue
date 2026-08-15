@@ -85,7 +85,7 @@ async function login() {
 }
 
 .login-card {
-  width: 320px;
+  width: min(320px, calc(100vw - 32px));
   display: flex;
   flex-direction: column;
   gap: 20px;

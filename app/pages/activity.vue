@@ -185,7 +185,8 @@ async function confirmDelete() {
         </md-filled-button>
       </div>
 
-      <table class="activity-table">
+      <div class="table-wrap">
+        <table class="activity-table">
         <thead>
           <tr>
             <th>类型</th>
@@ -213,7 +214,8 @@ async function confirmDelete() {
             </td>
           </tr>
         </tbody>
-      </table>
+        </table>
+      </div>
       <p v-if="!loading && activities.length === 0" class="empty">暂无记录</p>
     </div>
 
@@ -309,6 +311,7 @@ async function confirmDelete() {
 
 .activity-table {
   width: 100%;
+  min-width: 620px;
   border-collapse: collapse;
   font-size: 14px;
 }
@@ -385,7 +388,7 @@ async function confirmDelete() {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  min-width: 280px;
+  min-width: min(280px, 100%);
 }
 
 .dialog-form md-outlined-select,

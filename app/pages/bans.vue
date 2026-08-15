@@ -190,7 +190,8 @@ async function confirmDelete() {
         </md-filled-button>
       </div>
 
-      <table class="ban-table">
+      <div class="table-wrap">
+        <table class="ban-table">
         <thead>
           <tr>
             <th>玩家名</th>
@@ -221,7 +222,8 @@ async function confirmDelete() {
             </td>
           </tr>
         </tbody>
-      </table>
+        </table>
+      </div>
       <p v-if="!loading && bans.length === 0" class="empty">暂无封禁记录</p>
     </div>
 
@@ -324,6 +326,7 @@ async function confirmDelete() {
 
 .ban-table {
   width: 100%;
+  min-width: 860px;
   border-collapse: collapse;
   font-size: 14px;
 }
@@ -388,7 +391,7 @@ async function confirmDelete() {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  min-width: 300px;
+  min-width: min(300px, 100%);
 }
 
 .dialog-form md-outlined-text-field {

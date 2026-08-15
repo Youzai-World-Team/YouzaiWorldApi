@@ -163,3 +163,23 @@ md-icon {
   opacity: 0;
   transform: translateY(-10px);
 }
+
+.table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+@media (max-width: 640px) {
+  .page {
+    padding: 16px;
+  }
+
+  .card {
+    padding: 16px;
+  }
+
+  .page-title {
+    font-size: 20px;
+    margin-bottom: 16px;
+  }
+}

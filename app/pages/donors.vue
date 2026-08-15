@@ -199,7 +199,8 @@ async function confirmDelete() {
         </md-filled-button>
       </div>
 
-      <table class="donor-table">
+      <div class="table-wrap">
+        <table class="donor-table">
         <thead>
           <tr>
             <th>头像</th>
@@ -230,7 +231,8 @@ async function confirmDelete() {
             </td>
           </tr>
         </tbody>
-      </table>
+        </table>
+      </div>
       <p v-if="!loading && donors.length === 0" class="empty">暂无捐赠者</p>
     </div>
 
@@ -331,6 +333,7 @@ async function confirmDelete() {
 
 .donor-table {
   width: 100%;
+  min-width: 620px;
   border-collapse: collapse;
   font-size: 14px;
 }
@@ -401,7 +404,7 @@ async function confirmDelete() {
   flex-direction: column;
   align-items: center;
   gap: 16px;
-  min-width: 300px;
+  min-width: min(300px, 100%);
 }
 
 .dialog-form md-outlined-text-field {
