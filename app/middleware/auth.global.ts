@@ -1,4 +1,6 @@
 export default defineNuxtRouteMiddleware(async (to) => {
+  if (import.meta.server) return
+
   const token = useCookie('youzai_token').value
   const isEntryRoute = to.name === 'entry'
 

@@ -17,7 +17,14 @@ export default defineEventHandler(async (event) => {
   const sessions = await readJson<Record<string, number>>('sessions.json', {})
   const authed = !!token && !!sessions[token]
 
-  if (!authed && path !== '/' + entry) {
+  if (authed) {
+    if (path === '/' + entry || path === '/login') {
+      return sendRedirect(event, '/', 302)
+    }
+    return
+  }
+
+  if (path !== '/' + entry) {
     setResponseStatus(event, 404, '页面不存在')
     setResponseHeader(event, 'Content-Type', 'application/json')
     return send(
