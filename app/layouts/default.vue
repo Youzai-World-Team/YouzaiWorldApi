@@ -7,7 +7,8 @@ const navItems = [
   { label: '仪表盘', icon: 'dashboard', to: '/' },
   { label: '服务器动态', icon: 'monitoring', to: '/activity' },
   { label: '捐赠列表', icon: 'redeem', to: '/donors' },
-  { label: '封禁列表', icon: 'gavel', to: '/bans' }
+  { label: '封禁列表', icon: 'gavel', to: '/bans' },
+  { label: '更新服务', icon: 'system_update', to: '/updates' }
 ]
 
 const drawerOpen = ref(true)
