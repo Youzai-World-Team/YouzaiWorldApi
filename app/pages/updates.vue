@@ -41,6 +41,8 @@ const deleting = ref(false)
 
 const formDialog = ref<HTMLElement | null>(null)
 const deleteDialog = ref<HTMLElement | null>(null)
+const apiDialog = ref<HTMLElement | null>(null)
+const apiOpen = ref(false)
 
 const { showToast } = useToast()
 const { apply: applyDialogAnimation } = useDialogAnimation()
@@ -49,6 +51,7 @@ onMounted(() => {
   load()
   applyDialogAnimation(formDialog.value)
   applyDialogAnimation(deleteDialog.value)
+  applyDialogAnimation(apiDialog.value)
 })
 
 async function load() {
@@ -120,6 +123,28 @@ function typeColor(t: string) {
 
 function releaseLabel(u: UpdateEntry) {
   return `${u.release_date} ${u.release_time}`
+}
+
+function onEndpointClick(e: Event) {
+  e.preventDefault()
+  if (list.value.length === 0) {
+    showToast('暂无程序，请先添加', 'error')
+    return
+  }
+  apiOpen.value = true
+}
+
+function openPublicEndpoint(key: string) {
+  window.open(`/api/update/${key}`, '_blank', 'noopener')
+  apiOpen.value = false
+}
+
+function closeApi() {
+  apiOpen.value = false
+}
+
+function onApiClosed() {
+  apiOpen.value = false
 }
 
 async function submitForm() {
@@ -198,7 +223,9 @@ async function confirmDelete() {
 
     <div class="endpoint">
       <span class="endpoint-label">数据 API：</span>
-      <code class="endpoint-url">GET /api/update/{key}</code>
+      <code class="endpoint-url">
+        <a href="/api/update/{key}" @click="onEndpointClick">GET /api/update/{key}</a>
+      </code>
     </div>
 
     <div class="card">
@@ -320,6 +347,22 @@ async function confirmDelete() {
       </div>
     </md-dialog>
 
+    <md-dialog ref="apiDialog" :open="apiOpen" @closed="onApiClosed">
+      <div slot="headline">选择程序</div>
+      <div slot="content">
+        <p class="delete-text">选择要查看更新信息的程序：</p>
+        <md-list class="api-list">
+          <md-list-item v-for="u in list" :key="u.id" type="button" @click="openPublicEndpoint(u.key)">
+            <span slot="headline">{{ u.name }}</span>
+            <span slot="supporting-text">/api/update/{{ u.key }}</span>
+          </md-list-item>
+        </md-list>
+      </div>
+      <div slot="actions">
+        <md-text-button @click="closeApi">取消</md-text-button>
+      </div>
+    </md-dialog>
+
     <md-dialog ref="deleteDialog" :open="deleteOpen" @closed="onDeleteClosed">
       <div slot="headline">删除程序</div>
       <div slot="content">
@@ -353,6 +396,21 @@ async function confirmDelete() {
 .endpoint-url {
   font-family: 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 13px;
+}
+
+.endpoint-url a {
+  color: var(--md-sys-color-primary);
+  text-decoration: none;
+  border-bottom: 1px dashed currentColor;
+  cursor: pointer;
+}
+
+.endpoint-url a:hover {
+  opacity: 0.8;
+}
+
+.api-list {
+  --md-list-container-color: transparent;
 }
 
 .card-head {
