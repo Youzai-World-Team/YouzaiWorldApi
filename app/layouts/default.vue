@@ -15,6 +15,8 @@ const drawerOpen = ref(true)
 const isDesktop = ref(true)
 const dark = ref(false)
 
+const { load: loadEntry } = useEntry()
+
 const mq = typeof window !== 'undefined' ? window.matchMedia('(min-width: 900px)') : null
 
 function syncDrawer() {
@@ -58,7 +60,8 @@ onMounted(async () => {
   } catch {
     const token = useCookie('youzai_token')
     token.value = null
-    await navigateTo('/login')
+    const entry = await loadEntry()
+    await navigateTo('/' + entry)
   }
 })
 

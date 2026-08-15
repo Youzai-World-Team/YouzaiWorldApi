@@ -17,11 +17,11 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: '参数不完整' })
   }
 
-  const config = await readJson<{ password: string }>('config.json', { password: '123456' })
+  const config = await readJson<{ password: string; entry?: string }>('config.json', { password: '123456' })
   if (body.oldPassword !== config.password) {
     throw createError({ statusCode: 401, statusMessage: '当前密码错误' })
   }
 
-  await writeJson('config.json', { password: body.newPassword })
+  await writeJson('config.json', { ...config, password: body.newPassword })
   return { ok: true }
 })

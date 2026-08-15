@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 
 useHead({ title: '账户' })
 
@@ -8,8 +8,18 @@ const newPassword = ref('')
 const confirmPassword = ref('')
 const updating = ref(false)
 
+const entryInput = ref('')
+const currentEntry = ref('')
+const savingEntry = ref(false)
+
 const token = useCookie('youzai_token')
 const { showToast } = useToast()
+const { entry: entryState, load: loadEntry } = useEntry()
+
+onMounted(async () => {
+  currentEntry.value = await loadEntry()
+  entryInput.value = currentEntry.value
+})
 
 function onInput(field: 'old' | 'new' | 'confirm', e: Event) {
   const v = (e.target as HTMLInputElement).value
@@ -41,12 +51,37 @@ async function updatePassword() {
   }
 }
 
+async function saveEntry() {
+  if (savingEntry.value) return
+  const val = entryInput.value.trim().replace(/^\/+|\/+$/g, '')
+  if (!val) {
+    showToast('入口不能为空', 'error')
+    return
+  }
+  savingEntry.value = true
+  try {
+    const res = await $fetch<{ entry: string }>('/api/auth/entry', {
+      method: 'POST',
+      body: { entry: val }
+    })
+    currentEntry.value = res.entry
+    entryInput.value = res.entry
+    entryState.value = res.entry
+    showToast(`安全入口已更新为 /${res.entry}`)
+  } catch (e: any) {
+    showToast(e?.data?.statusMessage || '保存失败', 'error')
+  } finally {
+    savingEntry.value = false
+  }
+}
+
 async function logout() {
   try {
     await $fetch('/api/auth/logout', { method: 'POST' })
   } finally {
     token.value = null
-    await navigateTo('/login')
+    const entry = await loadEntry()
+    await navigateTo('/' + entry)
   }
 }
 </script>
@@ -83,6 +118,21 @@ async function logout() {
     </div>
 
     <div class="card" style="max-width: 480px; margin-top: 20px">
+      <h2 class="card-title">安全入口</h2>
+      <p class="entry-hint">登录页只能通过该入口访问。当前入口：<code class="entry-code">/{{ currentEntry || '…' }}</code></p>
+      <div class="form">
+        <md-outlined-text-field
+          label="安全入口"
+          :value="entryInput"
+          @input="entryInput = ($event.target as HTMLInputElement).value"
+        ></md-outlined-text-field>
+        <md-filled-button :disabled="savingEntry" @click="saveEntry">
+          {{ savingEntry ? '保存中…' : '保存入口' }}
+        </md-filled-button>
+      </div>
+    </div>
+
+    <div class="card" style="max-width: 480px; margin-top: 20px">
       <h2 class="card-title">账户操作</h2>
       <md-text-button class="logout-btn" @click="logout">
         <md-icon slot="icon">logout</md-icon>
@@ -101,5 +151,17 @@ async function logout() {
 
 .logout-btn {
   color: var(--md-sys-color-error);
+}
+
+.entry-hint {
+  margin: 0 0 16px;
+  font-size: 14px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.entry-code {
+  font-family: 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  color: var(--md-sys-color-primary);
 }
 </style>

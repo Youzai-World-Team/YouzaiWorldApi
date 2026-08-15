@@ -22,6 +22,6 @@ export async function ensureConfig() {
   try {
     await fs.access(file)
   } catch {
-    await writeJson('config.json', { password: '123456' })
+    await writeJson('config.json', { password: '123456', entry: '123456' })
   }
 }
