@@ -18,6 +18,9 @@ export default defineNuxtConfig({
     head: {
       title: 'Yzw Api',
       titleTemplate: '%s - Yzw Api',
+      meta: [
+        { name: 'robots', content: 'noindex, nofollow, noarchive, nosnippet' }
+      ],
       link: [
         {
           rel: 'stylesheet',

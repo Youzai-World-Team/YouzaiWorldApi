@@ -192,6 +192,10 @@ md-navigation-drawer {
   --md-navigation-drawer-container-color: var(--md-sys-color-surface-container);
   --md-navigation-drawer-divider-color: transparent;
   flex-shrink: 0;
+  position: sticky;
+  top: 64px;
+  align-self: flex-start;
+  height: calc(100vh - 64px);
 }
 
 md-navigation-drawer-modal {
