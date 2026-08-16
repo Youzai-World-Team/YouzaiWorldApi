@@ -1,24 +1,5 @@
-interface Donor {
-  id: string
-  avatar: string
-  name: string
-  intro: string
-  amount: number
-}
-
 export default defineEventHandler(async (event) => {
-  const cookie = getCookie(event, 'youzai_token')
-  const header = getHeader(event, 'authorization')?.replace('Bearer ', '')
-  const token = cookie || header
-
-  if (!token) {
-    throw createError({ statusCode: 401, statusMessage: '未登录' })
-  }
-
-  const sessions = await readJson<Record<string, number>>('sessions.json', {})
-  if (!sessions[token]) {
-    throw createError({ statusCode: 401, statusMessage: '会话已失效' })
-  }
+  requireAuth(event)
 
   const body = await readBody<{ avatar?: string; name?: string; intro?: string; amount?: number | string }>(event)
 
@@ -29,16 +10,14 @@ export default defineEventHandler(async (event) => {
   const rawAmount = Number(body.amount)
   const amount = Number.isFinite(rawAmount) && rawAmount >= 0 ? Math.round(rawAmount * 100) / 100 : 0
 
-  const donors = await readJson<Donor[]>('donors.json', [])
-  const donor: Donor = {
+  const donor = {
     id: `donor_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
     avatar: typeof body.avatar === 'string' ? body.avatar : '',
     name: body.name.trim(),
     intro: typeof body.intro === 'string' ? body.intro.trim() : '',
     amount,
   }
-  donors.unshift(donor)
-  await writeJson('donors.json', donors)
+  insertDonor(donor)
 
   return donor
 })

@@ -10,12 +10,10 @@ export default defineEventHandler(async (event) => {
     return
   }
 
-  const config = await readJson<{ entry?: string }>('config.json', { entry: '123456' })
-  const entry = config.entry || '123456'
+  const entry = getSetting('entry') || '123456'
 
   const token = getCookie(event, 'youzai_token')
-  const sessions = await readJson<Record<string, number>>('sessions.json', {})
-  const authed = !!token && !!sessions[token]
+  const authed = !!token && hasSession(token)
 
   if (authed) {
     if (path === '/' + entry || path === '/login') {

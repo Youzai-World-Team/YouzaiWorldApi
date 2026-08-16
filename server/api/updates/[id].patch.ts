@@ -1,28 +1,5 @@
-interface UpdateEntry {
-  id: string
-  key: string
-  name: string
-  latestVersion: string
-  type: string
-  forcedUpdate: boolean
-  release_date: string
-  release_time: string
-  changelog: string[]
-}
-
 export default defineEventHandler(async (event) => {
-  const cookie = getCookie(event, 'youzai_token')
-  const header = getHeader(event, 'authorization')?.replace('Bearer ', '')
-  const token = cookie || header
-
-  if (!token) {
-    throw createError({ statusCode: 401, statusMessage: '未登录' })
-  }
-
-  const sessions = await readJson<Record<string, number>>('sessions.json', {})
-  if (!sessions[token]) {
-    throw createError({ statusCode: 401, statusMessage: '会话已失效' })
-  }
+  requireAuth(event)
 
   const id = getRouterParam(event, 'id')
   const body = await readBody<{
@@ -35,14 +12,12 @@ export default defineEventHandler(async (event) => {
     changelog?: string[]
   }>(event)
 
-  const list = await readJson<UpdateEntry[]>('updates.json', [])
-  const idx = list.findIndex((u) => u.id === id)
-  if (idx === -1) {
+  const prev = listUpdates().find((u) => u.id === id)
+  if (!prev) {
     throw createError({ statusCode: 404, statusMessage: '记录不存在' })
   }
 
-  const prev = list[idx]
-  const updated: UpdateEntry = {
+  const updated = {
     ...prev,
     name: typeof body.name === 'string' && body.name.trim() ? body.name.trim() : prev.name,
     latestVersion:
@@ -55,8 +30,7 @@ export default defineEventHandler(async (event) => {
       ? body.changelog.filter((c) => typeof c === 'string' && c.trim())
       : prev.changelog,
   }
-  list[idx] = updated
-  await writeJson('updates.json', list)
+  updateUpdate(updated)
 
   return updated
 })

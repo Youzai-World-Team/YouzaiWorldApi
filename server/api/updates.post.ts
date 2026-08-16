@@ -1,15 +1,3 @@
-interface UpdateEntry {
-  id: string
-  key: string
-  name: string
-  latestVersion: string
-  type: string
-  forcedUpdate: boolean
-  release_date: string
-  release_time: string
-  changelog: string[]
-}
-
 const KEY_RE = /^[A-Za-z0-9_-]+$/
 
 function nowParts() {
@@ -22,18 +10,7 @@ function nowParts() {
 }
 
 export default defineEventHandler(async (event) => {
-  const cookie = getCookie(event, 'youzai_token')
-  const header = getHeader(event, 'authorization')?.replace('Bearer ', '')
-  const token = cookie || header
-
-  if (!token) {
-    throw createError({ statusCode: 401, statusMessage: '未登录' })
-  }
-
-  const sessions = await readJson<Record<string, number>>('sessions.json', {})
-  if (!sessions[token]) {
-    throw createError({ statusCode: 401, statusMessage: '会话已失效' })
-  }
+  requireAuth(event)
 
   const body = await readBody<{
     key?: string
@@ -61,13 +38,12 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: '最新版本不能为空' })
   }
 
-  const list = await readJson<UpdateEntry[]>('updates.json', [])
-  if (list.some((u) => u.key === key)) {
+  if (listUpdates().some((u) => u.key === key)) {
     throw createError({ statusCode: 400, statusMessage: '该标识已存在' })
   }
 
   const now = nowParts()
-  const entry: UpdateEntry = {
+  const entry = {
     id: `upd_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
     key,
     name,
@@ -78,8 +54,7 @@ export default defineEventHandler(async (event) => {
     release_time: typeof body.release_time === 'string' && body.release_time.trim() ? body.release_time.trim() : now.time,
     changelog: Array.isArray(body.changelog) ? body.changelog.filter((c) => typeof c === 'string' && c.trim()) : [],
   }
-  list.unshift(entry)
-  await writeJson('updates.json', list)
+  insertUpdate(entry)
 
   return entry
 })

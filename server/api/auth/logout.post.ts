@@ -4,9 +4,7 @@ export default defineEventHandler(async (event) => {
   const token = cookie || header
 
   if (token) {
-    const sessions = await readJson<Record<string, number>>('sessions.json', {})
-    delete sessions[token]
-    await writeJson('sessions.json', sessions)
+    deleteSession(token)
   }
 
   return { ok: true }
