@@ -1,4 +1,5 @@
 import { DatabaseSync } from 'node:sqlite'
+import { createHash, pbkdf2Sync, randomBytes, timingSafeEqual } from 'node:crypto'
 import { mkdirSync, promises as fs } from 'node:fs'
 import path from 'node:path'
 import { getCookie, getHeader, createError, type H3Event } from 'h3'
@@ -53,6 +54,34 @@ db.exec(`
     release_date TEXT,
     release_time TEXT,
     changelog TEXT
+  );
+  CREATE TABLE IF NOT EXISTS game_accounts (
+    username_lower TEXT PRIMARY KEY,
+    username TEXT NOT NULL,
+    uuid TEXT,
+    password TEXT NOT NULL DEFAULT '',
+    last_ip TEXT NOT NULL DEFAULT '',
+    last_authenticated_date TEXT,
+    registration_date TEXT,
+    login_tries INTEGER NOT NULL DEFAULT 0,
+    last_kicked_date TEXT,
+    last_position TEXT,
+    in_place_respawn_count INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS game_sessions (
+    token TEXT PRIMARY KEY,
+    username_lower TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER
+  );
+  CREATE TABLE IF NOT EXISTS game_cosmetics (
+    uuid TEXT NOT NULL,
+    slot TEXT NOT NULL,
+    data BLOB NOT NULL,
+    sha256 TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (uuid, slot)
   );
 `)
 
@@ -245,6 +274,236 @@ export function updateUpdate(item: UpdateEntry) {
 
 export function deleteUpdate(id: string) {
   run('DELETE FROM updates WHERE id = ?', id)
+}
+
+export function requireGameApiKey(event: H3Event): void {
+  const expected = process.env.YZWC_GAME_API_KEY || 'youzai-local-development'
+  const provided = getHeader(event, 'x-yzwc-server-key')
+  if (!provided || provided !== expected) {
+    throw createError({ statusCode: 401, statusMessage: '服务器 Api 密钥无效' })
+  }
+}
+
+export interface GameAccount {
+  username: string
+  usernameLower: string
+  uuid: string | null
+  password: string
+  lastIp: string
+  lastAuthenticatedDate: string
+  registrationDate: string
+  loginTries: number
+  lastKickedDate: string
+  lastPosition: string | null
+  inPlaceRespawnCount: number
+}
+
+export function gameAccountWire(account: GameAccount) {
+  const result: Record<string, unknown> = {
+    username: account.username,
+    username_lower: account.usernameLower,
+    uuid: account.uuid,
+    last_ip: account.lastIp,
+    last_authenticated_date: account.lastAuthenticatedDate,
+    registration_date: account.registrationDate,
+    login_tries: account.loginTries,
+    last_kicked_date: account.lastKickedDate,
+    last_position: account.lastPosition,
+    in_place_respawn_count: account.inPlaceRespawnCount,
+    registered: Boolean(account.password),
+  }
+  return result
+}
+
+function mapGameAccount(row: Record<string, unknown>): GameAccount {
+  return {
+    username: String(row.username ?? ''),
+    usernameLower: String(row.username_lower ?? ''),
+    uuid: row.uuid == null ? null : String(row.uuid),
+    password: String(row.password ?? ''),
+    lastIp: String(row.last_ip ?? ''),
+    lastAuthenticatedDate: String(row.last_authenticated_date ?? '1970-01-01T00:00:00Z'),
+    registrationDate: String(row.registration_date ?? '1970-01-01T00:00:00Z'),
+    loginTries: Number(row.login_tries ?? 0),
+    lastKickedDate: String(row.last_kicked_date ?? '1970-01-01T00:00:00Z'),
+    lastPosition: row.last_position == null ? null : String(row.last_position),
+    inPlaceRespawnCount: Number(row.in_place_respawn_count ?? 0),
+  }
+}
+
+export function listGameAccounts(): GameAccount[] {
+  return all('SELECT * FROM game_accounts ORDER BY username_lower').map(mapGameAccount)
+}
+
+export function getGameAccount(username: string): GameAccount | undefined {
+  const key = username.trim().toLocaleLowerCase('en-US')
+  const row = get('SELECT * FROM game_accounts WHERE username_lower = ?', key)
+  return row ? mapGameAccount(row) : undefined
+}
+
+export function upsertGameAccount(account: GameAccount) {
+  run(`INSERT INTO game_accounts
+    (username_lower, username, uuid, password, last_ip, last_authenticated_date, registration_date,
+     login_tries, last_kicked_date, last_position, in_place_respawn_count, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(username_lower) DO UPDATE SET
+      username = excluded.username, uuid = COALESCE(excluded.uuid, game_accounts.uuid),
+      password = CASE WHEN excluded.password = '' THEN game_accounts.password ELSE excluded.password END,
+      last_ip = excluded.last_ip,
+      last_authenticated_date = excluded.last_authenticated_date,
+      registration_date = excluded.registration_date, login_tries = excluded.login_tries,
+      last_kicked_date = excluded.last_kicked_date, last_position = excluded.last_position,
+      in_place_respawn_count = excluded.in_place_respawn_count, updated_at = excluded.updated_at`,
+    account.usernameLower, account.username, account.uuid, account.password, account.lastIp,
+    account.lastAuthenticatedDate, account.registrationDate, account.loginTries, account.lastKickedDate,
+    account.lastPosition, account.inPlaceRespawnCount, Date.now())
+}
+
+export function deleteGameAccount(username: string): boolean {
+  const key = username.trim().toLocaleLowerCase('en-US')
+  const result = run('DELETE FROM game_accounts WHERE username_lower = ?', key)
+  run('DELETE FROM game_sessions WHERE username_lower = ?', key)
+  return Number(result.changes ?? 0) > 0
+}
+
+export function createGameSession(username: string, expiresAt: number | null = null): string {
+  deleteGameSessionsForUser(username)
+  const token = randomBytes(32).toString('hex')
+  run('INSERT INTO game_sessions (token, username_lower, created_at, expires_at) VALUES (?, ?, ?, ?)',
+    token, username.trim().toLocaleLowerCase('en-US'), Date.now(), expiresAt)
+  return token
+}
+
+export function hasActiveGameSession(username: string): boolean {
+  const key = username.trim().toLocaleLowerCase('en-US')
+  run('DELETE FROM game_sessions WHERE username_lower = ? AND expires_at IS NOT NULL AND expires_at <= ?', key, Date.now())
+  return !!get('SELECT token FROM game_sessions WHERE username_lower = ? LIMIT 1', key)
+}
+
+export function refreshGameSession(username: string, expiresAt: number | null): string {
+  const key = username.trim().toLocaleLowerCase('en-US')
+  run('DELETE FROM game_sessions WHERE username_lower = ? AND expires_at IS NOT NULL AND expires_at <= ?', key, Date.now())
+  const existing = get('SELECT token FROM game_sessions WHERE username_lower = ? LIMIT 1', key)
+  if (existing) {
+    const token = String(existing.token)
+    run('UPDATE game_sessions SET expires_at = ? WHERE token = ?', expiresAt, token)
+    return token
+  }
+  return createGameSession(username, expiresAt)
+}
+
+export function requireGameSession(token: string): GameAccount {
+  const row = get('SELECT username_lower, expires_at FROM game_sessions WHERE token = ?', token)
+  if (!row) {
+    throw createError({ statusCode: 401, statusMessage: '游戏会话已失效' })
+  }
+  const expiresAt = row.expires_at == null ? null : Number(row.expires_at)
+  if (expiresAt !== null && Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
+    run('DELETE FROM game_sessions WHERE token = ?', token)
+    throw createError({ statusCode: 401, statusMessage: '游戏会话已过期' })
+  }
+  const account = getGameAccount(String(row.username_lower))
+  if (!account) throw createError({ statusCode: 401, statusMessage: '账户不存在' })
+  return account
+}
+
+export function deleteGameSession(token: string) {
+  run('DELETE FROM game_sessions WHERE token = ?', token)
+}
+
+export function deleteGameSessionsForUser(username: string) {
+  run('DELETE FROM game_sessions WHERE username_lower = ?', username.trim().toLocaleLowerCase('en-US'))
+}
+
+export interface GameAccountSettings {
+  sessionTimeout: number
+  loginCooldown: number
+}
+
+export function getGameAccountSettings(): GameAccountSettings {
+  const sessionTimeout = Number(getSetting('game_account.session_timeout') ?? 0)
+  const loginCooldown = Number(getSetting('game_account.login_cooldown') ?? 300)
+  return {
+    sessionTimeout: Number.isFinite(sessionTimeout)
+      ? Math.min(86_400, Math.max(0, Math.trunc(sessionTimeout)))
+      : 0,
+    loginCooldown: Number.isFinite(loginCooldown)
+      ? Math.min(86_400, Math.max(-1, Math.trunc(loginCooldown)))
+      : 300,
+  }
+}
+
+export function setGameAccountSettings(settings: Partial<GameAccountSettings>): GameAccountSettings {
+  const current = getGameAccountSettings()
+  const sessionTimeout = settings.sessionTimeout === undefined
+    ? current.sessionTimeout
+    : Math.min(86_400, Math.max(0, Math.trunc(Number(settings.sessionTimeout) || 0)))
+  const loginCooldown = settings.loginCooldown === undefined
+    ? current.loginCooldown
+    : Math.min(86_400, Math.max(-1, Math.trunc(Number(settings.loginCooldown) || 0)))
+  setSetting('game_account.session_timeout', String(sessionTimeout))
+  setSetting('game_account.login_cooldown', String(loginCooldown))
+  return { sessionTimeout, loginCooldown }
+}
+
+export function hashGamePassword(password: string): string {
+  const iterations = 600_000
+  const salt = randomBytes(16)
+  const digest = pbkdf2Sync(password, salt, iterations, 32, 'sha256')
+  return `PBKDF2:${iterations}:${salt.toString('base64')}:${digest.toString('base64')}`
+}
+
+export function verifyGamePassword(password: string, storedHash: string): boolean {
+  try {
+    const [algorithm, iterationText, saltText, digestText] = storedHash.split(':')
+    if (algorithm !== 'PBKDF2') return false
+    const iterations = Number(iterationText)
+    const salt = Buffer.from(saltText, 'base64')
+    const expected = Buffer.from(digestText, 'base64')
+    if (!Number.isInteger(iterations) || iterations < 1 || !salt.length || !expected.length) return false
+    const actual = pbkdf2Sync(password, salt, iterations, expected.length, 'sha256')
+    return actual.length === expected.length && timingSafeEqual(actual, expected)
+  } catch {
+    return false
+  }
+}
+
+export function upsertGameCosmetic(uuid: string, slot: string, data: Uint8Array) {
+  const digest = createHash('sha256').update(data).digest('hex')
+  run(`INSERT INTO game_cosmetics (uuid, slot, data, sha256, updated_at) VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(uuid, slot) DO UPDATE SET data = excluded.data, sha256 = excluded.sha256, updated_at = excluded.updated_at`,
+    uuid, slot, data, digest, Date.now())
+  return { sha256: digest }
+}
+
+export function getGameCosmetic(uuid: string, slot: string): { data: Buffer; sha256: string } | undefined {
+  const row = get('SELECT data, sha256 FROM game_cosmetics WHERE uuid = ? AND slot = ?', uuid, slot)
+  if (!row) return undefined
+  return { data: Buffer.from(row.data as Uint8Array), sha256: String(row.sha256) }
+}
+
+export function listGameCosmeticSlots(uuid: string): { slot: string; sha256: string }[] {
+  return all('SELECT slot, sha256 FROM game_cosmetics WHERE uuid = ?', uuid).map((row) => ({
+    slot: String(row.slot), sha256: String(row.sha256),
+  }))
+}
+
+export function deleteGameCosmetics(uuid: string) {
+  run('DELETE FROM game_cosmetics WHERE uuid = ?', uuid)
+}
+
+export function replaceGameCosmetics(uuid: string, slots: Record<string, Uint8Array>) {
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    run('DELETE FROM game_cosmetics WHERE uuid = ?', uuid)
+    for (const [slot, data] of Object.entries(slots)) {
+      if (data.length) upsertGameCosmetic(uuid, slot, data)
+    }
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
 }
 
 function count(table: string): number {

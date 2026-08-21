@@ -8,7 +8,8 @@ const navItems = [
   { label: '服务器动态', icon: 'monitoring', to: '/activity' },
   { label: '捐赠列表', icon: 'redeem', to: '/donors' },
   { label: '封禁列表', icon: 'gavel', to: '/bans' },
-  { label: '更新服务', icon: 'system_update', to: '/updates' }
+  { label: '更新服务', icon: 'system_update', to: '/updates' },
+  { label: '游戏账户', icon: 'manage_accounts', to: '/game-accounts' }
 ]
 
 const drawerOpen = ref(true)
