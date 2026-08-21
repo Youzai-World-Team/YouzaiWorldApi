@@ -12,7 +12,6 @@ const entryInput = ref('')
 const currentEntry = ref('')
 const savingEntry = ref(false)
 
-const token = useCookie('youzai_token')
 const { showToast } = useToast()
 const { entry: entryState, load: loadEntry } = useEntry()
 
@@ -36,14 +35,12 @@ async function updatePassword() {
   }
   updating.value = true
   try {
+    const entry = await loadEntry()
     await $fetch('/api/auth/password', {
       method: 'POST',
       body: { oldPassword: oldPassword.value, newPassword: newPassword.value }
     })
-    showToast('密码已更新')
-    oldPassword.value = ''
-    newPassword.value = ''
-    confirmPassword.value = ''
+    await navigateTo('/' + entry)
   } catch (e: any) {
     showToast(e?.data?.statusMessage || '更新失败', 'error')
   } finally {
@@ -76,11 +73,10 @@ async function saveEntry() {
 }
 
 async function logout() {
+  const entry = await loadEntry()
   try {
     await $fetch('/api/auth/logout', { method: 'POST' })
   } finally {
-    token.value = null
-    const entry = await loadEntry()
     await navigateTo('/' + entry)
   }
 }

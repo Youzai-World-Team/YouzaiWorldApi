@@ -1,3 +1,6 @@
-export default defineEventHandler(async () => {
-  return { entry: getSetting('entry') || '123456' }
+import { getAdminEntry, requireAuth } from '../../utils/db'
+
+export default defineEventHandler(async (event) => {
+  requireAuth(event)
+  return { entry: getAdminEntry() }
 })

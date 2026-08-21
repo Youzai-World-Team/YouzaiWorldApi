@@ -8,8 +8,9 @@ useHead({ title: '登录' })
 const password = ref('')
 const loading = ref(false)
 const dark = ref(false)
-
-const token = useCookie('youzai_token', { maxAge: 60 * 60 * 24 * 7 })
+const route = useRoute()
+const { remember } = useEntry()
+remember(String(route.params.entry || ''))
 
 const { showToast } = useToast()
 
@@ -32,11 +33,10 @@ async function login() {
   if (loading.value) return
   loading.value = true
   try {
-    const res = await $fetch<{ token: string }>('/api/auth/login', {
+    await $fetch('/api/auth/login', {
       method: 'POST',
-      body: { password: password.value }
+      body: { password: password.value, entry: String(route.params.entry || '') }
     })
-    token.value = res.token
     await navigateTo('/')
   } catch (e: any) {
     showToast(e?.data?.statusMessage || '登录失败', 'error')

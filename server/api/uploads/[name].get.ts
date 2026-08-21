@@ -7,8 +7,6 @@ const MIME_BY_EXT: Record<string, string> = {
   jpeg: 'image/jpeg',
   webp: 'image/webp',
   gif: 'image/gif',
-  bmp: 'image/bmp',
-  svg: 'image/svg+xml',
   avif: 'image/avif',
 }
 
@@ -20,7 +18,7 @@ export default defineEventHandler(async (event) => {
 
   const uploadDir = path.resolve(process.cwd(), 'server/data/uploads')
   const filePath = path.resolve(uploadDir, name)
-  if (!filePath.startsWith(uploadDir)) {
+  if (path.dirname(filePath) !== uploadDir) {
     throw createError({ statusCode: 400, statusMessage: '无效文件名' })
   }
 
@@ -29,6 +27,8 @@ export default defineEventHandler(async (event) => {
     const ext = path.extname(name).slice(1).toLowerCase()
     const mime = MIME_BY_EXT[ext] || 'application/octet-stream'
     setResponseHeader(event, 'Content-Type', mime)
+    setResponseHeader(event, 'Content-Disposition', 'inline')
+    setResponseHeader(event, 'X-Content-Type-Options', 'nosniff')
     return data
   } catch {
     throw createError({ statusCode: 404, statusMessage: '文件不存在' })

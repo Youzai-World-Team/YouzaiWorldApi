@@ -1,9 +1,10 @@
 import { createGameSession, gameAccountWire, getGameAccount, getGameAccountSettings, requireGameApiKey, upsertGameAccount, verifyGamePassword } from '../../utils/db'
+import { requireGameUsername } from '../../utils/game-input'
 
 export default defineEventHandler(async (event) => {
   requireGameApiKey(event)
   const body = await readBody<any>(event)
-  const username = String(body?.username || '').trim()
+  const username = requireGameUsername(body?.username)
   const account = getGameAccount(username)
   if (!account?.password) {
     throw createError({ statusCode: 401, statusMessage: '账户未注册', data: { reason: 'not_registered' } })
@@ -35,7 +36,7 @@ export default defineEventHandler(async (event) => {
     })
   }
   account.loginTries = 0
-  account.lastIp = String(body?.ip || '')
+  account.lastIp = String(body?.ip || '').slice(0, 64)
   account.lastAuthenticatedDate = new Date().toISOString()
   upsertGameAccount(account)
   return { token: createGameSession(account.username), account: gameAccountWire(account) }

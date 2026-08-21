@@ -6,10 +6,10 @@ const EXT_BY_TYPE: Record<string, string> = {
   'image/jpeg': 'jpg',
   'image/webp': 'webp',
   'image/gif': 'gif',
-  'image/bmp': 'bmp',
-  'image/svg+xml': 'svg',
   'image/avif': 'avif',
 }
+
+const MAX_UPLOAD_BYTES = 2 * 1024 * 1024
 
 export default defineEventHandler(async (event) => {
   requireAuth(event)
@@ -19,11 +19,14 @@ export default defineEventHandler(async (event) => {
   if (!file) {
     throw createError({ statusCode: 400, statusMessage: '未找到上传文件' })
   }
+  if (file.data.length > MAX_UPLOAD_BYTES) {
+    throw createError({ statusCode: 413, statusMessage: '图片大小不能超过 2 MiB' })
+  }
 
   const type = file.type || ''
   const ext = EXT_BY_TYPE[type]
   if (!ext) {
-    throw createError({ statusCode: 400, statusMessage: '只支持图片文件（PNG/JPG/WebP/GIF 等）' })
+    throw createError({ statusCode: 400, statusMessage: '只支持 PNG/JPG/WebP/GIF/AVIF 图片' })
   }
 
   const uploadDir = path.resolve(process.cwd(), 'server/data/uploads')

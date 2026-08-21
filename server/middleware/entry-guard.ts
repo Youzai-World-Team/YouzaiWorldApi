@@ -1,5 +1,7 @@
+import { ADMIN_COOKIE_NAME, getAdminEntry, hasSession } from '../utils/db'
+
 export default defineEventHandler(async (event) => {
-  const path = event.path
+  const path = getRequestURL(event).pathname
 
   if (
     path.startsWith('/api/') ||
@@ -10,9 +12,9 @@ export default defineEventHandler(async (event) => {
     return
   }
 
-  const entry = getSetting('entry') || '123456'
+  const entry = getAdminEntry()
 
-  const token = getCookie(event, 'youzai_token')
+  const token = getCookie(event, ADMIN_COOKIE_NAME)
   const authed = !!token && hasSession(token)
 
   if (authed) {

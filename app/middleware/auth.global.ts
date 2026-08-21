@@ -1,20 +1,26 @@
 export default defineNuxtRouteMiddleware(async (to) => {
   if (import.meta.server) return
 
-  const token = useCookie('youzai_token').value
   const isEntryRoute = to.name === 'entry'
+  let authenticated = false
+  try {
+    await $fetch('/api/auth/me')
+    authenticated = true
+  } catch {
+    authenticated = false
+  }
 
   if (isEntryRoute) {
-    if (token) return navigateTo('/')
-    const { load } = useEntry()
-    const entry = await load()
-    if (to.path === '/' + entry) return
-    return navigateTo('/' + entry)
+    if (authenticated) return navigateTo('/')
+    return
   }
 
-  if (!token) {
+  if (!authenticated) {
     const { load } = useEntry()
     const entry = await load()
-    return navigateTo('/' + entry)
+    if (entry) return navigateTo('/' + entry)
+    return
   }
+
+  await useEntry().load()
 })

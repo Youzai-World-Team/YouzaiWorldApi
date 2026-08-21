@@ -1,17 +1,16 @@
 import { gameAccountWire, getGameAccount, requireGameApiKey, upsertGameAccount } from '../../utils/db'
+import { optionalUuid, requireGameUsername } from '../../utils/game-input'
 
 export default defineEventHandler(async (event) => {
   requireGameApiKey(event)
   const body = await readBody<any>(event)
-  const username = String(body?.username || '').trim()
-  if (!/^[A-Za-z0-9_]{1,16}$/.test(username)) {
-    throw createError({ statusCode: 400, statusMessage: '玩家代号格式不正确' })
-  }
+  const username = requireGameUsername(body?.username)
+  const uuid = optionalUuid(body?.uuid)
   const usernameLower = username.toLocaleLowerCase('en-US')
   const current = getGameAccount(username)
   if (current) {
-    if (!current.uuid && body?.uuid) {
-      current.uuid = String(body.uuid)
+    if (!current.uuid && uuid) {
+      current.uuid = uuid
       upsertGameAccount(current)
     }
     return { ok: true, created: false, account: gameAccountWire(current) }
@@ -20,7 +19,7 @@ export default defineEventHandler(async (event) => {
   const account = {
     username,
     usernameLower,
-    uuid: body?.uuid ? String(body.uuid) : null,
+    uuid,
     password: '',
     lastIp: '',
     lastAuthenticatedDate: epoch,

@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite'
-import { createHash, pbkdf2Sync, randomBytes, timingSafeEqual } from 'node:crypto'
+import { createHash, createHmac, pbkdf2Sync, randomBytes, timingSafeEqual } from 'node:crypto'
 import { mkdirSync, promises as fs } from 'node:fs'
 import path from 'node:path'
 import { getCookie, getHeader, createError, type H3Event } from 'h3'
@@ -83,7 +83,29 @@ db.exec(`
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (uuid, slot)
   );
+  CREATE TABLE IF NOT EXISTS api_request_nonces (
+    nonce TEXT PRIMARY KEY,
+    expires_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS admin_login_rate_limits (
+    rate_key TEXT PRIMARY KEY,
+    window_started INTEGER NOT NULL,
+    attempts INTEGER NOT NULL
+  );
 `)
+
+const ADMIN_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000
+const GAME_REQUEST_MAX_SKEW_SECONDS = 300
+const GAME_REQUEST_NONCE_TTL_MS = 10 * 60 * 1000
+const GAME_API_KEY_ENV = 'YZWC_GAME_API_KEY'
+const ADMIN_PASSWORD_ENV = 'YZWC_ADMIN_PASSWORD'
+const ADMIN_ENTRY_ENV = 'YZWC_ADMIN_ENTRY'
+const ADMIN_PASSWORD_SETTING = 'admin.password_hash'
+const ADMIN_ENTRY_SETTING = 'entry'
+const LOGIN_RATE_WINDOW_MS = 15 * 60 * 1000
+const LOGIN_RATE_MAX_ATTEMPTS = 5
+
+export const ADMIN_COOKIE_NAME = '__Host-yzwc_admin'
 
 function all(sql: string, ...params: any[]) {
   return db.prepare(sql).all(...params) as Record<string, unknown>[]
@@ -105,21 +127,37 @@ export function setSetting(key: string, value: string) {
   run('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', key, value)
 }
 
+export function deleteSetting(key: string) {
+  run('DELETE FROM settings WHERE key = ?', key)
+}
+
+function tokenDigest(token: string): string {
+  return createHash('sha256').update(token).digest('hex')
+}
+
 export function hasSession(token: string): boolean {
-  return !!get('SELECT token FROM sessions WHERE token = ?', token)
+  const digest = tokenDigest(token)
+  const row = get('SELECT time FROM sessions WHERE token = ?', digest)
+  if (!row) return false
+  const createdAt = Number(row.time)
+  if (!Number.isFinite(createdAt) || createdAt + ADMIN_SESSION_TTL_MS <= Date.now()) {
+    deleteSession(token)
+    return false
+  }
+  return true
 }
 
 export function createSession(token: string) {
-  run('INSERT INTO sessions (token, time) VALUES (?, ?)', token, Date.now())
+  run('INSERT INTO sessions (token, time) VALUES (?, ?)', tokenDigest(token), Date.now())
 }
 
 export function deleteSession(token: string) {
-  run('DELETE FROM sessions WHERE token = ?', token)
+  run('DELETE FROM sessions WHERE token = ?', tokenDigest(token))
 }
 
 export function requireAuth(event: H3Event): string {
-  const cookie = getCookie(event, 'youzai_token')
-  const header = getHeader(event, 'authorization')?.replace('Bearer ', '')
+  const cookie = getCookie(event, ADMIN_COOKIE_NAME)
+  const header = getHeader(event, 'authorization')?.replace(/^Bearer\s+/i, '')
   const token = cookie || header
   if (!token) {
     throw createError({ statusCode: 401, statusMessage: '未登录' })
@@ -276,11 +314,93 @@ export function deleteUpdate(id: string) {
   run('DELETE FROM updates WHERE id = ?', id)
 }
 
+export function assertAdminLoginAllowed(ip: string): void {
+  const now = Date.now()
+  const key = tokenDigest(ip || 'unknown')
+  const row = get('SELECT window_started, attempts FROM admin_login_rate_limits WHERE rate_key = ?', key)
+  if (!row) return
+  const started = Number(row.window_started)
+  const attempts = Number(row.attempts)
+  if (!Number.isFinite(started) || started + LOGIN_RATE_WINDOW_MS <= now) {
+    run('DELETE FROM admin_login_rate_limits WHERE rate_key = ?', key)
+    return
+  }
+  if (attempts >= LOGIN_RATE_MAX_ATTEMPTS) {
+    const retryAfterSeconds = Math.max(1, Math.ceil((started + LOGIN_RATE_WINDOW_MS - now) / 1000))
+    throw createError({ statusCode: 429, statusMessage: '登录尝试过多，请稍后重试', data: { retryAfterSeconds } })
+  }
+}
+
+export function recordAdminLoginFailure(ip: string): void {
+  const now = Date.now()
+  const key = tokenDigest(ip || 'unknown')
+  const row = get('SELECT window_started, attempts FROM admin_login_rate_limits WHERE rate_key = ?', key)
+  const started = Number(row?.window_started)
+  if (!row || !Number.isFinite(started) || started + LOGIN_RATE_WINDOW_MS <= now) {
+    run(`INSERT INTO admin_login_rate_limits (rate_key, window_started, attempts) VALUES (?, ?, 1)
+         ON CONFLICT(rate_key) DO UPDATE SET window_started = excluded.window_started, attempts = 1`, key, now)
+    return
+  }
+  run('UPDATE admin_login_rate_limits SET attempts = attempts + 1 WHERE rate_key = ?', key)
+}
+
+export function clearAdminLoginFailures(ip: string): void {
+  run('DELETE FROM admin_login_rate_limits WHERE rate_key = ?', tokenDigest(ip || 'unknown'))
+}
+
 export function requireGameApiKey(event: H3Event): void {
-  const expected = process.env.YZWC_GAME_API_KEY || 'youzai-local-development'
-  const provided = getHeader(event, 'x-yzwc-server-key')
-  if (!provided || provided !== expected) {
-    throw createError({ statusCode: 401, statusMessage: '服务器 Api 密钥无效' })
+  if (event.context.yzwcGameRequestAuthenticated === true) return
+  throw createError({ statusCode: 401, statusMessage: '服务器 Api 请求签名无效' })
+}
+
+export function authenticateGameApiRequest(event: H3Event, body: Buffer): void {
+  const expected = requireSecret(GAME_API_KEY_ENV, 32)
+  const timestamp = getHeader(event, 'x-yzwc-timestamp') || ''
+  const nonce = getHeader(event, 'x-yzwc-nonce') || ''
+  const provided = getHeader(event, 'x-yzwc-signature') || ''
+  const timestampSeconds = Number(timestamp)
+  if (!/^\d{10,}$/.test(timestamp) || !Number.isSafeInteger(timestampSeconds)
+      || Math.abs(Math.floor(Date.now() / 1000) - timestampSeconds) > GAME_REQUEST_MAX_SKEW_SECONDS
+      || !/^[A-Za-z0-9_-]{16,128}$/.test(nonce)
+      || !/^[a-f0-9]{64}$/i.test(provided)) {
+    throw createError({ statusCode: 401, statusMessage: '服务器 Api 请求签名无效' })
+  }
+  const method = event.method.toUpperCase()
+  const bodyHash = createHash('sha256').update(body).digest('hex')
+  const canonical = `${timestamp}.${nonce}.${method}.${event.path}.${bodyHash}`
+  const expectedSignature = createHmac('sha256', expected).update(canonical).digest('hex')
+  if (!safeEqualHex(provided, expectedSignature)) {
+    throw createError({ statusCode: 401, statusMessage: '服务器 Api 请求签名无效' })
+  }
+  const now = Date.now()
+  run('DELETE FROM api_request_nonces WHERE expires_at <= ?', now)
+  try {
+    run('INSERT INTO api_request_nonces (nonce, expires_at) VALUES (?, ?)', nonce, now + GAME_REQUEST_NONCE_TTL_MS)
+  } catch {
+    throw createError({ statusCode: 409, statusMessage: '服务器 Api 请求重复提交' })
+  }
+  event.context.yzwcGameRequestAuthenticated = true
+}
+
+function safeEqualHex(actual: string, expected: string): boolean {
+  const a = Buffer.from(actual, 'hex')
+  const b = Buffer.from(expected, 'hex')
+  return a.length === b.length && timingSafeEqual(a, b)
+}
+
+function requireSecret(name: string, minLength: number): string {
+  const value = process.env[name]?.trim() || ''
+  if (value.length < minLength) {
+    throw createError({ statusCode: 503, statusMessage: `${name} 未配置或长度不足` })
+  }
+  return value
+}
+
+export function validateRuntimeSecurityConfig(): void {
+  requireSecret(GAME_API_KEY_ENV, 32)
+  getAdminEntry()
+  if (!getSetting(ADMIN_PASSWORD_SETTING)) {
+    throw new Error(`${ADMIN_PASSWORD_ENV} 未完成初始化`)
   }
 }
 
@@ -369,37 +489,21 @@ export function deleteGameAccount(username: string): boolean {
 export function createGameSession(username: string, expiresAt: number | null = null): string {
   deleteGameSessionsForUser(username)
   const token = randomBytes(32).toString('hex')
+  const effectiveExpiresAt = expiresAt ?? Date.now() + gameSessionTtlMs()
   run('INSERT INTO game_sessions (token, username_lower, created_at, expires_at) VALUES (?, ?, ?, ?)',
-    token, username.trim().toLocaleLowerCase('en-US'), Date.now(), expiresAt)
+    tokenDigest(token), username.trim().toLocaleLowerCase('en-US'), Date.now(), effectiveExpiresAt)
   return token
 }
 
-export function hasActiveGameSession(username: string): boolean {
-  const key = username.trim().toLocaleLowerCase('en-US')
-  run('DELETE FROM game_sessions WHERE username_lower = ? AND expires_at IS NOT NULL AND expires_at <= ?', key, Date.now())
-  return !!get('SELECT token FROM game_sessions WHERE username_lower = ? LIMIT 1', key)
-}
-
-export function refreshGameSession(username: string, expiresAt: number | null): string {
-  const key = username.trim().toLocaleLowerCase('en-US')
-  run('DELETE FROM game_sessions WHERE username_lower = ? AND expires_at IS NOT NULL AND expires_at <= ?', key, Date.now())
-  const existing = get('SELECT token FROM game_sessions WHERE username_lower = ? LIMIT 1', key)
-  if (existing) {
-    const token = String(existing.token)
-    run('UPDATE game_sessions SET expires_at = ? WHERE token = ?', expiresAt, token)
-    return token
-  }
-  return createGameSession(username, expiresAt)
-}
-
 export function requireGameSession(token: string): GameAccount {
-  const row = get('SELECT username_lower, expires_at FROM game_sessions WHERE token = ?', token)
+  const digest = tokenDigest(token)
+  const row = get('SELECT username_lower, expires_at FROM game_sessions WHERE token = ?', digest)
   if (!row) {
     throw createError({ statusCode: 401, statusMessage: '游戏会话已失效' })
   }
   const expiresAt = row.expires_at == null ? null : Number(row.expires_at)
   if (expiresAt !== null && Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
-    run('DELETE FROM game_sessions WHERE token = ?', token)
+    run('DELETE FROM game_sessions WHERE token = ?', digest)
     throw createError({ statusCode: 401, statusMessage: '游戏会话已过期' })
   }
   const account = getGameAccount(String(row.username_lower))
@@ -408,25 +512,26 @@ export function requireGameSession(token: string): GameAccount {
 }
 
 export function deleteGameSession(token: string) {
-  run('DELETE FROM game_sessions WHERE token = ?', token)
+  run('DELETE FROM game_sessions WHERE token = ?', tokenDigest(token))
 }
 
 export function deleteGameSessionsForUser(username: string) {
   run('DELETE FROM game_sessions WHERE username_lower = ?', username.trim().toLocaleLowerCase('en-US'))
 }
 
+function gameSessionTtlMs(): number {
+  const raw = Number(process.env.YZWC_GAME_SESSION_TTL_SECONDS ?? 43_200)
+  const seconds = Number.isFinite(raw) ? Math.trunc(raw) : 43_200
+  return Math.min(86_400, Math.max(300, seconds)) * 1000
+}
+
 export interface GameAccountSettings {
-  sessionTimeout: number
   loginCooldown: number
 }
 
 export function getGameAccountSettings(): GameAccountSettings {
-  const sessionTimeout = Number(getSetting('game_account.session_timeout') ?? 0)
   const loginCooldown = Number(getSetting('game_account.login_cooldown') ?? 300)
   return {
-    sessionTimeout: Number.isFinite(sessionTimeout)
-      ? Math.min(86_400, Math.max(0, Math.trunc(sessionTimeout)))
-      : 0,
     loginCooldown: Number.isFinite(loginCooldown)
       ? Math.min(86_400, Math.max(-1, Math.trunc(loginCooldown)))
       : 300,
@@ -435,15 +540,46 @@ export function getGameAccountSettings(): GameAccountSettings {
 
 export function setGameAccountSettings(settings: Partial<GameAccountSettings>): GameAccountSettings {
   const current = getGameAccountSettings()
-  const sessionTimeout = settings.sessionTimeout === undefined
-    ? current.sessionTimeout
-    : Math.min(86_400, Math.max(0, Math.trunc(Number(settings.sessionTimeout) || 0)))
   const loginCooldown = settings.loginCooldown === undefined
     ? current.loginCooldown
     : Math.min(86_400, Math.max(-1, Math.trunc(Number(settings.loginCooldown) || 0)))
-  setSetting('game_account.session_timeout', String(sessionTimeout))
   setSetting('game_account.login_cooldown', String(loginCooldown))
-  return { sessionTimeout, loginCooldown }
+  return { loginCooldown }
+}
+
+function hashAdminPassword(password: string): string {
+  const iterations = 600_000
+  const salt = randomBytes(16)
+  const digest = pbkdf2Sync(password, salt, iterations, 32, 'sha256')
+  return `PBKDF2:${iterations}:${salt.toString('base64')}:${digest.toString('base64')}`
+}
+
+export function verifyAdminPassword(password: string): boolean {
+  const storedHash = getSetting(ADMIN_PASSWORD_SETTING)
+  return Boolean(storedHash && verifyGamePassword(password, storedHash))
+}
+
+export function updateAdminPassword(oldPassword: string, newPassword: string): void {
+  if (!verifyAdminPassword(oldPassword)) {
+    throw createError({ statusCode: 401, statusMessage: '当前密码错误' })
+  }
+  if (newPassword.length < 12 || newPassword.length > 128) {
+    throw createError({ statusCode: 400, statusMessage: '新密码长度需要为 12 至 128 位' })
+  }
+  setSetting(ADMIN_PASSWORD_SETTING, hashAdminPassword(newPassword))
+  run('DELETE FROM sessions')
+}
+
+export function getAdminEntry(): string {
+  const entry = getSetting(ADMIN_ENTRY_SETTING)?.trim() || ''
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{11,63}$/.test(entry)) {
+    throw createError({ statusCode: 503, statusMessage: '后台安全入口未正确配置' })
+  }
+  return entry
+}
+
+export function setAdminEntry(entry: string): void {
+  setSetting(ADMIN_ENTRY_SETTING, entry)
 }
 
 export function hashGamePassword(password: string): string {
@@ -522,10 +658,28 @@ async function readJsonFile<T>(file: string): Promise<T | null> {
 }
 
 export async function migrateFromJson() {
-  if (getSetting('password') === undefined) {
-    const config = await readJsonFile<{ password?: string; entry?: string }>('config.json')
-    setSetting('password', config?.password || '123456')
-    setSetting('entry', config?.entry || '123456')
+  const config = await readJsonFile<{ password?: string; entry?: string }>('config.json')
+  const legacyPassword = getSetting('password') || config?.password || ''
+  const configuredPassword = process.env[ADMIN_PASSWORD_ENV]?.trim() || ''
+  if (getSetting(ADMIN_PASSWORD_SETTING) === undefined) {
+    const initialPassword = configuredPassword || legacyPassword
+    if (initialPassword.length < 12) {
+      throw new Error(`${ADMIN_PASSWORD_ENV} 必须配置为至少 12 位的后台密码`)
+    }
+    setSetting(ADMIN_PASSWORD_SETTING, hashAdminPassword(initialPassword))
+  }
+  deleteSetting('password')
+  // 升级时删除旧版本遗留的无效账户设置键。
+  deleteSetting('game_account.' + 'session_' + 'timeout')
+
+  const storedEntry = getSetting(ADMIN_ENTRY_SETTING)?.trim() || ''
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{11,63}$/.test(storedEntry)) {
+    const entry = (process.env[ADMIN_ENTRY_ENV]?.trim() || config?.entry || '')
+      .replace(/^\/+|\/+$/g, '')
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]{11,63}$/.test(entry)) {
+      throw new Error(`${ADMIN_ENTRY_ENV} 必须配置为 12 至 64 位的安全入口`)
+    }
+    setAdminEntry(entry)
   }
 
   if (count('sessions') === 0) {
@@ -535,6 +689,18 @@ export async function migrateFromJson() {
         run('INSERT INTO sessions (token, time) VALUES (?, ?)', token, time)
       }
     }
+  }
+
+  // 旧后台会话保存的是明文令牌；升级后统一失效并改为仅存 SHA-256 摘要。
+  if (getSetting('security.sessions_hashed') !== 'true') {
+    run('DELETE FROM sessions')
+    setSetting('security.sessions_hashed', 'true')
+  }
+
+  // 旧游戏会话保存的是明文令牌；升级后统一失效，避免摘要迁移期间保留可直接使用的凭据。
+  if (getSetting('security.game_sessions_hashed') !== 'true') {
+    run('DELETE FROM game_sessions')
+    setSetting('security.game_sessions_hashed', 'true')
   }
 
   if (count('login_history') === 0) {

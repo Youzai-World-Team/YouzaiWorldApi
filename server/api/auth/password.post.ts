@@ -1,3 +1,6 @@
+import { deleteCookie } from 'h3'
+import { ADMIN_COOKIE_NAME, updateAdminPassword } from '../../utils/db'
+
 export default defineEventHandler(async (event) => {
   requireAuth(event)
 
@@ -6,11 +9,8 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: '参数不完整' })
   }
 
-  const password = getSetting('password') || '123456'
-  if (body.oldPassword !== password) {
-    throw createError({ statusCode: 401, statusMessage: '当前密码错误' })
-  }
-
-  setSetting('password', body.newPassword)
-  return { ok: true }
+  updateAdminPassword(body.oldPassword, body.newPassword)
+  deleteCookie(event, ADMIN_COOKIE_NAME, { path: '/', secure: true, sameSite: 'strict' })
+  deleteCookie(event, 'youzai_token', { path: '/', secure: true, sameSite: 'strict' })
+  return { ok: true, reloginRequired: true }
 })

@@ -12,12 +12,11 @@ interface GameAccount {
 }
 
 interface GameAccountSettings {
-  sessionTimeout: number
   loginCooldown: number
 }
 
 const accounts = ref<GameAccount[]>([])
-const settings = ref<GameAccountSettings>({ sessionTimeout: 0, loginCooldown: 300 })
+const settings = ref<GameAccountSettings>({ loginCooldown: 300 })
 const loading = ref(false)
 const savingSettings = ref(false)
 const showCreate = ref(false)
@@ -112,14 +111,13 @@ async function unlockAccount(account: GameAccount) {
 }
 
 async function saveSettings() {
-  settings.value.sessionTimeout = Math.min(86400, Math.max(0, Math.trunc(settings.value.sessionTimeout)))
   settings.value.loginCooldown = Math.min(86400, Math.max(-1, Math.trunc(settings.value.loginCooldown)))
   savingSettings.value = true
   try {
     settings.value = await $fetch<GameAccountSettings>('/api/admin/game-account-settings', {
       method: 'PATCH', body: settings.value,
     })
-    showToast('账户认证设置已保存')
+    showToast('登录冷却设置已保存')
   } catch (e: any) {
     showToast(e?.data?.statusMessage || '设置保存失败', 'error')
   } finally {
@@ -153,14 +151,10 @@ onMounted(loadAccounts)
 
     <div class="settings-grid">
       <div class="card setting-card">
-        <h2>会话认证</h2>
-        <md-outlined-text-field type="number" min="0" max="86400" step="1" label="会话超时（秒）" :value="String(settings.sessionTimeout)" @input="settings.sessionTimeout = Math.min(86400, Math.max(0, Math.trunc(Number(($event.target as HTMLInputElement).value) || 0)))"></md-outlined-text-field>
-      </div>
-      <div class="card setting-card">
         <h2>登录失败冷却</h2>
         <md-outlined-text-field type="number" min="-1" max="86400" step="1" label="冷却时间（秒）" :value="String(settings.loginCooldown)" @input="settings.loginCooldown = Math.min(86400, Math.max(-1, Math.trunc(Number(($event.target as HTMLInputElement).value) || 0)))"></md-outlined-text-field>
       </div>
-      <div class="setting-action"><md-filled-button :disabled="savingSettings" @click="saveSettings">保存认证设置</md-filled-button></div>
+      <div class="setting-action"><md-filled-button :disabled="savingSettings" @click="saveSettings">保存冷却设置</md-filled-button></div>
     </div>
 
     <div class="card table-card">
@@ -187,6 +181,6 @@ onMounted(loadAccounts)
 </template>
 
 <style scoped>
-.page-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:20px}.heading-actions{display:flex;align-items:center;gap:8px}.settings-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:20px}.setting-card{padding:18px;display:flex;flex-direction:column;gap:8px}.setting-card h2{margin:0;font-size:17px}.setting-action{grid-column:1/-1;display:flex;justify-content:flex-end}.table-card{padding:0;overflow:hidden}.empty{padding:48px;text-align:center;color:var(--md-sys-color-on-surface-variant)}table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;padding:14px 16px;border-bottom:1px solid var(--md-sys-color-outline-variant);white-space:nowrap}th{font-weight:500;color:var(--md-sys-color-on-surface-variant);background:var(--md-sys-color-surface-container-high)}tr:last-child td{border-bottom:0}.name{font-weight:600}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}.status{display:inline-flex;padding:4px 8px;border-radius:8px;font-size:12px}.status--ok{background:var(--md-sys-color-primary-container);color:var(--md-sys-color-on-primary-container)}.status--pending{background:var(--md-sys-color-surface-container-high);color:var(--md-sys-color-on-surface-variant)}.actions{text-align:right}.dialog-form{display:flex;flex-direction:column;gap:16px;min-width:min(420px,calc(100vw - 48px))}.dialog-form p{margin:0;color:var(--md-sys-color-on-surface-variant)}
+.page-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:20px}.heading-actions{display:flex;align-items:center;gap:8px}.settings-grid{display:grid;grid-template-columns:minmax(0,480px);gap:12px;margin-bottom:20px}.setting-card{padding:18px;display:flex;flex-direction:column;gap:8px}.setting-card h2{margin:0;font-size:17px}.setting-action{display:flex;justify-content:flex-end}.table-card{padding:0;overflow:hidden}.empty{padding:48px;text-align:center;color:var(--md-sys-color-on-surface-variant)}table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;padding:14px 16px;border-bottom:1px solid var(--md-sys-color-outline-variant);white-space:nowrap}th{font-weight:500;color:var(--md-sys-color-on-surface-variant);background:var(--md-sys-color-surface-container-high)}tr:last-child td{border-bottom:0}.name{font-weight:600}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}.status{display:inline-flex;padding:4px 8px;border-radius:8px;font-size:12px}.status--ok{background:var(--md-sys-color-primary-container);color:var(--md-sys-color-on-primary-container)}.status--pending{background:var(--md-sys-color-surface-container-high);color:var(--md-sys-color-on-surface-variant)}.actions{text-align:right}.dialog-form{display:flex;flex-direction:column;gap:16px;min-width:min(420px,calc(100vw - 48px))}.dialog-form p{margin:0;color:var(--md-sys-color-on-surface-variant)}
 @media(max-width:700px){.page-heading{display:block}.heading-actions{margin-top:12px}.settings-grid{grid-template-columns:1fr}.setting-action{grid-column:auto}.table-card{margin:0 -4px}.table-wrap{overflow-x:auto}}
 </style>

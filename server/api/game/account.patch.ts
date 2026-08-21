@@ -1,9 +1,10 @@
-import { deleteGameSessionsForUser, gameAccountWire, getGameAccount, getGameAccountSettings, hashGamePassword, refreshGameSession, requireGameApiKey, upsertGameAccount } from '../../utils/db'
+import { deleteGameSessionsForUser, gameAccountWire, getGameAccount, hashGamePassword, requireGameApiKey, upsertGameAccount } from '../../utils/db'
+import { optionalPosition, optionalUuid, requireGameUsername } from '../../utils/game-input'
 
 export default defineEventHandler(async (event) => {
   requireGameApiKey(event)
   const body = await readBody<any>(event)
-  const username = String(body?.username || '').trim()
+  const username = requireGameUsername(body?.username)
   const current = getGameAccount(username)
   if (!current) throw createError({ statusCode: 404, statusMessage: '账户不存在' })
   const next = { ...current }
@@ -15,7 +16,12 @@ export default defineEventHandler(async (event) => {
   }
   for (const [target, source] of Object.entries(textFields)) {
     const value = body?.[target] !== undefined ? body[target] : body?.[source]
-    if (value !== undefined) (next as any)[target] = value == null ? null : String(value)
+    if (value !== undefined) {
+      if (target === 'uuid') (next as any)[target] = optionalUuid(value)
+      else if (target === 'lastPosition') (next as any)[target] = optionalPosition(value)
+      else if (String(value).length > 256) throw createError({ statusCode: 400, statusMessage: '账户字段过长' })
+      else (next as any)[target] = value == null ? null : String(value)
+    }
   }
   const numberFields: Record<string, string> = { inPlaceRespawnCount: 'in_place_respawn_count' }
   for (const [target, source] of Object.entries(numberFields)) {
@@ -39,14 +45,5 @@ export default defineEventHandler(async (event) => {
     next.lastKickedDate = '1970-01-01T00:00:00Z'
   }
   upsertGameAccount(next)
-  if (body?.resume_session === true && body?.password === undefined) {
-    const authenticatedAt = Date.parse(next.lastAuthenticatedDate)
-    const { sessionTimeout } = getGameAccountSettings()
-    if (sessionTimeout > 0 && next.lastIp && Number.isFinite(authenticatedAt) && authenticatedAt > 1000) {
-      refreshGameSession(next.username, Date.now() + sessionTimeout * 1000)
-    } else {
-      deleteGameSessionsForUser(next.username)
-    }
-  }
   return { ok: true, account: gameAccountWire(next) }
 })

@@ -1,8 +1,12 @@
 export default defineEventHandler((event) => {
-  handleCors(event, {
-    origin: '*',
-    methods: '*',
-    allowHeaders: '*',
-    exposeHeaders: '*',
-  })
+  const origin = getHeader(event, 'origin') || ''
+  if (origin !== 'https://mcyzw.top') return
+
+  if (handleCors(event, {
+    origin: ['https://mcyzw.top'],
+    methods: ['GET', 'HEAD', 'OPTIONS'],
+    allowHeaders: ['Accept', 'Content-Type'],
+    exposeHeaders: ['Content-Length', 'Content-Type', 'ETag'],
+    maxAge: '86400',
+  })) return
 })

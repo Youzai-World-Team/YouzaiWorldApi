@@ -59,8 +59,6 @@ onMounted(async () => {
   try {
     await $fetch('/api/auth/me')
   } catch {
-    const token = useCookie('youzai_token')
-    token.value = null
     const entry = await loadEntry()
     await navigateTo('/' + entry)
   }
