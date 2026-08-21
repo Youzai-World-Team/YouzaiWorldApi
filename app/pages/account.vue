@@ -14,8 +14,13 @@ const savingEntry = ref(false)
 
 const { showToast } = useToast()
 const { entry: entryState, load: loadEntry } = useEntry()
+const currentUser = ref<{ username: string; isOwner: boolean } | null>(null)
 
 onMounted(async () => {
+  try {
+    const result = await $fetch<{ user: { username: string; isOwner: boolean } }>('/api/auth/me')
+    currentUser.value = result.user
+  } catch {}
   currentEntry.value = await loadEntry()
   entryInput.value = currentEntry.value
 })
@@ -114,7 +119,7 @@ async function logout() {
       </div>
     </section>
 
-    <section class="card account-card">
+    <section v-if="currentUser?.isOwner" class="card account-card">
       <h2 class="card-title">安全入口</h2>
       <p class="entry-hint">登录页只能通过该入口访问。当前入口：<code class="entry-code">/{{ currentEntry || '…' }}</code></p>
       <div class="form">

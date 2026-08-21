@@ -10,6 +10,7 @@ useHead({ title: computed(() => setupRequired.value ? '初始化后台' : '仪�
 interface LoginRecord {
   ip: string
   time: number
+  username: string
   browser: string
   os: string
   device: string
@@ -170,6 +171,7 @@ function formatLoginClient(login: LoginRecord) {
               <md-icon slot="start">devices</md-icon>
               <span slot="headline">{{ l.ip }}</span>
               <span slot="supporting-text" class="login-record-meta">
+                <span v-if="l.username">{{ l.username }}</span>
                 <span>{{ formatLoginClient(l) }}</span>
                 <span>{{ formatTime(l.time) }}</span>
               </span>

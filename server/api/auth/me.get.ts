@@ -1,4 +1,4 @@
 export default defineEventHandler(async (event) => {
-  requireAuth(event)
-  return { valid: true }
+  const user = requireAuth(event)
+  return { valid: true, user }
 })

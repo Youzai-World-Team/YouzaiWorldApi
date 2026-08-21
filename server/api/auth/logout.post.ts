@@ -1,12 +1,14 @@
-import { deleteCookie } from 'h3'
-import { ADMIN_COOKIE_NAME } from '../../utils/db'
+import { deleteCookie, getCookie } from 'h3'
+import { ADMIN_COOKIE_NAME, deleteSession, getAuthenticatedUser, recordAudit } from '../../utils/db'
 
 export default defineEventHandler(async (event) => {
   const cookie = getCookie(event, ADMIN_COOKIE_NAME)
   const header = getHeader(event, 'authorization')?.replace(/^Bearer\s+/i, '')
   const token = cookie || header
+  const user = getAuthenticatedUser(event)
 
   if (token) {
+    if (user) recordAudit(event, user, '登出后台')
     deleteSession(token)
   }
   deleteCookie(event, ADMIN_COOKIE_NAME, { path: '/', secure: true, sameSite: 'strict' })

@@ -2,6 +2,7 @@
 import { onMounted, ref } from 'vue'
 
 const entry = ref('')
+const username = ref('admin')
 const password = ref('')
 const confirmPassword = ref('')
 const showPassword = ref(false)
@@ -9,7 +10,7 @@ const loading = ref(false)
 const dark = ref(false)
 const { showToast } = useToast()
 const reservedEntries = new Set([
-  'login', 'account', 'activity', 'donors', 'bans', 'updates', 'game-accounts',
+  'login', 'account', 'activity', 'donors', 'bans', 'updates', 'game-accounts', 'admin-users', 'audit-logs',
   'api', '_nuxt', '_ipx', 'favicon', '__nuxt_error',
 ])
 
@@ -36,6 +37,10 @@ async function submit() {
     showToast('登录入口格式不正确或与现有页面冲突', 'error')
     return
   }
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{2,31}$/.test(username.value.trim())) {
+    showToast('管理员用户名需要为 3 至 32 位字母、数字、下划线或连字符', 'error')
+    return
+  }
   if (password.value.length < 12 || password.value.length > 128) {
     showToast('后台密码需要为 12 至 128 位', 'error')
     return
@@ -49,7 +54,12 @@ async function submit() {
   try {
     const result = await $fetch<{ entry: string }>('/api/auth/setup', {
       method: 'POST',
-      body: { entry: normalizedEntry, password: password.value, confirmPassword: confirmPassword.value },
+      body: {
+        username: username.value.trim(),
+        entry: normalizedEntry,
+        password: password.value,
+        confirmPassword: confirmPassword.value,
+      },
     })
     useEntry().remember(result.entry)
     await navigateTo('/' + result.entry)
@@ -74,6 +84,14 @@ async function submit() {
       </div>
 
       <div class="setup-form">
+        <md-outlined-text-field
+          label="首个管理员用户名"
+          supporting-text="3 至 32 位"
+          autocomplete="username"
+          :value="username"
+          @input="username = ($event.target as HTMLInputElement).value"
+        ></md-outlined-text-field>
+
         <md-outlined-text-field
           label="后台登录入口"
           supporting-text="12 至 64 位"

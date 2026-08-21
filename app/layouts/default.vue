@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
 
 const route = useRoute()
 
-const navItems = [
+const baseNavItems = [
   { label: '仪表盘', icon: 'dashboard', to: '/' },
   { label: '服务器动态', icon: 'monitoring', to: '/activity' },
   { label: '捐赠列表', icon: 'redeem', to: '/donors' },
@@ -11,6 +11,12 @@ const navItems = [
   { label: '更新服务', icon: 'system_update', to: '/updates' },
   { label: '游戏账户', icon: 'manage_accounts', to: '/game-accounts' }
 ]
+const currentUser = ref<{ username: string; isOwner: boolean } | null>(null)
+const navItems = computed(() => [
+  ...baseNavItems,
+  { label: '操作记录', icon: 'history', to: '/audit-logs' },
+  ...(currentUser.value?.isOwner ? [{ label: '后台用户', icon: 'manage_accounts', to: '/admin-users' }] : []),
+])
 
 const drawerOpen = ref(true)
 const isDesktop = ref(true)
@@ -57,7 +63,8 @@ onMounted(async () => {
   applyTheme(dark.value)
 
   try {
-    await $fetch('/api/auth/me')
+    const result = await $fetch<{ user: { username: string; isOwner: boolean } }>('/api/auth/me')
+    currentUser.value = result.user
   } catch {
     const entry = await loadEntry()
     await navigateTo('/' + entry)
@@ -76,6 +83,7 @@ onBeforeUnmount(() => {
         <md-icon>menu</md-icon>
       </md-icon-button>
       <div class="app-bar-actions">
+        <span v-if="currentUser" class="current-user">{{ currentUser.username }}</span>
         <md-icon-button :aria-label="dark ? '切换浅色' : '切换深色'" @click="toggleTheme">
           <Transition name="icon-swap" mode="out-in">
             <md-icon :key="dark ? 'light' : 'dark'">{{ dark ? 'light_mode' : 'dark_mode' }}</md-icon>
@@ -213,6 +221,18 @@ onBeforeUnmount(() => {
 
 .app-bar-actions {
   margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.current-user {
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 13px;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .icon-swap-enter-active,

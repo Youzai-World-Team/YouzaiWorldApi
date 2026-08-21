@@ -6,6 +6,7 @@ definePageMeta({ layout: false })
 useHead({ title: '登录' })
 
 const password = ref('')
+const username = ref('')
 const loading = ref(false)
 const dark = ref(false)
 const route = useRoute()
@@ -35,7 +36,7 @@ async function login() {
   try {
     await $fetch('/api/auth/login', {
       method: 'POST',
-      body: { password: password.value, entry: String(route.params.entry || '') }
+      body: { username: username.value, password: password.value, entry: String(route.params.entry || '') }
     })
     await navigateTo('/')
   } catch (e: any) {
@@ -56,8 +57,15 @@ async function login() {
 
     <div class="login-card">
       <md-outlined-text-field
+        label="用户名"
+        autocomplete="username"
+        :value="username"
+        @input="username = ($event.target as HTMLInputElement).value"
+      ></md-outlined-text-field>
+      <md-outlined-text-field
         type="password"
         label="密码"
+        autocomplete="current-password"
         :value="password"
         @input="password = ($event.target as HTMLInputElement).value"
         @keydown.enter="login"

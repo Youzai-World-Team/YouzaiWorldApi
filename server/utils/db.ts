@@ -18,12 +18,33 @@ db.exec(`
   );
   CREATE TABLE IF NOT EXISTS sessions (
     token TEXT PRIMARY KEY,
+    time INTEGER NOT NULL,
+    user_id INTEGER
+  );
+  CREATE TABLE IF NOT EXISTS admin_users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL COLLATE NOCASE UNIQUE,
+    password_hash TEXT NOT NULL,
+    is_owner INTEGER NOT NULL DEFAULT 0,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS audit_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    username TEXT NOT NULL,
+    action TEXT NOT NULL,
+    method TEXT NOT NULL,
+    path TEXT NOT NULL,
+    ip TEXT NOT NULL,
     time INTEGER NOT NULL
   );
   CREATE TABLE IF NOT EXISTS login_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ip TEXT,
     time INTEGER,
+    username TEXT NOT NULL DEFAULT '',
     browser TEXT NOT NULL DEFAULT '',
     os TEXT NOT NULL DEFAULT '',
     device TEXT NOT NULL DEFAULT ''
@@ -99,8 +120,18 @@ db.exec(`
   );
 `)
 
+const sessionColumns = db.prepare('PRAGMA table_info(sessions)').all() as { name?: string }[]
+if (!sessionColumns.some((column) => column.name === 'user_id')) {
+  try {
+    db.exec('ALTER TABLE sessions ADD COLUMN user_id INTEGER')
+  } catch (error) {
+    const migratedColumns = db.prepare('PRAGMA table_info(sessions)').all() as { name?: string }[]
+    if (!migratedColumns.some((column) => column.name === 'user_id')) throw error
+  }
+}
+
 const loginHistoryColumns = db.prepare('PRAGMA table_info(login_history)').all() as { name?: string }[]
-for (const column of ['browser', 'os', 'device']) {
+for (const column of ['username', 'browser', 'os', 'device']) {
   if (loginHistoryColumns.some((item) => item.name === column)) continue
   try {
     db.exec(`ALTER TABLE login_history ADD COLUMN ${column} TEXT NOT NULL DEFAULT ''`)
@@ -129,6 +160,7 @@ const GAME_REQUEST_MAX_SKEW_SECONDS = 300
 const GAME_REQUEST_NONCE_TTL_MS = 10 * 60 * 1000
 const GAME_API_KEY_ENV = 'YZWC_GAME_API_KEY'
 const ADMIN_PASSWORD_ENV = 'YZWC_ADMIN_PASSWORD'
+const ADMIN_USERNAME_ENV = 'YZWC_ADMIN_USERNAME'
 const ADMIN_ENTRY_ENV = 'YZWC_ADMIN_ENTRY'
 const ADMIN_PASSWORD_SETTING = 'admin.password_hash'
 const ADMIN_ENTRY_SETTING = 'entry'
@@ -137,10 +169,11 @@ const LOGIN_RATE_MAX_ATTEMPTS = 5
 const ADMIN_ENTRY_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{11,63}$/
 const RESERVED_ADMIN_ENTRIES = new Set([
   'login', 'account', 'activity', 'donors', 'bans', 'updates', 'game-accounts',
-  'api', '_nuxt', '_ipx', 'favicon', '__nuxt_error',
+  'admin-users', 'audit-logs', 'api', '_nuxt', '_ipx', 'favicon', '__nuxt_error',
 ])
 
 export const ADMIN_COOKIE_NAME = '__Host-yzwc_admin'
+const ADMIN_USER_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{2,31}$/
 
 function all(sql: string, ...params: any[]) {
   return db.prepare(sql).all(...params) as Record<string, unknown>[]
@@ -170,37 +203,176 @@ function tokenDigest(token: string): string {
   return createHash('sha256').update(token).digest('hex')
 }
 
+export interface AdminUser {
+  id: number
+  username: string
+  isOwner: boolean
+  isActive: boolean
+  createdAt: number
+}
+
+function mapAdminUser(row: Record<string, unknown>): AdminUser {
+  return {
+    id: Number(row.id),
+    username: String(row.username ?? ''),
+    isOwner: Number(row.is_owner ?? 0) === 1,
+    isActive: Number(row.is_active ?? 0) === 1,
+    createdAt: Number(row.created_at ?? 0),
+  }
+}
+
+function getAdminUserById(id: number): AdminUser | undefined {
+  const row = get('SELECT id, username, is_owner, is_active, created_at FROM admin_users WHERE id = ?', id)
+  return row ? mapAdminUser(row) : undefined
+}
+
+export function listAdminUsers(): AdminUser[] {
+  return all('SELECT id, username, is_owner, is_active, created_at FROM admin_users ORDER BY is_owner DESC, username COLLATE NOCASE')
+    .map(mapAdminUser)
+}
+
+function requireAdminUsername(value: unknown): string {
+  const username = String(value ?? '').trim()
+  if (!ADMIN_USER_RE.test(username)) {
+    throw createError({ statusCode: 400, statusMessage: '用户名需要为 3 至 32 位字母、数字、下划线或连字符' })
+  }
+  return username
+}
+
+function requireAdminPassword(value: unknown, label = '密码'): string {
+  const password = String(value ?? '')
+  if (password.length < 12 || password.length > 128) {
+    throw createError({ statusCode: 400, statusMessage: `${label}长度需要为 12 至 128 位` })
+  }
+  return password
+}
+
+export function createAdminUser(usernameValue: unknown, passwordValue: unknown, isOwner = false): AdminUser {
+  const username = requireAdminUsername(usernameValue)
+  const password = requireAdminPassword(passwordValue)
+  const now = Date.now()
+  try {
+    const result = run(
+      'INSERT INTO admin_users (username, password_hash, is_owner, is_active, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)',
+      username, hashAdminPassword(password), isOwner ? 1 : 0, now, now,
+    )
+    const user = getAdminUserById(Number(result.lastInsertRowid))
+    if (!user) throw createError({ statusCode: 500, statusMessage: '用户创建失败' })
+    return user
+  } catch (error: any) {
+    if (String(error?.message || '').includes('UNIQUE')) {
+      throw createError({ statusCode: 409, statusMessage: '用户名已存在' })
+    }
+    throw error
+  }
+}
+
+export function updateAdminUser(userId: number, changes: { password?: unknown; active?: unknown }): AdminUser {
+  const current = getAdminUserById(userId)
+  if (!current) throw createError({ statusCode: 404, statusMessage: '后台用户不存在' })
+  const password = changes.password === undefined ? undefined : requireAdminPassword(changes.password, '新密码')
+  let active: boolean | undefined
+  if (changes.active !== undefined) {
+    if (typeof changes.active !== 'boolean') throw createError({ statusCode: 400, statusMessage: '用户状态参数无效' })
+    active = changes.active
+    if (!active && current.isOwner) throw createError({ statusCode: 400, statusMessage: '不能停用所有者账户' })
+    if (!active && current.isActive && listAdminUsers().filter((user) => user.isActive).length <= 1) {
+      throw createError({ statusCode: 400, statusMessage: '至少需要保留一个启用的后台用户' })
+    }
+  }
+
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    if (password !== undefined) {
+      run('UPDATE admin_users SET password_hash = ?, updated_at = ? WHERE id = ?', hashAdminPassword(password), Date.now(), userId)
+      run('DELETE FROM sessions WHERE user_id = ?', userId)
+    }
+    if (active !== undefined) {
+      run('UPDATE admin_users SET is_active = ?, updated_at = ? WHERE id = ?', active ? 1 : 0, Date.now(), userId)
+      if (!active) run('DELETE FROM sessions WHERE user_id = ?', userId)
+    }
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+  return getAdminUserById(userId) as AdminUser
+}
+
+export function deleteAdminUser(userId: number): void {
+  const current = getAdminUserById(userId)
+  if (!current) throw createError({ statusCode: 404, statusMessage: '后台用户不存在' })
+  if (current.isOwner) throw createError({ statusCode: 400, statusMessage: '不能删除所有者账户' })
+  if (current.isActive && listAdminUsers().filter((user) => user.isActive).length <= 1) {
+    throw createError({ statusCode: 400, statusMessage: '至少需要保留一个启用的后台用户' })
+  }
+  run('DELETE FROM sessions WHERE user_id = ?', userId)
+  run('DELETE FROM admin_users WHERE id = ?', userId)
+}
+
+export function requireOwner(event: H3Event): AdminUser {
+  const user = requireAuth(event)
+  if (!user.isOwner) throw createError({ statusCode: 403, statusMessage: '只有所有者可以管理后台用户' })
+  return user
+}
+
+export function getAdminUserForLogin(usernameValue: unknown, password: string): AdminUser | undefined {
+  const username = String(usernameValue ?? '').trim()
+  const row = get('SELECT id, username, password_hash, is_owner, is_active, created_at FROM admin_users WHERE username = ?', username)
+  if (!row || Number(row.is_active) !== 1 || !verifyGamePassword(password, String(row.password_hash ?? ''))) return undefined
+  return mapAdminUser(row)
+}
+
 export function hasSession(token: string): boolean {
+  return Boolean(getSessionUser(token))
+}
+
+function getSessionUser(token: string): AdminUser | undefined {
   const digest = tokenDigest(token)
-  const row = get('SELECT time FROM sessions WHERE token = ?', digest)
-  if (!row) return false
+  const row = get('SELECT time, user_id FROM sessions WHERE token = ?', digest)
+  if (!row) return undefined
   const createdAt = Number(row.time)
   if (!Number.isFinite(createdAt) || createdAt + ADMIN_SESSION_TTL_MS <= Date.now()) {
     deleteSession(token)
-    return false
+    return undefined
   }
-  return true
+  const userId = Number(row.user_id)
+  const user = Number.isInteger(userId) ? getAdminUserById(userId) : undefined
+  if (!user || !user.isActive) {
+    deleteSession(token)
+    return undefined
+  }
+  return user
 }
 
-export function createSession(token: string) {
-  run('INSERT INTO sessions (token, time) VALUES (?, ?)', tokenDigest(token), Date.now())
+export function createSession(token: string, userId: number) {
+  run('INSERT INTO sessions (token, time, user_id) VALUES (?, ?, ?)', tokenDigest(token), Date.now(), userId)
 }
 
 export function deleteSession(token: string) {
   run('DELETE FROM sessions WHERE token = ?', tokenDigest(token))
 }
 
-export function requireAuth(event: H3Event): string {
+export function getAuthenticatedUser(event: H3Event): AdminUser | undefined {
+  const cookie = getCookie(event, ADMIN_COOKIE_NAME)
+  const header = getHeader(event, 'authorization')?.replace(/^Bearer\s+/i, '')
+  const token = cookie || header
+  return token ? getSessionUser(token) : undefined
+}
+
+export function requireAuth(event: H3Event): AdminUser {
   const cookie = getCookie(event, ADMIN_COOKIE_NAME)
   const header = getHeader(event, 'authorization')?.replace(/^Bearer\s+/i, '')
   const token = cookie || header
   if (!token) {
     throw createError({ statusCode: 401, statusMessage: '未登录' })
   }
-  if (!hasSession(token)) {
+  const user = getSessionUser(token)
+  if (!user) {
     throw createError({ statusCode: 401, statusMessage: '会话已失效' })
   }
-  return token
+  event.context.adminUser = user
+  return user
 }
 
 interface LoginClientInfo {
@@ -209,22 +381,39 @@ interface LoginClientInfo {
   device: string
 }
 
-export function pushLogin(ip: string, time: number, client: LoginClientInfo) {
+export function pushLogin(ip: string, time: number, client: LoginClientInfo, username = '') {
   run(
-    'INSERT INTO login_history (ip, time, browser, os, device) VALUES (?, ?, ?, ?, ?)',
-    ip, time, client.browser, client.os, client.device,
+    'INSERT INTO login_history (ip, time, username, browser, os, device) VALUES (?, ?, ?, ?, ?, ?)',
+    ip, time, username, client.browser, client.os, client.device,
   )
   run('DELETE FROM login_history WHERE id NOT IN (SELECT id FROM login_history ORDER BY id DESC LIMIT 10)')
 }
 
-export function listLogins(): Array<{ ip: string; time: number; browser: string; os: string; device: string }> {
-  return all('SELECT ip, time, browser, os, device FROM login_history ORDER BY id DESC') as Array<{
+export function listLogins(): Array<{ ip: string; time: number; username: string; browser: string; os: string; device: string }> {
+  return all('SELECT ip, time, username, browser, os, device FROM login_history ORDER BY id DESC') as Array<{
     ip: string
     time: number
+    username: string
     browser: string
     os: string
     device: string
   }>
+}
+
+export function recordAudit(event: H3Event, user: AdminUser, action = '') {
+  const ip = (getHeader(event, 'cf-connecting-ip') || getRequestIP(event) || 'unknown').slice(0, 64)
+  const url = getRequestURL(event)
+  run(
+    'INSERT INTO audit_logs (user_id, username, action, method, path, ip, time) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    user.id, user.username, action || `${event.method || 'UNKNOWN'} ${url.pathname}`, event.method || 'UNKNOWN', url.pathname, ip, Date.now(),
+  )
+  run('DELETE FROM audit_logs WHERE id NOT IN (SELECT id FROM audit_logs ORDER BY id DESC LIMIT 5000)')
+}
+
+export function listAuditLogs(limit = 300) {
+  const normalizedLimit = Number.isFinite(limit) ? Math.trunc(limit) : 300
+  const safeLimit = Math.min(1000, Math.max(1, normalizedLimit))
+  return all(`SELECT id, username, action, method, path, ip, time FROM audit_logs ORDER BY id DESC LIMIT ${safeLimit}`)
 }
 
 interface Activity {
@@ -608,10 +797,8 @@ function hashAdminPassword(password: string): string {
 }
 
 export function isAdminInitialized(): boolean {
-  const passwordHash = getSetting(ADMIN_PASSWORD_SETTING) || ''
-  const entry = getSetting(ADMIN_ENTRY_SETTING)?.trim() || ''
-  return passwordHash.startsWith('PBKDF2:') && ADMIN_ENTRY_RE.test(entry)
-    && !RESERVED_ADMIN_ENTRIES.has(entry.toLowerCase())
+  // 只要已经存在后台用户就禁止重新初始化；入口损坏时应失败关闭，而不是开放公共重置入口。
+  return Boolean(get('SELECT 1 FROM admin_users LIMIT 1'))
 }
 
 export function requireValidAdminEntry(value: unknown): string {
@@ -622,11 +809,9 @@ export function requireValidAdminEntry(value: unknown): string {
   return entry
 }
 
-export function initializeAdmin(password: unknown, entryValue: unknown): string {
-  const rawPassword = String(password ?? '')
-  if (rawPassword.length < 12 || rawPassword.length > 128) {
-    throw createError({ statusCode: 400, statusMessage: '后台密码长度需要为 12 至 128 位' })
-  }
+export function initializeAdmin(usernameValue: unknown, password: unknown, entryValue: unknown): string {
+  const username = requireAdminUsername(usernameValue)
+  const rawPassword = requireAdminPassword(password, '后台密码')
   const entry = requireValidAdminEntry(entryValue)
 
   // 已初始化后先走廉价检查，避免公开的初始化接口被用于反复触发高成本密码哈希。
@@ -639,10 +824,15 @@ export function initializeAdmin(password: unknown, entryValue: unknown): string 
     if (isAdminInitialized()) {
       throw createError({ statusCode: 409, statusMessage: '后台已经完成初始化' })
     }
-    const passwordHash = hashAdminPassword(rawPassword)
-    setSetting(ADMIN_PASSWORD_SETTING, passwordHash)
+    deleteSetting(ADMIN_PASSWORD_SETTING)
     setSetting(ADMIN_ENTRY_SETTING, entry)
     run('DELETE FROM sessions')
+    run('DELETE FROM admin_users')
+    const passwordHash = hashAdminPassword(rawPassword)
+    run(
+      'INSERT INTO admin_users (username, password_hash, is_owner, is_active, created_at, updated_at) VALUES (?, ?, 1, 1, ?, ?)',
+      username, passwordHash, Date.now(), Date.now(),
+    )
     db.exec('COMMIT')
     return entry
   } catch (error) {
@@ -651,20 +841,17 @@ export function initializeAdmin(password: unknown, entryValue: unknown): string 
   }
 }
 
-export function verifyAdminPassword(password: string): boolean {
-  const storedHash = getSetting(ADMIN_PASSWORD_SETTING)
-  return Boolean(storedHash && verifyGamePassword(password, storedHash))
+export function updateAdminPassword(user: AdminUser, oldPassword: string, newPassword: string): void {
+  if (!verifyUserPassword(user.username, oldPassword)) throw createError({ statusCode: 401, statusMessage: '当前密码错误' })
+  const password = requireAdminPassword(newPassword, '新密码')
+  run('UPDATE admin_users SET password_hash = ?, updated_at = ? WHERE id = ?', hashAdminPassword(password), Date.now(), user.id)
+  if (user.isOwner) deleteSetting(ADMIN_PASSWORD_SETTING)
+  run('DELETE FROM sessions WHERE user_id = ?', user.id)
 }
 
-export function updateAdminPassword(oldPassword: string, newPassword: string): void {
-  if (!verifyAdminPassword(oldPassword)) {
-    throw createError({ statusCode: 401, statusMessage: '当前密码错误' })
-  }
-  if (newPassword.length < 12 || newPassword.length > 128) {
-    throw createError({ statusCode: 400, statusMessage: '新密码长度需要为 12 至 128 位' })
-  }
-  setSetting(ADMIN_PASSWORD_SETTING, hashAdminPassword(newPassword))
-  run('DELETE FROM sessions')
+export function verifyUserPassword(username: string, password: string): boolean {
+  const row = get('SELECT password_hash FROM admin_users WHERE username = ? AND is_active = 1', username)
+  return Boolean(row && verifyGamePassword(password, String(row.password_hash ?? '')))
 }
 
 export function getAdminEntry(): string {
@@ -777,13 +964,27 @@ export async function migrateFromJson() {
     }
   }
 
-  if (count('sessions') === 0) {
-    const sessions = await readJsonFile<Record<string, number>>('sessions.json')
-    if (sessions) {
-      for (const [token, time] of Object.entries(sessions)) {
-        run('INSERT INTO sessions (token, time) VALUES (?, ?)', token, time)
-      }
+  if (count('admin_users') === 0) {
+    const passwordHash = getSetting(ADMIN_PASSWORD_SETTING) || ''
+    const configuredUsername = process.env[ADMIN_USERNAME_ENV]?.trim() || 'admin'
+    const configuredEntry = getSetting(ADMIN_ENTRY_SETTING)?.trim() || ''
+    if (passwordHash.startsWith('PBKDF2:') && ADMIN_USER_RE.test(configuredUsername)
+        && ADMIN_ENTRY_RE.test(configuredEntry) && !RESERVED_ADMIN_ENTRIES.has(configuredEntry.toLowerCase())) {
+      const now = Date.now()
+      run(
+        'INSERT INTO admin_users (username, password_hash, is_owner, is_active, created_at, updated_at) VALUES (?, ?, 1, 1, ?, ?)',
+        configuredUsername, passwordHash, now, now,
+      )
+      // 多用户认证已迁移到 admin_users，删除旧设置中的历史哈希，避免保留第二个认证源。
+      deleteSetting(ADMIN_PASSWORD_SETTING)
     }
+  }
+  // admin_users 是唯一认证源；完成迁移后清除可能残留的旧哈希键。
+  if (count('admin_users') > 0) deleteSetting(ADMIN_PASSWORD_SETTING)
+
+  if (getSetting('security.admin_multi_user') !== 'true') {
+    run('DELETE FROM sessions')
+    setSetting('security.admin_multi_user', 'true')
   }
 
   // 旧后台会话保存的是明文令牌；升级后统一失效并改为仅存 SHA-256 摘要。
