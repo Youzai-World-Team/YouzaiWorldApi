@@ -216,7 +216,8 @@ async function confirmDelete() {
         </tbody>
         </table>
       </div>
-      <p v-if="!loading && activities.length === 0" class="empty">暂无记录</p>
+      <p v-if="loading" class="empty">加载中…</p>
+      <p v-else-if="activities.length === 0" class="empty">暂无记录</p>
     </div>
 
     <md-dialog ref="formDialog" :open="formOpen" @closed="onFormClosed">
@@ -301,6 +302,7 @@ async function confirmDelete() {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 16px;
   margin-bottom: 16px;
 }
@@ -388,7 +390,7 @@ async function confirmDelete() {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  min-width: min(280px, 100%);
+  min-width: min(280px, calc(100vw - 72px));
 }
 
 .dialog-form md-outlined-select,
@@ -450,5 +452,31 @@ async function confirmDelete() {
   margin: 16px 0 0;
   font-size: 14px;
   color: var(--md-sys-color-on-surface-variant);
+}
+
+@media (max-width: 640px) {
+  .endpoint {
+    align-items: flex-start;
+    margin-bottom: 16px;
+  }
+
+  .endpoint-url {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .card-head {
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .card-head md-filled-button {
+    width: 100%;
+  }
+
+  .activity-table th,
+  .activity-table td {
+    padding: 10px;
+  }
 }
 </style>

@@ -1,0 +1,196 @@
+<script setup lang="ts">
+import { onMounted, ref } from 'vue'
+
+const entry = ref('')
+const password = ref('')
+const confirmPassword = ref('')
+const showPassword = ref(false)
+const loading = ref(false)
+const dark = ref(false)
+const { showToast } = useToast()
+const reservedEntries = new Set([
+  'login', 'account', 'activity', 'donors', 'bans', 'updates', 'game-accounts',
+  'api', '_nuxt', '_ipx', 'favicon', '__nuxt_error',
+])
+
+function applyTheme(isDark: boolean) {
+  document.documentElement.dataset.theme = isDark ? 'dark' : 'light'
+  localStorage.setItem('theme', isDark ? 'dark' : 'light')
+}
+
+function toggleTheme() {
+  dark.value = !dark.value
+  applyTheme(dark.value)
+}
+
+onMounted(() => {
+  dark.value = localStorage.getItem('theme') === 'dark'
+  applyTheme(dark.value)
+})
+
+async function submit() {
+  if (loading.value) return
+  const normalizedEntry = entry.value.trim().replace(/^\/+|\/+$/g, '')
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{11,63}$/.test(normalizedEntry)
+      || reservedEntries.has(normalizedEntry.toLowerCase())) {
+    showToast('登录入口格式不正确或与现有页面冲突', 'error')
+    return
+  }
+  if (password.value.length < 12 || password.value.length > 128) {
+    showToast('后台密码需要为 12 至 128 位', 'error')
+    return
+  }
+  if (password.value !== confirmPassword.value) {
+    showToast('两次输入的密码不一致', 'error')
+    return
+  }
+
+  loading.value = true
+  try {
+    const result = await $fetch<{ entry: string }>('/api/auth/setup', {
+      method: 'POST',
+      body: { entry: normalizedEntry, password: password.value, confirmPassword: confirmPassword.value },
+    })
+    useEntry().remember(result.entry)
+    await navigateTo('/' + result.entry)
+  } catch (error: any) {
+    showToast(error?.data?.statusMessage || '初始化失败', 'error')
+  } finally {
+    loading.value = false
+  }
+}
+</script>
+
+<template>
+  <main class="setup-page">
+    <md-icon-button class="theme-toggle" :aria-label="dark ? '切换浅色' : '切换深色'" @click="toggleTheme">
+      <md-icon>{{ dark ? 'light_mode' : 'dark_mode' }}</md-icon>
+    </md-icon-button>
+
+    <section class="setup-panel">
+      <div class="setup-heading">
+        <md-icon>admin_panel_settings</md-icon>
+        <h1>初始化后台</h1>
+      </div>
+
+      <div class="setup-form">
+        <md-outlined-text-field
+          label="后台登录入口"
+          supporting-text="12 至 64 位"
+          autocomplete="off"
+          spellcheck="false"
+          :value="entry"
+          @input="entry = ($event.target as HTMLInputElement).value"
+        ></md-outlined-text-field>
+
+        <div class="password-field">
+          <md-outlined-text-field
+            :type="showPassword ? 'text' : 'password'"
+            label="后台密码"
+            supporting-text="12 至 128 位"
+            autocomplete="new-password"
+            :value="password"
+            @input="password = ($event.target as HTMLInputElement).value"
+          ></md-outlined-text-field>
+          <md-icon-button :aria-label="showPassword ? '隐藏密码' : '显示密码'" @click="showPassword = !showPassword">
+            <md-icon>{{ showPassword ? 'visibility_off' : 'visibility' }}</md-icon>
+          </md-icon-button>
+        </div>
+
+        <md-outlined-text-field
+          :type="showPassword ? 'text' : 'password'"
+          label="确认后台密码"
+          autocomplete="new-password"
+          :value="confirmPassword"
+          @input="confirmPassword = ($event.target as HTMLInputElement).value"
+          @keydown.enter="submit"
+        ></md-outlined-text-field>
+
+        <md-filled-button :disabled="loading" @click="submit">
+          {{ loading ? '正在初始化…' : '完成初始化' }}
+        </md-filled-button>
+      </div>
+    </section>
+  </main>
+</template>
+
+<style scoped>
+.setup-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--md-sys-color-surface);
+}
+
+.theme-toggle {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+}
+
+.setup-panel {
+  width: min(420px, 100%);
+  padding: 28px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: 8px;
+  background: var(--md-sys-color-surface-container);
+}
+
+.setup-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.setup-heading md-icon {
+  color: var(--md-sys-color-primary);
+  font-size: 28px;
+}
+
+.setup-heading h1 {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.setup-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.password-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 48px;
+  align-items: center;
+  gap: 4px;
+}
+
+md-outlined-text-field,
+md-filled-button {
+  width: 100%;
+}
+
+@media (max-width: 480px) {
+  .setup-page {
+    place-items: start center;
+    padding: 72px 16px 24px;
+  }
+
+  .theme-toggle {
+    top: 8px;
+    right: 8px;
+  }
+
+  .setup-panel {
+    padding: 20px;
+  }
+
+  .setup-heading h1 {
+    font-size: 22px;
+  }
+}
+</style>

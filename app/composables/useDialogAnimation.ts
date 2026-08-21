@@ -1,4 +1,10 @@
 export function useDialogAnimation() {
+  function duration(value: number) {
+    return typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      ? 1
+      : value
+  }
+
   function openAnimation() {
     return {
       dialog: [
@@ -7,13 +13,13 @@ export function useDialogAnimation() {
             { transform: 'scale(0.9)', opacity: '0' },
             { transform: 'scale(1)', opacity: '1' },
           ],
-          { duration: 200, easing: 'cubic-bezier(0.2, 0, 0, 1)' },
+          { duration: duration(200), easing: 'cubic-bezier(0.2, 0, 0, 1)' },
         ],
       ],
       scrim: [
         [
           [{ opacity: 0 }, { opacity: 0.32 }],
-          { duration: 200, easing: 'linear' },
+          { duration: duration(200), easing: 'linear' },
         ],
       ],
     }
@@ -27,13 +33,13 @@ export function useDialogAnimation() {
             { transform: 'scale(1)', opacity: '1' },
             { transform: 'scale(0.9)', opacity: '0' },
           ],
-          { duration: 150, easing: 'cubic-bezier(0.4, 0, 1, 1)' },
+          { duration: duration(150), easing: 'cubic-bezier(0.4, 0, 1, 1)' },
         ],
       ],
       scrim: [
         [
           [{ opacity: 0.32 }, { opacity: 0 }],
-          { duration: 150, easing: 'linear' },
+          { duration: duration(150), easing: 'linear' },
         ],
       ],
     }

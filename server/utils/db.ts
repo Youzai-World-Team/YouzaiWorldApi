@@ -3,6 +3,7 @@ import { createHash, createHmac, pbkdf2Sync, randomBytes, timingSafeEqual } from
 import { mkdirSync, promises as fs } from 'node:fs'
 import path from 'node:path'
 import { getCookie, getHeader, createError, type H3Event } from 'h3'
+import { offlinePlayerUuid } from './game-input'
 
 const dataDir = path.resolve(process.cwd(), 'server/data')
 mkdirSync(dataDir, { recursive: true })
@@ -22,7 +23,10 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS login_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ip TEXT,
-    time INTEGER
+    time INTEGER,
+    browser TEXT NOT NULL DEFAULT '',
+    os TEXT NOT NULL DEFAULT '',
+    device TEXT NOT NULL DEFAULT ''
   );
   CREATE TABLE IF NOT EXISTS activities (
     id TEXT PRIMARY KEY,
@@ -61,6 +65,7 @@ db.exec(`
     uuid TEXT,
     password TEXT NOT NULL DEFAULT '',
     last_ip TEXT NOT NULL DEFAULT '',
+    last_login_ip TEXT NOT NULL DEFAULT '',
     last_authenticated_date TEXT,
     registration_date TEXT,
     login_tries INTEGER NOT NULL DEFAULT 0,
@@ -94,6 +99,31 @@ db.exec(`
   );
 `)
 
+const loginHistoryColumns = db.prepare('PRAGMA table_info(login_history)').all() as { name?: string }[]
+for (const column of ['browser', 'os', 'device']) {
+  if (loginHistoryColumns.some((item) => item.name === column)) continue
+  try {
+    db.exec(`ALTER TABLE login_history ADD COLUMN ${column} TEXT NOT NULL DEFAULT ''`)
+  } catch (error) {
+    // 多进程同时启动时，允许另一进程已经先完成同一迁移。
+    const migratedColumns = db.prepare('PRAGMA table_info(login_history)').all() as { name?: string }[]
+    if (!migratedColumns.some((item) => item.name === column)) throw error
+  }
+}
+
+// 为现有数据库补充历史登录 IP 字段，并用尚未清除的旧 last_ip 数据做一次回填。
+const gameAccountColumns = db.prepare('PRAGMA table_info(game_accounts)').all() as { name?: string }[]
+if (!gameAccountColumns.some((column) => column.name === 'last_login_ip')) {
+  try {
+    db.exec("ALTER TABLE game_accounts ADD COLUMN last_login_ip TEXT NOT NULL DEFAULT ''")
+  } catch (error) {
+    // 多进程同时启动时，允许另一进程已经先完成同一迁移。
+    const migratedColumns = db.prepare('PRAGMA table_info(game_accounts)').all() as { name?: string }[]
+    if (!migratedColumns.some((column) => column.name === 'last_login_ip')) throw error
+  }
+  db.exec("UPDATE game_accounts SET last_login_ip = last_ip WHERE last_ip <> ''")
+}
+
 const ADMIN_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000
 const GAME_REQUEST_MAX_SKEW_SECONDS = 300
 const GAME_REQUEST_NONCE_TTL_MS = 10 * 60 * 1000
@@ -104,6 +134,11 @@ const ADMIN_PASSWORD_SETTING = 'admin.password_hash'
 const ADMIN_ENTRY_SETTING = 'entry'
 const LOGIN_RATE_WINDOW_MS = 15 * 60 * 1000
 const LOGIN_RATE_MAX_ATTEMPTS = 5
+const ADMIN_ENTRY_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{11,63}$/
+const RESERVED_ADMIN_ENTRIES = new Set([
+  'login', 'account', 'activity', 'donors', 'bans', 'updates', 'game-accounts',
+  'api', '_nuxt', '_ipx', 'favicon', '__nuxt_error',
+])
 
 export const ADMIN_COOKIE_NAME = '__Host-yzwc_admin'
 
@@ -168,13 +203,28 @@ export function requireAuth(event: H3Event): string {
   return token
 }
 
-export function pushLogin(ip: string, time: number) {
-  run('INSERT INTO login_history (ip, time) VALUES (?, ?)', ip, time)
+interface LoginClientInfo {
+  browser: string
+  os: string
+  device: string
+}
+
+export function pushLogin(ip: string, time: number, client: LoginClientInfo) {
+  run(
+    'INSERT INTO login_history (ip, time, browser, os, device) VALUES (?, ?, ?, ?, ?)',
+    ip, time, client.browser, client.os, client.device,
+  )
   run('DELETE FROM login_history WHERE id NOT IN (SELECT id FROM login_history ORDER BY id DESC LIMIT 10)')
 }
 
-export function listLogins(): { ip: string; time: number }[] {
-  return all('SELECT ip, time FROM login_history ORDER BY id DESC') as { ip: string; time: number }[]
+export function listLogins(): Array<{ ip: string; time: number; browser: string; os: string; device: string }> {
+  return all('SELECT ip, time, browser, os, device FROM login_history ORDER BY id DESC') as Array<{
+    ip: string
+    time: number
+    browser: string
+    os: string
+    device: string
+  }>
 }
 
 interface Activity {
@@ -398,10 +448,7 @@ function requireSecret(name: string, minLength: number): string {
 
 export function validateRuntimeSecurityConfig(): void {
   requireSecret(GAME_API_KEY_ENV, 32)
-  getAdminEntry()
-  if (!getSetting(ADMIN_PASSWORD_SETTING)) {
-    throw new Error(`${ADMIN_PASSWORD_ENV} 未完成初始化`)
-  }
+  if (isAdminInitialized()) getAdminEntry()
 }
 
 export interface GameAccount {
@@ -410,6 +457,7 @@ export interface GameAccount {
   uuid: string | null
   password: string
   lastIp: string
+  lastLoginIp: string
   lastAuthenticatedDate: string
   registrationDate: string
   loginTries: number
@@ -431,6 +479,7 @@ export function gameAccountWire(account: GameAccount) {
     last_position: account.lastPosition,
     in_place_respawn_count: account.inPlaceRespawnCount,
     registered: Boolean(account.password),
+    last_login_ip: account.lastLoginIp,
   }
   return result
 }
@@ -439,9 +488,12 @@ function mapGameAccount(row: Record<string, unknown>): GameAccount {
   return {
     username: String(row.username ?? ''),
     usernameLower: String(row.username_lower ?? ''),
-    uuid: row.uuid == null ? null : String(row.uuid),
+    uuid: row.uuid == null || String(row.uuid).trim() === ''
+      ? offlinePlayerUuid(String(row.username ?? ''))
+      : String(row.uuid),
     password: String(row.password ?? ''),
     lastIp: String(row.last_ip ?? ''),
+    lastLoginIp: String(row.last_login_ip ?? row.last_ip ?? ''),
     lastAuthenticatedDate: String(row.last_authenticated_date ?? '1970-01-01T00:00:00Z'),
     registrationDate: String(row.registration_date ?? '1970-01-01T00:00:00Z'),
     loginTries: Number(row.login_tries ?? 0),
@@ -463,19 +515,20 @@ export function getGameAccount(username: string): GameAccount | undefined {
 
 export function upsertGameAccount(account: GameAccount) {
   run(`INSERT INTO game_accounts
-    (username_lower, username, uuid, password, last_ip, last_authenticated_date, registration_date,
+    (username_lower, username, uuid, password, last_ip, last_login_ip, last_authenticated_date, registration_date,
      login_tries, last_kicked_date, last_position, in_place_respawn_count, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(username_lower) DO UPDATE SET
       username = excluded.username, uuid = COALESCE(excluded.uuid, game_accounts.uuid),
       password = CASE WHEN excluded.password = '' THEN game_accounts.password ELSE excluded.password END,
       last_ip = excluded.last_ip,
+      last_login_ip = excluded.last_login_ip,
       last_authenticated_date = excluded.last_authenticated_date,
       registration_date = excluded.registration_date, login_tries = excluded.login_tries,
       last_kicked_date = excluded.last_kicked_date, last_position = excluded.last_position,
       in_place_respawn_count = excluded.in_place_respawn_count, updated_at = excluded.updated_at`,
     account.usernameLower, account.username, account.uuid, account.password, account.lastIp,
-    account.lastAuthenticatedDate, account.registrationDate, account.loginTries, account.lastKickedDate,
+    account.lastLoginIp, account.lastAuthenticatedDate, account.registrationDate, account.loginTries, account.lastKickedDate,
     account.lastPosition, account.inPlaceRespawnCount, Date.now())
 }
 
@@ -554,6 +607,50 @@ function hashAdminPassword(password: string): string {
   return `PBKDF2:${iterations}:${salt.toString('base64')}:${digest.toString('base64')}`
 }
 
+export function isAdminInitialized(): boolean {
+  const passwordHash = getSetting(ADMIN_PASSWORD_SETTING) || ''
+  const entry = getSetting(ADMIN_ENTRY_SETTING)?.trim() || ''
+  return passwordHash.startsWith('PBKDF2:') && ADMIN_ENTRY_RE.test(entry)
+    && !RESERVED_ADMIN_ENTRIES.has(entry.toLowerCase())
+}
+
+export function requireValidAdminEntry(value: unknown): string {
+  const entry = String(value ?? '').trim().replace(/^\/+|\/+$/g, '')
+  if (!ADMIN_ENTRY_RE.test(entry) || RESERVED_ADMIN_ENTRIES.has(entry.toLowerCase())) {
+    throw createError({ statusCode: 400, statusMessage: '入口需要为 12 至 64 位字母、数字、下划线或连字符，且不能与现有页面冲突' })
+  }
+  return entry
+}
+
+export function initializeAdmin(password: unknown, entryValue: unknown): string {
+  const rawPassword = String(password ?? '')
+  if (rawPassword.length < 12 || rawPassword.length > 128) {
+    throw createError({ statusCode: 400, statusMessage: '后台密码长度需要为 12 至 128 位' })
+  }
+  const entry = requireValidAdminEntry(entryValue)
+
+  // 已初始化后先走廉价检查，避免公开的初始化接口被用于反复触发高成本密码哈希。
+  if (isAdminInitialized()) {
+    throw createError({ statusCode: 409, statusMessage: '后台已经完成初始化' })
+  }
+
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    if (isAdminInitialized()) {
+      throw createError({ statusCode: 409, statusMessage: '后台已经完成初始化' })
+    }
+    const passwordHash = hashAdminPassword(rawPassword)
+    setSetting(ADMIN_PASSWORD_SETTING, passwordHash)
+    setSetting(ADMIN_ENTRY_SETTING, entry)
+    run('DELETE FROM sessions')
+    db.exec('COMMIT')
+    return entry
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+}
+
 export function verifyAdminPassword(password: string): boolean {
   const storedHash = getSetting(ADMIN_PASSWORD_SETTING)
   return Boolean(storedHash && verifyGamePassword(password, storedHash))
@@ -572,14 +669,14 @@ export function updateAdminPassword(oldPassword: string, newPassword: string): v
 
 export function getAdminEntry(): string {
   const entry = getSetting(ADMIN_ENTRY_SETTING)?.trim() || ''
-  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{11,63}$/.test(entry)) {
+  if (!ADMIN_ENTRY_RE.test(entry) || RESERVED_ADMIN_ENTRIES.has(entry.toLowerCase())) {
     throw createError({ statusCode: 503, statusMessage: '后台安全入口未正确配置' })
   }
   return entry
 }
 
 export function setAdminEntry(entry: string): void {
-  setSetting(ADMIN_ENTRY_SETTING, entry)
+  setSetting(ADMIN_ENTRY_SETTING, requireValidAdminEntry(entry))
 }
 
 export function hashGamePassword(password: string): string {
@@ -663,23 +760,21 @@ export async function migrateFromJson() {
   const configuredPassword = process.env[ADMIN_PASSWORD_ENV]?.trim() || ''
   if (getSetting(ADMIN_PASSWORD_SETTING) === undefined) {
     const initialPassword = configuredPassword || legacyPassword
-    if (initialPassword.length < 12) {
-      throw new Error(`${ADMIN_PASSWORD_ENV} 必须配置为至少 12 位的后台密码`)
+    if (initialPassword.length >= 12 && initialPassword.length <= 128) {
+      setSetting(ADMIN_PASSWORD_SETTING, hashAdminPassword(initialPassword))
     }
-    setSetting(ADMIN_PASSWORD_SETTING, hashAdminPassword(initialPassword))
   }
   deleteSetting('password')
   // 升级时删除旧版本遗留的无效账户设置键。
   deleteSetting('game_account.' + 'session_' + 'timeout')
 
   const storedEntry = getSetting(ADMIN_ENTRY_SETTING)?.trim() || ''
-  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{11,63}$/.test(storedEntry)) {
+  if (!ADMIN_ENTRY_RE.test(storedEntry) || RESERVED_ADMIN_ENTRIES.has(storedEntry.toLowerCase())) {
     const entry = (process.env[ADMIN_ENTRY_ENV]?.trim() || config?.entry || '')
       .replace(/^\/+|\/+$/g, '')
-    if (!/^[A-Za-z0-9][A-Za-z0-9_-]{11,63}$/.test(entry)) {
-      throw new Error(`${ADMIN_ENTRY_ENV} 必须配置为 12 至 64 位的安全入口`)
+    if (ADMIN_ENTRY_RE.test(entry) && !RESERVED_ADMIN_ENTRIES.has(entry.toLowerCase())) {
+      setAdminEntry(entry)
     }
-    setAdminEntry(entry)
   }
 
   if (count('sessions') === 0) {

@@ -86,7 +86,8 @@ async function logout() {
   <div class="page">
     <h1 class="page-title">账户</h1>
 
-    <div class="card" style="max-width: 480px">
+    <div class="account-stack">
+    <section class="card account-card">
       <h2 class="card-title">更新密码</h2>
       <div class="form">
         <md-outlined-text-field
@@ -111,9 +112,9 @@ async function logout() {
           {{ updating ? '更新中…' : '更新密码' }}
         </md-filled-button>
       </div>
-    </div>
+    </section>
 
-    <div class="card" style="max-width: 480px; margin-top: 20px">
+    <section class="card account-card">
       <h2 class="card-title">安全入口</h2>
       <p class="entry-hint">登录页只能通过该入口访问。当前入口：<code class="entry-code">/{{ currentEntry || '…' }}</code></p>
       <div class="form">
@@ -126,19 +127,30 @@ async function logout() {
           {{ savingEntry ? '保存中…' : '保存入口' }}
         </md-filled-button>
       </div>
-    </div>
+    </section>
 
-    <div class="card" style="max-width: 480px; margin-top: 20px">
+    <section class="card account-card">
       <h2 class="card-title">账户操作</h2>
       <md-text-button class="logout-btn" @click="logout">
         <md-icon slot="icon">logout</md-icon>
         登出账户
       </md-text-button>
+    </section>
     </div>
   </div>
 </template>
 
 <style scoped>
+.account-stack {
+  width: min(100%, 520px);
+  display: grid;
+  gap: 20px;
+}
+
+.account-card {
+  min-width: 0;
+}
+
 .form {
   display: flex;
   flex-direction: column;
@@ -159,5 +171,16 @@ async function logout() {
   font-family: 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 13px;
   color: var(--md-sys-color-primary);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 480px) {
+  .account-stack {
+    gap: 12px;
+  }
+
+  .form md-filled-button {
+    width: 100%;
+  }
 }
 </style>

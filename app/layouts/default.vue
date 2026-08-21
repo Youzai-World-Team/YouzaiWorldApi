@@ -72,52 +72,86 @@ onBeforeUnmount(() => {
 <template>
   <div class="shell">
     <header class="app-bar">
-      <md-icon-button aria-label="菜单" @click="drawerOpen = !drawerOpen">
+      <md-icon-button class="menu-button" aria-label="菜单" @click="drawerOpen = !drawerOpen">
         <md-icon>menu</md-icon>
       </md-icon-button>
       <div class="app-bar-actions">
         <md-icon-button :aria-label="dark ? '切换浅色' : '切换深色'" @click="toggleTheme">
-          <md-icon>{{ dark ? 'light_mode' : 'dark_mode' }}</md-icon>
+          <Transition name="icon-swap" mode="out-in">
+            <md-icon :key="dark ? 'light' : 'dark'">{{ dark ? 'light_mode' : 'dark_mode' }}</md-icon>
+          </Transition>
         </md-icon-button>
       </div>
     </header>
 
     <div class="body">
-      <md-navigation-drawer
+      <div
         v-if="isDesktop"
-        :opened="drawerOpen"
-        pivot="start"
-        @navigation-drawer-changed="onDrawerChanged"
+        class="desktop-nav-shell"
+        :class="{ 'desktop-nav-shell--collapsed': !drawerOpen }"
       >
-        <div class="drawer-content">
-          <md-list class="nav-list">
-            <md-list-item
-              v-for="item in navItems"
-              :key="item.to"
-              type="link"
-              :href="item.to"
-              :class="{ 'nav-item--active': isActive(item.to) }"
-              @click="onNav($event, item.to)"
-            >
-              <md-icon slot="start" :class="{ 'icon--active': isActive(item.to) }">{{ item.icon }}</md-icon>
-              <span slot="headline" :class="{ 'label--active': isActive(item.to) }">{{ item.label }}</span>
-            </md-list-item>
-          </md-list>
-          <md-list-item
-            type="link"
-            href="/account"
-            :class="{ 'nav-item--active': isActive('/account') }"
-            @click="onNav($event, '/account')"
-            class="logout-item"
+        <Transition name="desktop-nav-content" mode="out-in">
+          <md-navigation-drawer
+            v-if="drawerOpen"
+            key="expanded"
+            :opened="drawerOpen"
+            pivot="start"
+            @navigation-drawer-changed="onDrawerChanged"
           >
-            <md-icon slot="start" :class="{ 'icon--active': isActive('/account') }">account_circle</md-icon>
-            <span slot="headline" :class="{ 'label--active': isActive('/account') }">账户</span>
-          </md-list-item>
-        </div>
-      </md-navigation-drawer>
+            <div class="drawer-content">
+              <md-list class="nav-list">
+                <md-list-item
+                  v-for="item in navItems"
+                  :key="item.to"
+                  type="link"
+                  :href="item.to"
+                  :class="{ 'nav-item--active': isActive(item.to) }"
+                  @click="onNav($event, item.to)"
+                >
+                  <md-icon slot="start" :class="{ 'icon--active': isActive(item.to) }">{{ item.icon }}</md-icon>
+                  <span slot="headline" :class="{ 'label--active': isActive(item.to) }">{{ item.label }}</span>
+                </md-list-item>
+              </md-list>
+              <md-list-item
+                type="link"
+                href="/account"
+                :class="{ 'nav-item--active': isActive('/account') }"
+                @click="onNav($event, '/account')"
+                class="logout-item"
+              >
+                <md-icon slot="start" :class="{ 'icon--active': isActive('/account') }">account_circle</md-icon>
+                <span slot="headline" :class="{ 'label--active': isActive('/account') }">账户</span>
+              </md-list-item>
+            </div>
+          </md-navigation-drawer>
+
+          <aside v-else key="collapsed" class="desktop-collapsed-nav">
+            <nav class="collapsed-nav-list" aria-label="主导航">
+              <md-icon-button
+                v-for="item in navItems"
+                :key="item.to"
+                :aria-label="item.label"
+                :title="item.label"
+                :class="{ 'collapsed-nav-item--active': isActive(item.to) }"
+                @click="onNav($event, item.to)"
+              >
+                <md-icon>{{ item.icon }}</md-icon>
+              </md-icon-button>
+            </nav>
+            <md-icon-button
+              aria-label="账户"
+              title="账户"
+              :class="{ 'collapsed-nav-item--active': isActive('/account') }"
+              @click="onNav($event, '/account')"
+            >
+              <md-icon>account_circle</md-icon>
+            </md-icon-button>
+          </aside>
+        </Transition>
+      </div>
 
       <md-navigation-drawer-modal
-        v-else
+        v-if="!isDesktop"
         :opened="drawerOpen"
         pivot="start"
         :class="{ 'drawer-modal--open': drawerOpen }"
@@ -151,7 +185,7 @@ onBeforeUnmount(() => {
       </md-navigation-drawer-modal>
 
       <main class="content">
-        <NuxtPage />
+        <slot />
       </main>
     </div>
   </div>
@@ -174,10 +208,22 @@ onBeforeUnmount(() => {
   gap: 8px;
   padding: 0 16px;
   background: var(--md-sys-color-surface-container);
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
 }
 
 .app-bar-actions {
   margin-left: auto;
+}
+
+.icon-swap-enter-active,
+.icon-swap-leave-active {
+  transition: opacity 140ms ease, transform 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.icon-swap-enter-from,
+.icon-swap-leave-to {
+  opacity: 0;
+  transform: rotate(-35deg) scale(0.75);
 }
 
 .body {
@@ -186,15 +232,90 @@ onBeforeUnmount(() => {
   padding-top: 64px;
 }
 
-md-navigation-drawer {
-  --md-navigation-drawer-container-width: 256px;
-  --md-navigation-drawer-container-color: var(--md-sys-color-surface-container);
-  --md-navigation-drawer-divider-color: transparent;
-  flex-shrink: 0;
+.desktop-nav-shell {
+  width: 256px;
+  flex: 0 0 auto;
   position: sticky;
   top: 64px;
   align-self: flex-start;
   height: calc(100vh - 64px);
+  overflow: hidden;
+  background: var(--md-sys-color-surface-container);
+  border-right: 1px solid var(--md-sys-color-outline-variant);
+  transition: width 240ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.desktop-nav-shell--collapsed {
+  width: 72px;
+}
+
+.desktop-nav-shell md-navigation-drawer {
+  width: 100%;
+  height: 100%;
+  --md-navigation-drawer-container-width: 100%;
+  --md-navigation-drawer-container-color: var(--md-sys-color-surface-container);
+  --md-navigation-drawer-divider-color: transparent;
+}
+
+.desktop-nav-content-enter-active,
+.desktop-nav-content-leave-active {
+  transition: opacity 140ms ease, transform 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.desktop-nav-content-enter-from {
+  opacity: 0;
+  transform: translateX(-8px);
+}
+
+.desktop-nav-content-leave-to {
+  opacity: 0;
+  transform: translateX(-8px);
+}
+
+.desktop-collapsed-nav {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 0;
+  background: var(--md-sys-color-surface-container);
+}
+
+.desktop-collapsed-nav md-icon-button {
+  flex: 0 0 auto;
+  transition: color 160ms ease, transform 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.desktop-collapsed-nav md-icon-button:hover {
+  transform: scale(1.08);
+}
+
+.collapsed-nav-list {
+  width: 100%;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.collapsed-nav-item--active {
+  color: var(--md-sys-color-primary);
+  --md-icon-button-state-layer-color: var(--md-sys-color-primary);
+}
+
+.collapsed-nav-item--active md-icon {
+  font-variation-settings: 'FILL' 1;
+}
+
+.drawer-content md-list-item {
+  transition: transform 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.drawer-content md-list-item:hover {
+  transform: translateX(3px);
 }
 
 md-navigation-drawer-modal {
@@ -244,6 +365,22 @@ md-list {
 .content {
   flex: 1;
   min-width: 0;
+  overflow-x: hidden;
   background: var(--md-sys-color-surface);
+}
+
+@media (max-width: 899px) {
+  .app-bar {
+    height: 56px;
+    padding: 0 8px;
+  }
+
+  .body {
+    padding-top: 56px;
+  }
+
+  md-navigation-drawer-modal {
+    --md-navigation-drawer-modal-container-width: min(320px, calc(100vw - 40px));
+  }
 }
 </style>

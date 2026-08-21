@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto'
 import { deleteCookie, setCookie } from 'h3'
 import { assertAdminLoginAllowed, clearAdminLoginFailures, createSession, getAdminEntry,
   pushLogin, recordAdminLoginFailure, verifyAdminPassword, ADMIN_COOKIE_NAME } from '../../utils/db'
+import { describeClient } from '../../utils/client-device'
 
 export default defineEventHandler(async (event) => {
   const body = await readBody<{ password?: string; entry?: string }>(event)
@@ -21,7 +22,12 @@ export default defineEventHandler(async (event) => {
   const token = randomBytes(24).toString('hex')
   createSession(token)
   clearAdminLoginFailures(ip)
-  pushLogin(ip, Date.now())
+  const client = describeClient(
+    getHeader(event, 'user-agent'),
+    getHeader(event, 'sec-ch-ua-platform'),
+    getHeader(event, 'sec-ch-ua-mobile'),
+  )
+  pushLogin(ip, Date.now(), client)
   deleteCookie(event, 'youzai_token', { path: '/', secure: true, sameSite: 'strict' })
   setCookie(event, ADMIN_COOKIE_NAME, token, {
     httpOnly: true,

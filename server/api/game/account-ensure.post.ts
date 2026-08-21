@@ -1,11 +1,11 @@
 import { gameAccountWire, getGameAccount, requireGameApiKey, upsertGameAccount } from '../../utils/db'
-import { optionalUuid, requireGameUsername } from '../../utils/game-input'
+import { offlinePlayerUuid, optionalUuid, requireGameUsername } from '../../utils/game-input'
 
 export default defineEventHandler(async (event) => {
   requireGameApiKey(event)
   const body = await readBody<any>(event)
   const username = requireGameUsername(body?.username)
-  const uuid = optionalUuid(body?.uuid)
+  const uuid = optionalUuid(body?.uuid) ?? offlinePlayerUuid(username)
   const usernameLower = username.toLocaleLowerCase('en-US')
   const current = getGameAccount(username)
   if (current) {
@@ -22,6 +22,7 @@ export default defineEventHandler(async (event) => {
     uuid,
     password: '',
     lastIp: '',
+    lastLoginIp: '',
     lastAuthenticatedDate: epoch,
     registrationDate: epoch,
     loginTries: 0,

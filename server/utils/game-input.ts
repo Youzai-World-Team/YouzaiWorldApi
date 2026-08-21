@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { createError } from 'h3'
 
 export const GAME_USERNAME_RE = /^[A-Za-z0-9_]{1,16}$/
@@ -17,6 +18,15 @@ export function optionalUuid(value: unknown): string | null {
   const uuid = String(value).trim()
   if (!UUID_RE.test(uuid)) throw createError({ statusCode: 400, statusMessage: 'UUID 格式不正确' })
   return uuid
+}
+
+/** Minecraft 原版离线服务器使用的 UUID.nameUUIDFromBytes("OfflinePlayer:" + name) 算法。 */
+export function offlinePlayerUuid(username: string): string {
+  const bytes = createHash('md5').update(`OfflinePlayer:${username}`, 'utf8').digest()
+  bytes[6] = (bytes[6] & 0x0f) | 0x30
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const hex = bytes.toString('hex')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`
 }
 
 export function optionalPosition(value: unknown): string | null {

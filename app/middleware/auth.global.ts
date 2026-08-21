@@ -1,6 +1,12 @@
 export default defineNuxtRouteMiddleware(async (to) => {
   if (import.meta.server) return
 
+  const setup = await $fetch<{ initialized: boolean }>('/api/auth/setup').catch(() => null)
+  if (setup && !setup.initialized) {
+    if (to.path !== '/') return navigateTo('/')
+    return
+  }
+
   const isEntryRoute = to.name === 'entry'
   let authenticated = false
   try {

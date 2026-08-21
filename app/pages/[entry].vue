@@ -75,6 +75,7 @@ async function login() {
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 72px 16px 24px;
   background: var(--md-sys-color-surface);
 }
 
@@ -90,7 +91,18 @@ async function login() {
   flex-direction: column;
   gap: 20px;
   padding: 32px;
-  border-radius: 16px;
+  border-radius: 8px;
   background: var(--md-sys-color-surface-container);
+}
+
+@media (max-width: 480px) {
+  .theme-toggle {
+    top: 8px;
+    right: 8px;
+  }
+
+  .login-card {
+    padding: 24px 20px;
+  }
 }
 </style>

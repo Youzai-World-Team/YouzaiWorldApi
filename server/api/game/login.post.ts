@@ -36,7 +36,9 @@ export default defineEventHandler(async (event) => {
     })
   }
   account.loginTries = 0
-  account.lastIp = String(body?.ip || '').slice(0, 64)
+  const loginIp = String(body?.ip || '').slice(0, 64)
+  account.lastIp = loginIp
+  account.lastLoginIp = loginIp
   account.lastAuthenticatedDate = new Date().toISOString()
   upsertGameAccount(account)
   return { token: createGameSession(account.username), account: gameAccountWire(account) }

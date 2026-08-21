@@ -1,5 +1,5 @@
 import { createGameSession, gameAccountWire, getGameAccount, hashGamePassword, requireGameApiKey, upsertGameAccount } from '../../utils/db'
-import { optionalPosition, optionalUuid, requireGameUsername } from '../../utils/game-input'
+import { offlinePlayerUuid, optionalPosition, optionalUuid, requireGameUsername } from '../../utils/game-input'
 
 export default defineEventHandler(async (event) => {
   requireGameApiKey(event)
@@ -15,10 +15,12 @@ export default defineEventHandler(async (event) => {
   const now = new Date().toISOString()
   const epoch = '1970-01-01T00:00:00Z'
   const startSession = body?.start_session === true
+  const loginIp = startSession ? String(body?.last_ip ?? '').slice(0, 64) : ''
   const account = {
-    username, usernameLower, uuid: uuid ?? current?.uuid ?? null,
+    username, usernameLower, uuid: uuid ?? current?.uuid ?? offlinePlayerUuid(username),
     password: hashGamePassword(password),
-    lastIp: startSession ? String(body?.last_ip ?? '').slice(0, 64) : String(current?.lastIp ?? ''),
+    lastIp: startSession ? loginIp : String(current?.lastIp ?? ''),
+    lastLoginIp: startSession ? loginIp : String(current?.lastLoginIp ?? current?.lastIp ?? ''),
     lastAuthenticatedDate: startSession ? now : String(current?.lastAuthenticatedDate ?? epoch),
     registrationDate: String(body?.registration_date ?? now),
     loginTries: Math.max(0, Number(body?.login_tries ?? 0) || 0),

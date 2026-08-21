@@ -1,5 +1,19 @@
 const TRUSTED_WEB_ORIGINS = new Set(['https://mcyzw.top', 'https://www.mcyzw.top', 'https://api.mcyzw.top'])
+const LOCAL_DEVELOPMENT_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1'])
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
+
+function isTrustedWebOrigin(origin: string): boolean {
+  if (TRUSTED_WEB_ORIGINS.has(origin)) return true
+  if (!import.meta.dev) return false
+
+  try {
+    const url = new URL(origin)
+    return (url.protocol === 'http:' || url.protocol === 'https:')
+      && LOCAL_DEVELOPMENT_HOSTS.has(url.hostname)
+  } catch {
+    return false
+  }
+}
 
 export default defineEventHandler((event) => {
   setResponseHeaders(event, {
@@ -20,7 +34,7 @@ export default defineEventHandler((event) => {
   if (!MUTATING_METHODS.has(method) || event.path.startsWith('/api/game/')) return
 
   const origin = getHeader(event, 'origin')
-  if (origin && !TRUSTED_WEB_ORIGINS.has(origin)) {
+  if (origin && !isTrustedWebOrigin(origin)) {
     throw createError({ statusCode: 403, statusMessage: '请求来源不受信任' })
   }
 

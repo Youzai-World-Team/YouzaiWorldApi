@@ -64,8 +64,10 @@ body,
 body {
   background: var(--md-sys-color-surface);
   color: var(--md-sys-color-on-surface);
+  overflow-x: hidden;
   font-family: 'Roboto', system-ui, -apple-system, 'Segoe UI', 'PingFang SC',
     'Microsoft YaHei', sans-serif;
+  transition: background-color 220ms ease, color 180ms ease;
 }
 
 md-icon {
@@ -73,8 +75,10 @@ md-icon {
 }
 
 .page {
-  padding: 24px;
-  max-width: 1100px;
+  width: min(100%, 1200px);
+  margin: 0 auto;
+  padding: clamp(16px, 3vw, 32px);
+  min-width: 0;
 }
 
 .page-title {
@@ -86,8 +90,10 @@ md-icon {
 
 .card {
   background: var(--md-sys-color-surface-container);
-  border-radius: 16px;
+  border-radius: 8px;
   padding: 24px;
+  min-width: 0;
+  transition: background-color 220ms ease, border-color 180ms ease, box-shadow 180ms ease;
 }
 
 .card-title {
@@ -165,8 +171,24 @@ md-icon {
 }
 
 .table-wrap {
+  max-width: 100%;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
+}
+
+.table-wrap tbody tr {
+  transition: background-color 160ms ease;
+}
+
+.table-wrap tbody tr:hover {
+  background: color-mix(in srgb, var(--md-sys-color-primary) 6%, transparent);
+}
+
+md-dialog {
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 24px);
+  --md-dialog-container-max-width: min(560px, calc(100vw - 24px));
+  --md-dialog-container-max-height: calc(100vh - 24px);
 }
 
 @media (max-width: 640px) {
@@ -181,5 +203,21 @@ md-icon {
   .page-title {
     font-size: 20px;
     margin-bottom: 16px;
+  }
+
+  md-dialog {
+    --md-dialog-container-width: calc(100vw - 24px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    transition-delay: 0ms !important;
   }
 }
