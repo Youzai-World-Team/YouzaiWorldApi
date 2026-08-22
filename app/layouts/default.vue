@@ -82,6 +82,7 @@ onBeforeUnmount(() => {
       <md-icon-button class="menu-button" aria-label="菜单" @click="drawerOpen = !drawerOpen">
         <md-icon>menu</md-icon>
       </md-icon-button>
+      <img class="app-logo" src="/images/uzw-tm.png" alt="悠哉世界" />
       <div class="app-bar-actions">
         <span v-if="currentUser" class="current-user">{{ currentUser.username }}</span>
         <md-icon-button :aria-label="dark ? '切换浅色' : '切换深色'" @click="toggleTheme">
@@ -224,6 +225,14 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.app-logo {
+  display: block;
+  width: 156px;
+  height: 40px;
+  object-fit: contain;
+  object-position: left center;
 }
 
 .current-user {
@@ -389,6 +398,11 @@ md-list {
 
   .body {
     padding-top: 56px;
+  }
+
+  .app-logo {
+    width: 128px;
+    height: 32px;
   }
 
   md-navigation-drawer-modal {

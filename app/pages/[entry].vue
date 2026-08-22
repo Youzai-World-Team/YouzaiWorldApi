@@ -123,26 +123,30 @@ onBeforeUnmount(() => {
       </md-icon-button>
     </div>
 
-    <div class="login-card">
-      <md-outlined-text-field
-        label="用户名"
-        autocomplete="username"
-        :value="username"
-        @input="username = ($event.target as HTMLInputElement).value"
-      ></md-outlined-text-field>
-      <md-outlined-text-field
-        type="password"
-        label="密码"
-        autocomplete="current-password"
-        :value="password"
-        @input="password = ($event.target as HTMLInputElement).value"
-        @keydown.enter="login"
-      ></md-outlined-text-field>
-      <div ref="turnstileContainer" class="turnstile-container" aria-label="人机验证"></div>
-      <md-filled-button :disabled="loading || !turnstileToken" @click="login">
-        {{ loading ? '登录中…' : '登录' }}
-      </md-filled-button>
-    </div>
+    <main class="login-content">
+      <img class="brand-logo" src="/images/uzw-tm.png" alt="悠哉世界" />
+
+      <div class="login-card">
+        <md-outlined-text-field
+          label="用户名"
+          autocomplete="username"
+          :value="username"
+          @input="username = ($event.target as HTMLInputElement).value"
+        ></md-outlined-text-field>
+        <md-outlined-text-field
+          type="password"
+          label="密码"
+          autocomplete="current-password"
+          :value="password"
+          @input="password = ($event.target as HTMLInputElement).value"
+          @keydown.enter="login"
+        ></md-outlined-text-field>
+        <div ref="turnstileContainer" class="turnstile-container" aria-label="人机验证"></div>
+        <md-filled-button :disabled="loading || !turnstileToken" @click="login">
+          {{ loading ? '登录中…' : '登录' }}
+        </md-filled-button>
+      </div>
+    </main>
   </div>
 </template>
 
@@ -162,8 +166,23 @@ onBeforeUnmount(() => {
   right: 16px;
 }
 
-.login-card {
+.login-content {
   width: min(380px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 20px;
+}
+
+.brand-logo {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 120px;
+  object-fit: contain;
+}
+
+.login-card {
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -187,6 +206,14 @@ onBeforeUnmount(() => {
 
   .login-card {
     padding: 24px 20px;
+  }
+
+  .login-content {
+    gap: 16px;
+  }
+
+  .brand-logo {
+    max-height: 92px;
   }
 }
 </style>
