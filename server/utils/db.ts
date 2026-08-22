@@ -200,6 +200,37 @@ if (!gameAccountColumns.some((column) => column.name === 'email')) {
   }
 }
 
+const gameAccountEmailIndex = db.prepare(`
+  SELECT 1 FROM sqlite_master
+  WHERE type = 'index' AND name = 'game_accounts_email_unique_idx'
+`).get()
+if (!gameAccountEmailIndex) {
+  // 历史版本允许重复邮箱；迁移时保留最早写入的账户记录，并释放其余重复绑定。
+  db.exec(`
+    UPDATE game_accounts
+    SET email = lower(trim(email))
+    WHERE email IS NOT NULL;
+
+    UPDATE game_accounts
+    SET email = NULL
+    WHERE email = '';
+
+    UPDATE game_accounts
+    SET email = NULL
+    WHERE email IS NOT NULL
+      AND rowid NOT IN (
+        SELECT MIN(rowid)
+        FROM game_accounts
+        WHERE email IS NOT NULL
+        GROUP BY email COLLATE NOCASE
+      );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS game_accounts_email_unique_idx
+      ON game_accounts (email COLLATE NOCASE)
+      WHERE email IS NOT NULL;
+  `)
+}
+
 const ADMIN_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000
 const GAME_REQUEST_MAX_SKEW_SECONDS = 300
 const GAME_REQUEST_NONCE_TTL_MS = 10 * 60 * 1000
@@ -1270,12 +1301,23 @@ function registrationCodeDigest(sessionId: string, email: string, code: string):
   return createHash('sha256').update(`${sessionId}\0${email}\0${code}`, 'utf8').digest('hex')
 }
 
+function requireGameRegistrationEmailAvailable(email: string, usernameLower: string): void {
+  const owner = get(
+    'SELECT username_lower FROM game_accounts WHERE email COLLATE NOCASE = ? LIMIT 1',
+    email,
+  )
+  if (owner && String(owner.username_lower) !== usernameLower) {
+    throw createError({ statusCode: 409, message: '该邮箱已绑定其他游戏账户' })
+  }
+}
+
 export function issueGameRegistrationEmailCode(
   sessionIdValue: unknown,
   emailValue: unknown,
 ): { code: string; email: string; username: string; expiresInSeconds: number; resendAfterSeconds: number } {
   const { identity, session } = getGameRegistrationSession(sessionIdValue)
   const email = requireEmailAddress(emailValue)
+  requireGameRegistrationEmailAvailable(email, session.account.usernameLower)
   const now = Date.now()
   if (session.resendAfter > now) {
     throw createError({
@@ -1364,8 +1406,9 @@ export function completeGameRegistration(
       throw createError({ statusCode: 409, message: '邮箱注册会话状态已变化，请重试' })
     }
     if (getGameAccount(account.username)?.password) {
-      throw createError({ statusCode: 409, statusMessage: '账户已注册' })
+      throw createError({ statusCode: 409, message: '账户已注册' })
     }
+    requireGameRegistrationEmailAvailable(session.email, account.usernameLower)
     upsertGameAccount(account)
     run('DELETE FROM game_registration_sessions WHERE id_hash = ?', identity.hash)
     db.exec('COMMIT')
