@@ -200,6 +200,37 @@ if (!gameAccountColumns.some((column) => column.name === 'email')) {
   }
 }
 
+const gameAccountEmailIndex = db.prepare(`
+  SELECT 1 FROM sqlite_master
+  WHERE type = 'index' AND name = 'game_accounts_email_unique_idx'
+`).get()
+if (!gameAccountEmailIndex) {
+  // 历史版本允许重复邮箱；迁移时保留最早写入的账户记录，并释放其余重复绑定。
+  db.exec(`
+    UPDATE game_accounts
+    SET email = lower(trim(email))
+    WHERE email IS NOT NULL;
+
+    UPDATE game_accounts
+    SET email = NULL
+    WHERE email = '';
+
+    UPDATE game_accounts
+    SET email = NULL
+    WHERE email IS NOT NULL
+      AND rowid NOT IN (
+        SELECT MIN(rowid)
+        FROM game_accounts
+        WHERE email IS NOT NULL
+        GROUP BY email COLLATE NOCASE
+      );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS game_accounts_email_unique_idx
+      ON game_accounts (email COLLATE NOCASE)
+      WHERE email IS NOT NULL;
+  `)
+}
+
 const ADMIN_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000
 const GAME_REQUEST_MAX_SKEW_SECONDS = 300
 const GAME_REQUEST_NONCE_TTL_MS = 10 * 60 * 1000
@@ -772,6 +803,14 @@ function safeEqualHex(actual: string, expected: string): boolean {
   return a.length === b.length && timingSafeEqual(a, b)
 }
 
+function requireSecret(name: string, minLength: number): string {
+  const value = process.env[name]?.trim() || ''
+  if (value.length < minLength) {
+    throw createError({ statusCode: 503, message: `${name} 未配置或长度不足` })
+  }
+  return value
+}
+
 export function validateRuntimeSecurityConfig(): void {
   if (isAdminInitialized()) {
     requireConfiguredGameApiKey()
@@ -989,7 +1028,7 @@ function decryptSmtpPassword(payload: string): string {
       decipher.final(),
     ]).toString('utf8')
   } catch {
-    throw createError({ statusCode: 503, statusMessage: 'SMTP 密码无法解密，请重新保存 SMTP 配置' })
+    throw createError({ statusCode: 503, message: 'SMTP 密码无法解密，请重新保存 SMTP 配置' })
   }
 }
 
@@ -1007,7 +1046,7 @@ function smtpSettingsAreUsable(settings: StoredSmtpSettings): boolean {
 function requireSmtpText(value: unknown, label: string, maxLength: number, required = false): string {
   const text = String(value ?? '').trim()
   if ((required && !text) || text.length > maxLength || /[\r\n]/.test(text)) {
-    throw createError({ statusCode: 400, statusMessage: `${label}格式不正确` })
+    throw createError({ statusCode: 400, message: `${label}格式不正确` })
   }
   return text
 }
@@ -1044,7 +1083,7 @@ export function getAdminGameAccountSettings(): AdminGameAccountSettings {
 export function getSmtpTransportSettings(): SmtpTransportSettings {
   const smtp = readStoredSmtpSettings()
   if (!smtpSettingsAreComplete(smtp)) {
-    throw createError({ statusCode: 503, statusMessage: 'SMTP 服务器尚未配置' })
+    throw createError({ statusCode: 503, message: 'SMTP 服务器尚未配置' })
   }
   return {
     host: smtp.host,
@@ -1074,7 +1113,7 @@ export function setAdminGameAccountSettings(input: Record<string, any>): AdminGa
   const smtpInput = input?.smtp
   const hasSmtpInput = smtpInput !== undefined
   if (hasSmtpInput && (!smtpInput || typeof smtpInput !== 'object' || Array.isArray(smtpInput))) {
-    throw createError({ statusCode: 400, statusMessage: 'SMTP 配置格式不正确' })
+    throw createError({ statusCode: 400, message: 'SMTP 配置格式不正确' })
   }
 
   const nextSmtp: StoredSmtpSettings = { ...currentStoredSmtp }
@@ -1083,20 +1122,20 @@ export function setAdminGameAccountSettings(input: Record<string, any>): AdminGa
     if (smtpInput.host !== undefined) {
       nextSmtp.host = requireSmtpText(smtpInput.host, 'SMTP 服务器地址', 255, true)
       if (!/^[A-Za-z0-9.:[\]-]+$/.test(nextSmtp.host)) {
-        throw createError({ statusCode: 400, statusMessage: 'SMTP 服务器地址格式不正确' })
+        throw createError({ statusCode: 400, message: 'SMTP 服务器地址格式不正确' })
       }
     }
     if (smtpInput.port !== undefined) {
       const port = Number(smtpInput.port)
       if (!Number.isInteger(port) || port < 1 || port > 65_535) {
-        throw createError({ statusCode: 400, statusMessage: 'SMTP 端口格式不正确' })
+        throw createError({ statusCode: 400, message: 'SMTP 端口格式不正确' })
       }
       nextSmtp.port = port
     }
     if (smtpInput.security !== undefined) {
       const security = String(smtpInput.security)
       if (security !== 'none' && security !== 'starttls' && security !== 'tls') {
-        throw createError({ statusCode: 400, statusMessage: 'SMTP 连接安全类型不正确' })
+        throw createError({ statusCode: 400, message: 'SMTP 连接安全类型不正确' })
       }
       nextSmtp.security = security
     }
@@ -1112,25 +1151,25 @@ export function setAdminGameAccountSettings(input: Record<string, any>): AdminGa
     if (smtpInput.password !== undefined && String(smtpInput.password) !== '') {
       const password = String(smtpInput.password)
       if (password.length > 1024 || /[\r\n]/.test(password)) {
-        throw createError({ statusCode: 400, statusMessage: 'SMTP 密码格式不正确' })
+        throw createError({ statusCode: 400, message: 'SMTP 密码格式不正确' })
       }
       nextSmtp.encryptedPassword = encryptSmtpPassword(password)
       smtpPasswordReplaced = true
     }
     if (!nextSmtp.username) {
       if (smtpInput.password !== undefined && String(smtpInput.password) !== '') {
-        throw createError({ statusCode: 400, statusMessage: '填写 SMTP 密码时必须同时填写用户名' })
+        throw createError({ statusCode: 400, message: '填写 SMTP 密码时必须同时填写用户名' })
       }
       nextSmtp.encryptedPassword = ''
     }
     if (nextSmtp.username && nextSmtp.username !== currentStoredSmtp.username && !smtpPasswordReplaced) {
-      throw createError({ statusCode: 400, statusMessage: '更换 SMTP 用户名时必须重新填写密码' })
+      throw createError({ statusCode: 400, message: '更换 SMTP 用户名时必须重新填写密码' })
     }
     if (nextSmtp.security === 'none' && nextSmtp.username) {
-      throw createError({ statusCode: 400, statusMessage: '使用 SMTP 认证时必须启用 STARTTLS 或 TLS' })
+      throw createError({ statusCode: 400, message: '使用 SMTP 认证时必须启用 STARTTLS 或 TLS' })
     }
     if (!smtpSettingsAreComplete(nextSmtp)) {
-      throw createError({ statusCode: 400, statusMessage: '请完整填写 SMTP 服务器配置' })
+      throw createError({ statusCode: 400, message: '请完整填写 SMTP 服务器配置' })
     }
     if (nextSmtp.username && !smtpPasswordReplaced) decryptSmtpPassword(nextSmtp.encryptedPassword)
   }
@@ -1138,13 +1177,13 @@ export function setAdminGameAccountSettings(input: Record<string, any>): AdminGa
   let emailVerificationRequired = current.emailVerificationRequired
   if (input?.emailVerificationRequired !== undefined) {
     if (typeof input.emailVerificationRequired !== 'boolean') {
-      throw createError({ statusCode: 400, statusMessage: '邮箱验证开关参数不正确' })
+      throw createError({ statusCode: 400, message: '邮箱验证开关参数不正确' })
     }
     emailVerificationRequired = input.emailVerificationRequired
   }
   if (emailVerificationRequired && (hasSmtpInput || input?.emailVerificationRequired === true)) {
     if (!smtpSettingsAreComplete(nextSmtp)) {
-      throw createError({ statusCode: 400, statusMessage: '启用邮箱验证前必须配置 SMTP 服务器' })
+      throw createError({ statusCode: 400, message: '启用邮箱验证前必须配置 SMTP 服务器' })
     }
     if (nextSmtp.username && !smtpPasswordReplaced) decryptSmtpPassword(nextSmtp.encryptedPassword)
   }
@@ -1196,7 +1235,7 @@ function cleanupGameRegistrationSessions(now = Date.now()): void {
 function registrationSessionIdentity(value: unknown): { id: string; hash: string } {
   const id = String(value ?? '').trim()
   if (!/^[a-f0-9]{64}$/i.test(id)) {
-    throw createError({ statusCode: 400, statusMessage: '邮箱注册会话 ID 格式不正确' })
+    throw createError({ statusCode: 400, message: '邮箱注册会话 ID 格式不正确' })
   }
   return { id, hash: tokenDigest(id) }
 }
@@ -1232,7 +1271,7 @@ function getGameRegistrationSession(sessionId: unknown): { identity: { id: strin
   const identity = registrationSessionIdentity(sessionId)
   cleanupGameRegistrationSessions()
   const row = get('SELECT * FROM game_registration_sessions WHERE id_hash = ?', identity.hash)
-  if (!row) throw createError({ statusCode: 410, statusMessage: '邮箱注册会话已失效，请重新发起注册' })
+  if (!row) throw createError({ statusCode: 410, message: '邮箱注册会话已失效，请重新发起注册' })
   return { identity, session: mapGameRegistrationSession(row) }
 }
 
@@ -1262,17 +1301,28 @@ function registrationCodeDigest(sessionId: string, email: string, code: string):
   return createHash('sha256').update(`${sessionId}\0${email}\0${code}`, 'utf8').digest('hex')
 }
 
+function requireGameRegistrationEmailAvailable(email: string, usernameLower: string): void {
+  const owner = get(
+    'SELECT username_lower FROM game_accounts WHERE email COLLATE NOCASE = ? LIMIT 1',
+    email,
+  )
+  if (owner && String(owner.username_lower) !== usernameLower) {
+    throw createError({ statusCode: 409, message: '该邮箱已绑定其他游戏账户' })
+  }
+}
+
 export function issueGameRegistrationEmailCode(
   sessionIdValue: unknown,
   emailValue: unknown,
 ): { code: string; email: string; username: string; expiresInSeconds: number; resendAfterSeconds: number } {
   const { identity, session } = getGameRegistrationSession(sessionIdValue)
   const email = requireEmailAddress(emailValue)
+  requireGameRegistrationEmailAvailable(email, session.account.usernameLower)
   const now = Date.now()
   if (session.resendAfter > now) {
     throw createError({
       statusCode: 429,
-      statusMessage: '邮箱验证码发送过于频繁',
+      message: '邮箱验证码发送过于频繁',
       data: { retryAfterSeconds: Math.ceil((session.resendAfter - now) / 1000) },
     })
   }
@@ -1288,7 +1338,7 @@ export function issueGameRegistrationEmailCode(
     const retryAfterSeconds = Math.max(1, Math.ceil((Number(latest?.resend_after ?? now) - now) / 1000))
     throw createError({
       statusCode: 429,
-      statusMessage: '邮箱验证码发送过于频繁',
+      message: '邮箱验证码发送过于频繁',
       data: { retryAfterSeconds },
     })
   }
@@ -1315,18 +1365,18 @@ export function completeGameRegistration(
 ): { account: GameAccount; startSession: boolean } {
   const code = String(codeValue ?? '').trim()
   if (!/^\d{6}$/.test(code)) {
-    throw createError({ statusCode: 400, statusMessage: '邮箱验证码格式不正确' })
+    throw createError({ statusCode: 400, message: '邮箱验证码格式不正确' })
   }
   const { identity, session } = getGameRegistrationSession(sessionIdValue)
   if (!session.email || !session.verificationCodeHash) {
-    throw createError({ statusCode: 409, statusMessage: '请先发送邮箱验证码' })
+    throw createError({ statusCode: 409, message: '请先发送邮箱验证码' })
   }
   const now = Date.now()
   if (session.codeExpiresAt <= now) {
     run(`UPDATE game_registration_sessions
          SET email = NULL, verification_code_hash = NULL, code_expires_at = NULL, resend_after = 0, attempts = 0
          WHERE id_hash = ?`, identity.hash)
-    throw createError({ statusCode: 410, statusMessage: '邮箱验证码已过期，请重新发送' })
+    throw createError({ statusCode: 410, message: '邮箱验证码已过期，请重新发送' })
   }
   const actualHash = registrationCodeDigest(identity.id, session.email, code)
   if (!safeEqualHex(actualHash, session.verificationCodeHash)) {
@@ -1337,7 +1387,7 @@ export function completeGameRegistration(
     }
     throw createError({
       statusCode: 400,
-      statusMessage: attempts >= GAME_EMAIL_MAX_ATTEMPTS ? '邮箱验证码错误次数过多，请重新注册' : '邮箱验证码错误',
+      message: attempts >= GAME_EMAIL_MAX_ATTEMPTS ? '邮箱验证码错误次数过多，请重新注册' : '邮箱验证码错误',
       data: { remainingAttempts: Math.max(0, GAME_EMAIL_MAX_ATTEMPTS - attempts) },
     })
   }
@@ -1353,11 +1403,12 @@ export function completeGameRegistration(
   try {
     const latest = get('SELECT verification_code_hash FROM game_registration_sessions WHERE id_hash = ?', identity.hash)
     if (!latest || String(latest.verification_code_hash ?? '') !== session.verificationCodeHash) {
-      throw createError({ statusCode: 409, statusMessage: '邮箱注册会话状态已变化，请重试' })
+      throw createError({ statusCode: 409, message: '邮箱注册会话状态已变化，请重试' })
     }
     if (getGameAccount(account.username)?.password) {
-      throw createError({ statusCode: 409, statusMessage: '账户已注册' })
+      throw createError({ statusCode: 409, message: '账户已注册' })
     }
+    requireGameRegistrationEmailAvailable(session.email, account.usernameLower)
     upsertGameAccount(account)
     run('DELETE FROM game_registration_sessions WHERE id_hash = ?', identity.hash)
     db.exec('COMMIT')

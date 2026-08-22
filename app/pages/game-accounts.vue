@@ -6,6 +6,7 @@ useHead({ title: '游戏账户' })
 interface GameAccount {
   username: string
   uuid: string | null
+  email: string | null
   last_login_ip: string
   last_authenticated_date: string
   login_tries: number
@@ -232,7 +233,7 @@ async function onEmailVerificationChange(event: Event) {
     })
     showToast('注册邮箱验证已关闭')
   } catch (e: any) {
-    showToast(e?.data?.statusMessage || '邮箱验证设置保存失败', 'error')
+    showToast(e?.data?.message || e?.data?.statusMessage || '邮箱验证设置保存失败', 'error')
   } finally {
     savingEmailSettings.value = false
   }
@@ -284,7 +285,7 @@ async function saveSmtpSettings() {
     showToast(enableEmailVerificationAfterSave.value ? 'SMTP 已配置，注册邮箱验证已启用' : 'SMTP 配置已保存')
     closeSmtpDialog()
   } catch (e: any) {
-    showToast(e?.data?.statusMessage || 'SMTP 配置保存失败', 'error')
+    showToast(e?.data?.message || e?.data?.statusMessage || 'SMTP 配置保存失败', 'error')
   } finally {
     savingEmailSettings.value = false
   }
@@ -361,12 +362,13 @@ onMounted(() => {
       <div v-else class="table-wrap">
         <table>
           <thead>
-            <tr><th>玩家代号</th><th>UUID</th><th>状态</th><th>最后登录 IP</th><th>最后认证</th><th>失败次数</th><th></th></tr>
+            <tr><th>玩家代号</th><th>UUID</th><th>绑定邮箱</th><th>状态</th><th>最后登录 IP</th><th>最后认证</th><th>失败次数</th><th></th></tr>
           </thead>
           <tbody>
             <tr v-for="account in accounts" :key="account.username">
               <td class="name">{{ account.username }}</td>
               <td class="mono">{{ account.uuid || '未绑定' }}</td>
+              <td class="mono email-cell" :title="account.email || undefined">{{ account.email || '未绑定' }}</td>
               <td><span class="status" :class="account.registered ? 'status--ok' : 'status--pending'">{{ account.registered ? '已注册' : '未注册' }}</span></td>
               <td class="mono">{{ account.last_login_ip || '暂无记录' }}</td>
               <td>{{ formatAuthenticationDate(account.last_authenticated_date) }}</td>
@@ -572,7 +574,7 @@ onMounted(() => {
 
 table {
   width: 100%;
-  min-width: 980px;
+  min-width: 1160px;
   border-collapse: collapse;
   font-size: 14px;
 }
@@ -602,6 +604,12 @@ tr:last-child td {
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
+}
+
+.email-cell {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .status {
