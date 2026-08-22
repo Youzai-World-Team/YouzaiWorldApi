@@ -164,6 +164,12 @@ const ADMIN_USERNAME_ENV = 'YZWC_ADMIN_USERNAME'
 const ADMIN_ENTRY_ENV = 'YZWC_ADMIN_ENTRY'
 const ADMIN_PASSWORD_SETTING = 'admin.password_hash'
 const ADMIN_ENTRY_SETTING = 'entry'
+const TURNSTILE_SITE_KEY_SETTING = 'turnstile.site_key'
+const TURNSTILE_SECRET_SETTING = 'turnstile.secret'
+const TURNSTILE_HOSTNAMES_SETTING = 'turnstile.hostnames'
+const TURNSTILE_SITE_KEY_ENV = 'NUXT_PUBLIC_TURNSTILE_SITE_KEY'
+const TURNSTILE_SECRET_ENV = 'TURNSTILE_SECRET'
+const TURNSTILE_HOSTNAMES_ENV = 'TURNSTILE_HOSTNAMES'
 const LOGIN_RATE_WINDOW_MS = 15 * 60 * 1000
 const LOGIN_RATE_MAX_ATTEMPTS = 5
 const ADMIN_ENTRY_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{11,63}$/
@@ -197,6 +203,60 @@ export function setSetting(key: string, value: string) {
 
 export function deleteSetting(key: string) {
   run('DELETE FROM settings WHERE key = ?', key)
+}
+
+export interface TurnstileConfig {
+  siteKey: string
+  secret: string
+  hostnames: string
+}
+
+function requireTurnstileValue(value: unknown, label: string, maxLength: number): string {
+  const normalized = String(value ?? '').trim()
+  if (!normalized || normalized.length > maxLength || /\s/.test(normalized)) {
+    throw createError({ statusCode: 400, statusMessage: `${label}不能为空且不能包含空白字符` })
+  }
+  return normalized
+}
+
+function requireTurnstileHostnames(value: unknown): string {
+  const hostnames = String(value ?? '')
+    .split(',')
+    .map((hostname) => hostname.trim().toLowerCase())
+    .filter(Boolean)
+  if (hostnames.length === 0 || hostnames.length > 20) {
+    throw createError({ statusCode: 400, statusMessage: 'Turnstile 允许域名至少填写一个，最多填写 20 个' })
+  }
+  const unique = [...new Set(hostnames)]
+  for (const hostname of unique) {
+    if (hostname.length > 253 || (!/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(hostname)
+      && hostname !== '::1')) {
+      throw createError({ statusCode: 400, statusMessage: `Turnstile 允许域名无效：${hostname}` })
+    }
+  }
+  return unique.join(',')
+}
+
+export function getTurnstileConfig(): TurnstileConfig {
+  return {
+    siteKey: getSetting(TURNSTILE_SITE_KEY_SETTING) || process.env[TURNSTILE_SITE_KEY_ENV]?.trim() || '',
+    secret: getSetting(TURNSTILE_SECRET_SETTING) || process.env[TURNSTILE_SECRET_ENV]?.trim() || '',
+    hostnames: getSetting(TURNSTILE_HOSTNAMES_SETTING) || process.env[TURNSTILE_HOSTNAMES_ENV]?.trim() || '',
+  }
+}
+
+export function getPublicTurnstileConfig() {
+  const config = getTurnstileConfig()
+  return { siteKey: config.siteKey, hostnames: config.hostnames }
+}
+
+export function setTurnstileConfig(siteKeyValue: unknown, secretValue: unknown, hostnamesValue: unknown): void {
+  const siteKey = requireTurnstileValue(siteKeyValue, 'Turnstile 站点密钥', 256)
+  const secret = requireTurnstileValue(secretValue, 'Turnstile 服务端密钥', 512)
+  const hostnames = requireTurnstileHostnames(hostnamesValue)
+  setSetting(TURNSTILE_SITE_KEY_SETTING, siteKey)
+  setSetting(TURNSTILE_SECRET_SETTING, secret)
+  setSetting(TURNSTILE_HOSTNAMES_SETTING, hostnames)
 }
 
 function tokenDigest(token: string): string {
@@ -809,7 +869,14 @@ export function requireValidAdminEntry(value: unknown): string {
   return entry
 }
 
-export function initializeAdmin(usernameValue: unknown, password: unknown, entryValue: unknown): string {
+export function initializeAdmin(
+  usernameValue: unknown,
+  password: unknown,
+  entryValue: unknown,
+  turnstileSiteKey: unknown,
+  turnstileSecret: unknown,
+  turnstileHostnames: unknown,
+): string {
   const username = requireAdminUsername(usernameValue)
   const rawPassword = requireAdminPassword(password, '后台密码')
   const entry = requireValidAdminEntry(entryValue)
@@ -826,6 +893,7 @@ export function initializeAdmin(usernameValue: unknown, password: unknown, entry
     }
     deleteSetting(ADMIN_PASSWORD_SETTING)
     setSetting(ADMIN_ENTRY_SETTING, entry)
+    setTurnstileConfig(turnstileSiteKey, turnstileSecret, turnstileHostnames)
     run('DELETE FROM sessions')
     run('DELETE FROM admin_users')
     const passwordHash = hashAdminPassword(rawPassword)

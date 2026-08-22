@@ -3,9 +3,13 @@ import { onMounted, ref } from 'vue'
 
 const entry = ref('')
 const username = ref('admin')
+const turnstileSiteKey = ref('')
+const turnstileSecret = ref('')
+const turnstileHostnames = ref('')
 const password = ref('')
 const confirmPassword = ref('')
 const showPassword = ref(false)
+const showTurnstileSecret = ref(false)
 const loading = ref(false)
 const dark = ref(false)
 const { showToast } = useToast()
@@ -24,9 +28,14 @@ function toggleTheme() {
   applyTheme(dark.value)
 }
 
-onMounted(() => {
+onMounted(async () => {
   dark.value = localStorage.getItem('theme') === 'dark'
   applyTheme(dark.value)
+  try {
+    const state = await $fetch<{ turnstile?: { siteKey?: string; hostnames?: string } }>('/api/auth/setup')
+    if (state.turnstile?.siteKey) turnstileSiteKey.value = state.turnstile.siteKey
+    if (state.turnstile?.hostnames) turnstileHostnames.value = state.turnstile.hostnames
+  } catch {}
 })
 
 async function submit() {
@@ -49,6 +58,18 @@ async function submit() {
     showToast('两次输入的密码不一致', 'error')
     return
   }
+  if (!turnstileSiteKey.value.trim() || /\s/.test(turnstileSiteKey.value.trim())) {
+    showToast('请填写有效的 Turnstile 站点密钥', 'error')
+    return
+  }
+  if (!turnstileSecret.value.trim() || /\s/.test(turnstileSecret.value.trim())) {
+    showToast('请填写 Turnstile 服务端密钥', 'error')
+    return
+  }
+  if (!turnstileHostnames.value.trim()) {
+    showToast('请填写 Turnstile 允许的域名', 'error')
+    return
+  }
 
   loading.value = true
   try {
@@ -59,6 +80,9 @@ async function submit() {
         entry: normalizedEntry,
         password: password.value,
         confirmPassword: confirmPassword.value,
+        turnstileSiteKey: turnstileSiteKey.value.trim(),
+        turnstileSecret: turnstileSecret.value.trim(),
+        turnstileHostnames: turnstileHostnames.value.trim(),
       },
     })
     useEntry().remember(result.entry)
@@ -99,6 +123,38 @@ async function submit() {
           spellcheck="false"
           :value="entry"
           @input="entry = ($event.target as HTMLInputElement).value"
+        ></md-outlined-text-field>
+
+        <md-outlined-text-field
+          label="Turnstile 站点密钥"
+          supporting-text="可公开的 Site Key"
+          autocomplete="off"
+          spellcheck="false"
+          :value="turnstileSiteKey"
+          @input="turnstileSiteKey = ($event.target as HTMLInputElement).value"
+        ></md-outlined-text-field>
+
+        <div class="password-field">
+          <md-outlined-text-field
+            :type="showTurnstileSecret ? 'text' : 'password'"
+            label="Turnstile 服务端密钥"
+            supporting-text="Secret Key 只保存到服务端"
+            autocomplete="new-password"
+            :value="turnstileSecret"
+            @input="turnstileSecret = ($event.target as HTMLInputElement).value"
+          ></md-outlined-text-field>
+          <md-icon-button :aria-label="showTurnstileSecret ? '隐藏服务端密钥' : '显示服务端密钥'" @click="showTurnstileSecret = !showTurnstileSecret">
+            <md-icon>{{ showTurnstileSecret ? 'visibility_off' : 'visibility' }}</md-icon>
+          </md-icon-button>
+        </div>
+
+        <md-outlined-text-field
+          label="Turnstile 允许的域名"
+          supporting-text="多个域名用英文逗号分隔"
+          autocomplete="off"
+          spellcheck="false"
+          :value="turnstileHostnames"
+          @input="turnstileHostnames = ($event.target as HTMLInputElement).value"
         ></md-outlined-text-field>
 
         <div class="password-field">
