@@ -3,9 +3,10 @@ import { deleteCookie, setCookie } from 'h3'
 import { assertAdminLoginAllowed, clearAdminLoginFailures, createSession, getAdminEntry,
   getAdminUserForLogin, pushLogin, recordAdminLoginFailure, recordAudit, ADMIN_COOKIE_NAME } from '../../utils/db'
 import { describeClient } from '../../utils/client-device'
+import { verifyTurnstileLogin } from '../../utils/turnstile'
 
 export default defineEventHandler(async (event) => {
-  const body = await readBody<{ username?: string; password?: string; entry?: string }>(event)
+  const body = await readBody<{ username?: string; password?: string; entry?: string; turnstileToken?: string }>(event)
   const ip = (getHeader(event, 'cf-connecting-ip') || getRequestIP(event) || 'unknown').slice(0, 64)
   assertAdminLoginAllowed(ip)
   const entry = String(body?.entry || '').trim().replace(/^\/+|\/+$/g, '')
@@ -13,6 +14,8 @@ export default defineEventHandler(async (event) => {
     recordAdminLoginFailure(ip)
     throw createError({ statusCode: 404, statusMessage: '页面不存在' })
   }
+
+  await verifyTurnstileLogin(body.turnstileToken, ip)
 
   const user = body.password ? getAdminUserForLogin(body.username, body.password) : undefined
   if (!user) {

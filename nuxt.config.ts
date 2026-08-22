@@ -5,6 +5,11 @@ export default defineNuxtConfig({
     host: '127.0.0.1',
     port: 3800
   },
+  runtimeConfig: {
+    public: {
+      turnstileSiteKey: process.env.NUXT_PUBLIC_TURNSTILE_SITE_KEY || ''
+    }
+  },
   css: ['~/assets/css/main.css'],
   nitro: {
     errorHandler: '~~/server/error-handler'

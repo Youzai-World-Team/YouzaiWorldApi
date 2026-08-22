@@ -18,10 +18,17 @@ Nuxt API 服务端与管理页面。生产环境建议通过 Cloudflare 以 `htt
 
 注册会话 15 分钟失效，验证码 10 分钟失效且 60 秒内不可重复发送；连续输入错误 5 次后注册会话失效。SMTP 密码使用 `YZWC_GAME_API_KEY` 派生的密钥加密保存，修改该环境变量后需要在后台重新保存 SMTP 密码。
 
-首次启动后访问根目录 `/`，设置首个后台用户名（3 至 32 位）、密码（12 至 128 位）和登录入口（12 至 64 位）。
+首次启动后访问根目录 `/`，设置首个后台用户名（3 至 32 位）、密码（12 至 128 位）、登录入口（12 至 64 位），以及 Turnstile 站点密钥、服务端密钥和允许的前端 hostname。
 设置成功后初始化接口会永久关闭，后续只能通过该入口登录。也可在首次启动前同时配置
 `YZWC_ADMIN_USERNAME`、`YZWC_ADMIN_PASSWORD` 和 `YZWC_ADMIN_ENTRY` 进行无人值守初始化。
 所有者登录后台后可以在 `/admin-users` 创建、停用、重置和删除其他后台用户；所有后台用户都可以在 `/audit-logs` 查看成功的写入操作记录。生产环境应使用 HTTPS
 并禁止缓存 API 响应，可复制 `.env.example` 作为配置模板。
 
 若使用网页初始化，请在服务暴露给其他访问者前立即完成设置，避免未初始化实例被他人抢先接管。
+
+后台登录页使用 Cloudflare Turnstile 进行人机验证。OOBE 初始化页填写的 Turnstile 配置会保存到服务端数据库，
+其中 Secret Key 不会通过公开接口返回。也可以在部署前通过环境变量配置 `TURNSTILE_SECRET`，并将
+`TURNSTILE_HOSTNAMES` 设置为当前部署允许的前端 hostname；生产环境应使用 `api.mcyzw.top`，不要把
+`localhost` 或 `127.0.0.1` 加入生产允许列表。本地测试时可单独设置
+`TURNSTILE_HOSTNAMES=localhost,127.0.0.1`。公开站点密钥由
+`NUXT_PUBLIC_TURNSTILE_SITE_KEY` 提供；如果使用 OOBE 初始化，则直接在初始化页面填写站点密钥。
