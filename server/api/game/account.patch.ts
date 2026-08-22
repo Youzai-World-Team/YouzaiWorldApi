@@ -38,7 +38,7 @@ export default defineEventHandler(async (event) => {
   }
   if (body?.password !== undefined) {
     if (!current.password && getGameAccountSettings().emailVerificationRequired) {
-      throw createError({ statusCode: 409, statusMessage: '启用邮箱验证时请通过注册接口完成注册' })
+      throw createError({ statusCode: 409, message: '启用邮箱验证时请通过注册接口完成注册' })
     }
     const password = String(body.password)
     if (password.length < 4 || password.length > 128) throw createError({ statusCode: 400, statusMessage: '密码长度不符合要求' })

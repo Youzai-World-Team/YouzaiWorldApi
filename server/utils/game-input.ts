@@ -25,7 +25,7 @@ export function requireEmailAddress(value: unknown): string {
   const email = String(value ?? '').trim().toLowerCase()
   if (email.length > 254 || email.startsWith('.') || email.includes('..')
       || !EMAIL_RE.test(email) || /[\r\n]/.test(email)) {
-    throw createError({ statusCode: 400, statusMessage: '邮箱地址格式不正确' })
+    throw createError({ statusCode: 400, message: '邮箱地址格式不正确' })
   }
   return email
 }

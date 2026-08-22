@@ -41,7 +41,7 @@ export default defineEventHandler(async (event) => {
   const settings = getGameAccountSettings()
   if (settings.emailVerificationRequired) {
     if (!settings.smtpConfigured) {
-      throw createError({ statusCode: 503, statusMessage: '邮箱注册已启用，但 SMTP 服务器尚未正确配置' })
+      throw createError({ statusCode: 503, message: '邮箱注册已启用，但 SMTP 服务器尚未正确配置' })
     }
     const pending = createGameRegistrationSession(account, startSession)
     return {

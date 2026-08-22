@@ -232,7 +232,7 @@ async function onEmailVerificationChange(event: Event) {
     })
     showToast('注册邮箱验证已关闭')
   } catch (e: any) {
-    showToast(e?.data?.statusMessage || '邮箱验证设置保存失败', 'error')
+    showToast(e?.data?.message || e?.data?.statusMessage || '邮箱验证设置保存失败', 'error')
   } finally {
     savingEmailSettings.value = false
   }
@@ -284,7 +284,7 @@ async function saveSmtpSettings() {
     showToast(enableEmailVerificationAfterSave.value ? 'SMTP 已配置，注册邮箱验证已启用' : 'SMTP 配置已保存')
     closeSmtpDialog()
   } catch (e: any) {
-    showToast(e?.data?.statusMessage || 'SMTP 配置保存失败', 'error')
+    showToast(e?.data?.message || e?.data?.statusMessage || 'SMTP 配置保存失败', 'error')
   } finally {
     savingEmailSettings.value = false
   }

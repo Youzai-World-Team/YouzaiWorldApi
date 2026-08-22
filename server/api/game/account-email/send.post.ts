@@ -20,7 +20,7 @@ export default defineEventHandler(async (event) => {
     )
   } catch {
     revokeGameRegistrationEmailCode(sessionId, issued.email, issued.code)
-    throw createError({ statusCode: 502, statusMessage: '验证码邮件发送失败，请检查 SMTP 配置后重试' })
+    throw createError({ statusCode: 502, message: '验证码邮件发送失败，请检查 SMTP 配置后重试' })
   }
   return {
     ok: true,
