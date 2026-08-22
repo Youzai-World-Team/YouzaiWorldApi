@@ -3,6 +3,7 @@ import { createError } from 'h3'
 
 export const GAME_USERNAME_RE = /^[A-Za-z0-9_]{1,16}$/
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+export const EMAIL_RE = /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+\.[A-Za-z0-9-]{2,63}$/
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
 
 export function requireGameUsername(value: unknown): string {
@@ -18,6 +19,15 @@ export function optionalUuid(value: unknown): string | null {
   const uuid = String(value).trim()
   if (!UUID_RE.test(uuid)) throw createError({ statusCode: 400, statusMessage: 'UUID 格式不正确' })
   return uuid
+}
+
+export function requireEmailAddress(value: unknown): string {
+  const email = String(value ?? '').trim().toLowerCase()
+  if (email.length > 254 || email.startsWith('.') || email.includes('..')
+      || !EMAIL_RE.test(email) || /[\r\n]/.test(email)) {
+    throw createError({ statusCode: 400, statusMessage: '邮箱地址格式不正确' })
+  }
+  return email
 }
 
 /** Minecraft 原版离线服务器使用的 UUID.nameUUIDFromBytes("OfflinePlayer:" + name) 算法。 */

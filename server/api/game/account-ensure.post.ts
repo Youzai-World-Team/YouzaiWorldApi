@@ -20,6 +20,7 @@ export default defineEventHandler(async (event) => {
     username,
     usernameLower,
     uuid,
+    email: current?.email ?? null,
     password: '',
     lastIp: '',
     lastLoginIp: '',
