@@ -208,6 +208,7 @@ const GAME_EMAIL_CODE_TTL_MS = 10 * 60 * 1000
 const GAME_EMAIL_RESEND_DELAY_MS = 60 * 1000
 const GAME_EMAIL_MAX_ATTEMPTS = 5
 const GAME_API_KEY_ENV = 'YZWC_GAME_API_KEY'
+const GAME_API_KEY_SETTING = 'game_api.key'
 const ADMIN_PASSWORD_ENV = 'YZWC_ADMIN_PASSWORD'
 const ADMIN_USERNAME_ENV = 'YZWC_ADMIN_USERNAME'
 const ADMIN_ENTRY_ENV = 'YZWC_ADMIN_ENTRY'
@@ -314,6 +315,25 @@ export function setTurnstileConfig(siteKeyValue: unknown, secretValue: unknown, 
   setSetting(TURNSTILE_SITE_KEY_SETTING, siteKey)
   setSetting(TURNSTILE_SECRET_SETTING, secret)
   setSetting(TURNSTILE_HOSTNAMES_SETTING, hostnames)
+}
+
+function requireGameApiKeyValue(value: unknown): string {
+  const key = String(value ?? '').trim()
+  if (key.length < 32 || key.length > 512 || /\s/.test(key)) {
+    throw createError({ statusCode: 400, statusMessage: '游戏 API 密钥长度需要为 32 至 512 位且不能包含空白字符' })
+  }
+  return key
+}
+
+/** 返回数据库中配置的密钥；未配置时兼容使用环境变量。 */
+export function getGameApiKey(): string {
+  return getSetting(GAME_API_KEY_SETTING)?.trim() || process.env[GAME_API_KEY_ENV]?.trim() || ''
+}
+
+export function setGameApiKey(value: unknown): string {
+  const key = requireGameApiKeyValue(value)
+  setSetting(GAME_API_KEY_SETTING, key)
+  return key
 }
 
 function tokenDigest(token: string): string {
@@ -429,7 +449,7 @@ export function deleteAdminUser(userId: number): void {
 
 export function requireOwner(event: H3Event): AdminUser {
   const user = requireAuth(event)
-  if (!user.isOwner) throw createError({ statusCode: 403, statusMessage: '只有所有者可以管理后台用户' })
+  if (!user.isOwner) throw createError({ statusCode: 403, statusMessage: '只有初始所有者可以执行此操作' })
   return user
 }
 
@@ -710,7 +730,7 @@ export function requireGameApiKey(event: H3Event): void {
 }
 
 export function authenticateGameApiRequest(event: H3Event, body: Buffer): void {
-  const expected = requireSecret(GAME_API_KEY_ENV, 32)
+  const expected = requireConfiguredGameApiKey()
   const timestamp = getHeader(event, 'x-yzwc-timestamp') || ''
   const nonce = getHeader(event, 'x-yzwc-nonce') || ''
   const provided = getHeader(event, 'x-yzwc-signature') || ''
@@ -738,6 +758,14 @@ export function authenticateGameApiRequest(event: H3Event, body: Buffer): void {
   event.context.yzwcGameRequestAuthenticated = true
 }
 
+function requireConfiguredGameApiKey(): string {
+  const key = getGameApiKey()
+  if (key.length < 32 || key.length > 512 || /\s/.test(key)) {
+    throw createError({ statusCode: 503, statusMessage: `${GAME_API_KEY_ENV} 未配置或长度无效` })
+  }
+  return key
+}
+
 function safeEqualHex(actual: string, expected: string): boolean {
   const a = Buffer.from(actual, 'hex')
   const b = Buffer.from(expected, 'hex')
@@ -753,8 +781,10 @@ function requireSecret(name: string, minLength: number): string {
 }
 
 export function validateRuntimeSecurityConfig(): void {
-  requireSecret(GAME_API_KEY_ENV, 32)
-  if (isAdminInitialized()) getAdminEntry()
+  if (isAdminInitialized()) {
+    requireConfiguredGameApiKey()
+    getAdminEntry()
+  }
 }
 
 export interface GameAccount {
@@ -1373,10 +1403,12 @@ export function initializeAdmin(
   turnstileSiteKey: unknown,
   turnstileSecret: unknown,
   turnstileHostnames: unknown,
+  gameApiKey: unknown,
 ): string {
   const username = requireAdminUsername(usernameValue)
   const rawPassword = requireAdminPassword(password, '后台密码')
   const entry = requireValidAdminEntry(entryValue)
+  const normalizedGameApiKey = requireGameApiKeyValue(gameApiKey)
 
   // 已初始化后先走廉价检查，避免公开的初始化接口被用于反复触发高成本密码哈希。
   if (isAdminInitialized()) {
@@ -1391,6 +1423,7 @@ export function initializeAdmin(
     deleteSetting(ADMIN_PASSWORD_SETTING)
     setSetting(ADMIN_ENTRY_SETTING, entry)
     setTurnstileConfig(turnstileSiteKey, turnstileSecret, turnstileHostnames)
+    setSetting(GAME_API_KEY_SETTING, normalizedGameApiKey)
     run('DELETE FROM sessions')
     run('DELETE FROM admin_users')
     const passwordHash = hashAdminPassword(rawPassword)

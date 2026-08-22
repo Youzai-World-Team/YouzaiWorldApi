@@ -10,6 +10,7 @@ export default defineEventHandler(async (event) => {
     turnstileSiteKey?: string
     turnstileSecret?: string
     turnstileHostnames?: string
+    gameApiKey?: string
   }>(event)
   const password = String(body?.password ?? '')
   if (password !== String(body?.confirmPassword ?? '')) {
@@ -22,6 +23,7 @@ export default defineEventHandler(async (event) => {
     body?.turnstileSiteKey,
     body?.turnstileSecret,
     body?.turnstileHostnames,
+    body?.gameApiKey,
   )
   return { ok: true, entry }
 })
