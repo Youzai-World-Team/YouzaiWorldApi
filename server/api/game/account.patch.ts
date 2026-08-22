@@ -1,4 +1,12 @@
-import { deleteGameSessionsForUser, gameAccountWire, getGameAccount, hashGamePassword, requireGameApiKey, upsertGameAccount } from '../../utils/db'
+import {
+  deleteGameSessionsForUser,
+  gameAccountWire,
+  getGameAccount,
+  getGameAccountSettings,
+  hashGamePassword,
+  requireGameApiKey,
+  upsertGameAccount,
+} from '../../utils/db'
 import { optionalPosition, optionalUuid, requireGameUsername } from '../../utils/game-input'
 
 export default defineEventHandler(async (event) => {
@@ -29,6 +37,9 @@ export default defineEventHandler(async (event) => {
     if (value !== undefined) (next as any)[target] = Math.max(0, Number(value) || 0)
   }
   if (body?.password !== undefined) {
+    if (!current.password && getGameAccountSettings().emailVerificationRequired) {
+      throw createError({ statusCode: 409, statusMessage: '启用邮箱验证时请通过注册接口完成注册' })
+    }
     const password = String(body.password)
     if (password.length < 4 || password.length > 128) throw createError({ statusCode: 400, statusMessage: '密码长度不符合要求' })
     if (!current.password) next.registrationDate = new Date().toISOString()

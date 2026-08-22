@@ -17,6 +17,7 @@ export default defineEventHandler(async (event) => {
   const epoch = '1970-01-01T00:00:00Z'
   const account = {
     username, usernameLower: username.toLocaleLowerCase('en-US'), uuid,
+    email: current?.email ?? null,
     password: hashGamePassword(password), lastIp: '', lastLoginIp: current?.lastLoginIp ?? '',
     lastAuthenticatedDate: epoch, registrationDate: now,
     loginTries: 0, lastKickedDate: epoch, lastPosition: current?.lastPosition ?? null,

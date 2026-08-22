@@ -1,9 +1,18 @@
 import { DatabaseSync } from 'node:sqlite'
-import { createHash, createHmac, pbkdf2Sync, randomBytes, timingSafeEqual } from 'node:crypto'
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  createHmac,
+  pbkdf2Sync,
+  randomBytes,
+  randomInt,
+  timingSafeEqual,
+} from 'node:crypto'
 import { mkdirSync, promises as fs } from 'node:fs'
 import path from 'node:path'
 import { getCookie, getHeader, createError, type H3Event } from 'h3'
-import { offlinePlayerUuid } from './game-input'
+import { offlinePlayerUuid, requireEmailAddress } from './game-input'
 
 const dataDir = path.resolve(process.cwd(), 'server/data')
 mkdirSync(dataDir, { recursive: true })
@@ -84,6 +93,7 @@ db.exec(`
     username_lower TEXT PRIMARY KEY,
     username TEXT NOT NULL,
     uuid TEXT,
+    email TEXT,
     password TEXT NOT NULL DEFAULT '',
     last_ip TEXT NOT NULL DEFAULT '',
     last_login_ip TEXT NOT NULL DEFAULT '',
@@ -101,6 +111,33 @@ db.exec(`
     created_at INTEGER NOT NULL,
     expires_at INTEGER
   );
+  CREATE TABLE IF NOT EXISTS game_registration_sessions (
+    id_hash TEXT PRIMARY KEY,
+    username_lower TEXT NOT NULL,
+    username TEXT NOT NULL,
+    uuid TEXT,
+    email TEXT,
+    password_hash TEXT NOT NULL,
+    last_ip TEXT NOT NULL DEFAULT '',
+    last_login_ip TEXT NOT NULL DEFAULT '',
+    last_authenticated_date TEXT NOT NULL,
+    registration_date TEXT NOT NULL,
+    login_tries INTEGER NOT NULL DEFAULT 0,
+    last_kicked_date TEXT NOT NULL,
+    last_position TEXT,
+    in_place_respawn_count INTEGER NOT NULL DEFAULT 0,
+    start_session INTEGER NOT NULL DEFAULT 0,
+    verification_code_hash TEXT,
+    code_expires_at INTEGER,
+    resend_after INTEGER NOT NULL DEFAULT 0,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS game_registration_sessions_username_idx
+    ON game_registration_sessions (username_lower);
+  CREATE INDEX IF NOT EXISTS game_registration_sessions_expires_idx
+    ON game_registration_sessions (expires_at);
   CREATE TABLE IF NOT EXISTS game_cosmetics (
     uuid TEXT NOT NULL,
     slot TEXT NOT NULL,
@@ -154,16 +191,36 @@ if (!gameAccountColumns.some((column) => column.name === 'last_login_ip')) {
   }
   db.exec("UPDATE game_accounts SET last_login_ip = last_ip WHERE last_ip <> ''")
 }
+if (!gameAccountColumns.some((column) => column.name === 'email')) {
+  try {
+    db.exec('ALTER TABLE game_accounts ADD COLUMN email TEXT')
+  } catch (error) {
+    const migratedColumns = db.prepare('PRAGMA table_info(game_accounts)').all() as { name?: string }[]
+    if (!migratedColumns.some((column) => column.name === 'email')) throw error
+  }
+}
 
 const ADMIN_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000
 const GAME_REQUEST_MAX_SKEW_SECONDS = 300
 const GAME_REQUEST_NONCE_TTL_MS = 10 * 60 * 1000
+const GAME_REGISTRATION_SESSION_TTL_MS = 15 * 60 * 1000
+const GAME_EMAIL_CODE_TTL_MS = 10 * 60 * 1000
+const GAME_EMAIL_RESEND_DELAY_MS = 60 * 1000
+const GAME_EMAIL_MAX_ATTEMPTS = 5
 const GAME_API_KEY_ENV = 'YZWC_GAME_API_KEY'
 const ADMIN_PASSWORD_ENV = 'YZWC_ADMIN_PASSWORD'
 const ADMIN_USERNAME_ENV = 'YZWC_ADMIN_USERNAME'
 const ADMIN_ENTRY_ENV = 'YZWC_ADMIN_ENTRY'
 const ADMIN_PASSWORD_SETTING = 'admin.password_hash'
 const ADMIN_ENTRY_SETTING = 'entry'
+const GAME_EMAIL_VERIFICATION_SETTING = 'game_account.email_verification_required'
+const SMTP_HOST_SETTING = 'game_account.smtp.host'
+const SMTP_PORT_SETTING = 'game_account.smtp.port'
+const SMTP_SECURITY_SETTING = 'game_account.smtp.security'
+const SMTP_USERNAME_SETTING = 'game_account.smtp.username'
+const SMTP_PASSWORD_SETTING = 'game_account.smtp.password'
+const SMTP_FROM_ADDRESS_SETTING = 'game_account.smtp.from_address'
+const SMTP_FROM_NAME_SETTING = 'game_account.smtp.from_name'
 const LOGIN_RATE_WINDOW_MS = 15 * 60 * 1000
 const LOGIN_RATE_MAX_ATTEMPTS = 5
 const ADMIN_ENTRY_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{11,63}$/
@@ -644,6 +701,7 @@ export interface GameAccount {
   username: string
   usernameLower: string
   uuid: string | null
+  email: string | null
   password: string
   lastIp: string
   lastLoginIp: string
@@ -660,6 +718,7 @@ export function gameAccountWire(account: GameAccount) {
     username: account.username,
     username_lower: account.usernameLower,
     uuid: account.uuid,
+    email: account.email,
     last_ip: account.lastIp,
     last_authenticated_date: account.lastAuthenticatedDate,
     registration_date: account.registrationDate,
@@ -680,6 +739,7 @@ function mapGameAccount(row: Record<string, unknown>): GameAccount {
     uuid: row.uuid == null || String(row.uuid).trim() === ''
       ? offlinePlayerUuid(String(row.username ?? ''))
       : String(row.uuid),
+    email: row.email == null || String(row.email).trim() === '' ? null : String(row.email),
     password: String(row.password ?? ''),
     lastIp: String(row.last_ip ?? ''),
     lastLoginIp: String(row.last_login_ip ?? row.last_ip ?? ''),
@@ -704,11 +764,12 @@ export function getGameAccount(username: string): GameAccount | undefined {
 
 export function upsertGameAccount(account: GameAccount) {
   run(`INSERT INTO game_accounts
-    (username_lower, username, uuid, password, last_ip, last_login_ip, last_authenticated_date, registration_date,
+    (username_lower, username, uuid, email, password, last_ip, last_login_ip, last_authenticated_date, registration_date,
      login_tries, last_kicked_date, last_position, in_place_respawn_count, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(username_lower) DO UPDATE SET
       username = excluded.username, uuid = COALESCE(excluded.uuid, game_accounts.uuid),
+      email = COALESCE(excluded.email, game_accounts.email),
       password = CASE WHEN excluded.password = '' THEN game_accounts.password ELSE excluded.password END,
       last_ip = excluded.last_ip,
       last_login_ip = excluded.last_login_ip,
@@ -716,15 +777,19 @@ export function upsertGameAccount(account: GameAccount) {
       registration_date = excluded.registration_date, login_tries = excluded.login_tries,
       last_kicked_date = excluded.last_kicked_date, last_position = excluded.last_position,
       in_place_respawn_count = excluded.in_place_respawn_count, updated_at = excluded.updated_at`,
-    account.usernameLower, account.username, account.uuid, account.password, account.lastIp,
+    account.usernameLower, account.username, account.uuid, account.email, account.password, account.lastIp,
     account.lastLoginIp, account.lastAuthenticatedDate, account.registrationDate, account.loginTries, account.lastKickedDate,
     account.lastPosition, account.inPlaceRespawnCount, Date.now())
+  if (account.password) {
+    run('DELETE FROM game_registration_sessions WHERE username_lower = ?', account.usernameLower)
+  }
 }
 
 export function deleteGameAccount(username: string): boolean {
   const key = username.trim().toLocaleLowerCase('en-US')
   const result = run('DELETE FROM game_accounts WHERE username_lower = ?', key)
   run('DELETE FROM game_sessions WHERE username_lower = ?', key)
+  run('DELETE FROM game_registration_sessions WHERE username_lower = ?', key)
   return Number(result.changes ?? 0) > 0
 }
 
@@ -767,26 +832,458 @@ function gameSessionTtlMs(): number {
   return Math.min(86_400, Math.max(300, seconds)) * 1000
 }
 
+export type SmtpSecurity = 'none' | 'starttls' | 'tls'
+
+export interface SmtpTransportSettings {
+  host: string
+  port: number
+  security: SmtpSecurity
+  username: string
+  password: string
+  fromAddress: string
+  fromName: string
+}
+
 export interface GameAccountSettings {
   loginCooldown: number
+  emailVerificationRequired: boolean
+  smtpConfigured: boolean
+}
+
+export interface AdminGameAccountSettings extends GameAccountSettings {
+  smtp: Omit<SmtpTransportSettings, 'password'> & { passwordConfigured: boolean }
+}
+
+interface StoredSmtpSettings extends Omit<SmtpTransportSettings, 'password'> {
+  encryptedPassword: string
+}
+
+function readStoredSmtpSettings(): StoredSmtpSettings {
+  const rawPort = Number(getSetting(SMTP_PORT_SETTING) ?? 587)
+  const rawSecurity = getSetting(SMTP_SECURITY_SETTING)
+  return {
+    host: getSetting(SMTP_HOST_SETTING)?.trim() || '',
+    port: Number.isInteger(rawPort) && rawPort >= 1 && rawPort <= 65_535 ? rawPort : 587,
+    security: rawSecurity === 'none' || rawSecurity === 'tls' ? rawSecurity : 'starttls',
+    username: getSetting(SMTP_USERNAME_SETTING)?.trim() || '',
+    encryptedPassword: getSetting(SMTP_PASSWORD_SETTING) || '',
+    fromAddress: getSetting(SMTP_FROM_ADDRESS_SETTING)?.trim() || '',
+    fromName: getSetting(SMTP_FROM_NAME_SETTING)?.trim() || '悠哉世界',
+  }
+}
+
+function smtpSettingsAreComplete(settings: StoredSmtpSettings): boolean {
+  if (!settings.host || !settings.fromAddress || !Number.isInteger(settings.port)
+      || settings.port < 1 || settings.port > 65_535
+      || (settings.username && !settings.encryptedPassword)) return false
+  try {
+    requireEmailAddress(settings.fromAddress)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function smtpEncryptionKey(): Buffer {
+  return createHash('sha256').update(`yzwc-smtp:${requireSecret(GAME_API_KEY_ENV, 32)}`).digest()
+}
+
+function encryptSmtpPassword(password: string): string {
+  const iv = randomBytes(12)
+  const cipher = createCipheriv('aes-256-gcm', smtpEncryptionKey(), iv)
+  const encrypted = Buffer.concat([cipher.update(password, 'utf8'), cipher.final()])
+  const tag = cipher.getAuthTag()
+  return `v1.${iv.toString('base64url')}.${tag.toString('base64url')}.${encrypted.toString('base64url')}`
+}
+
+function decryptSmtpPassword(payload: string): string {
+  try {
+    const [version, ivText, tagText, encryptedText] = payload.split('.')
+    if (version !== 'v1' || !ivText || !tagText || !encryptedText) throw new Error('invalid payload')
+    const decipher = createDecipheriv('aes-256-gcm', smtpEncryptionKey(), Buffer.from(ivText, 'base64url'))
+    decipher.setAuthTag(Buffer.from(tagText, 'base64url'))
+    return Buffer.concat([
+      decipher.update(Buffer.from(encryptedText, 'base64url')),
+      decipher.final(),
+    ]).toString('utf8')
+  } catch {
+    throw createError({ statusCode: 503, statusMessage: 'SMTP 密码无法解密，请重新保存 SMTP 配置' })
+  }
+}
+
+function smtpSettingsAreUsable(settings: StoredSmtpSettings): boolean {
+  if (!smtpSettingsAreComplete(settings)) return false
+  if (!settings.username) return true
+  try {
+    decryptSmtpPassword(settings.encryptedPassword)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function requireSmtpText(value: unknown, label: string, maxLength: number, required = false): string {
+  const text = String(value ?? '').trim()
+  if ((required && !text) || text.length > maxLength || /[\r\n]/.test(text)) {
+    throw createError({ statusCode: 400, statusMessage: `${label}格式不正确` })
+  }
+  return text
 }
 
 export function getGameAccountSettings(): GameAccountSettings {
   const loginCooldown = Number(getSetting('game_account.login_cooldown') ?? 300)
+  const smtp = readStoredSmtpSettings()
   return {
     loginCooldown: Number.isFinite(loginCooldown)
       ? Math.min(86_400, Math.max(-1, Math.trunc(loginCooldown)))
       : 300,
+    emailVerificationRequired: getSetting(GAME_EMAIL_VERIFICATION_SETTING) === 'true',
+    smtpConfigured: smtpSettingsAreUsable(smtp),
   }
 }
 
-export function setGameAccountSettings(settings: Partial<GameAccountSettings>): GameAccountSettings {
+export function getAdminGameAccountSettings(): AdminGameAccountSettings {
+  const settings = getGameAccountSettings()
+  const smtp = readStoredSmtpSettings()
+  return {
+    ...settings,
+    smtp: {
+      host: smtp.host,
+      port: smtp.port,
+      security: smtp.security,
+      username: smtp.username,
+      fromAddress: smtp.fromAddress,
+      fromName: smtp.fromName,
+      passwordConfigured: Boolean(smtp.encryptedPassword),
+    },
+  }
+}
+
+export function getSmtpTransportSettings(): SmtpTransportSettings {
+  const smtp = readStoredSmtpSettings()
+  if (!smtpSettingsAreComplete(smtp)) {
+    throw createError({ statusCode: 503, statusMessage: 'SMTP 服务器尚未配置' })
+  }
+  return {
+    host: smtp.host,
+    port: smtp.port,
+    security: smtp.security,
+    username: smtp.username,
+    password: smtp.username ? decryptSmtpPassword(smtp.encryptedPassword) : '',
+    fromAddress: requireEmailAddress(smtp.fromAddress),
+    fromName: smtp.fromName,
+  }
+}
+
+export function setGameAccountSettings(
+  settings: Partial<Pick<GameAccountSettings, 'loginCooldown'>>,
+): GameAccountSettings {
   const current = getGameAccountSettings()
   const loginCooldown = settings.loginCooldown === undefined
     ? current.loginCooldown
     : Math.min(86_400, Math.max(-1, Math.trunc(Number(settings.loginCooldown) || 0)))
   setSetting('game_account.login_cooldown', String(loginCooldown))
-  return { loginCooldown }
+  return getGameAccountSettings()
+}
+
+export function setAdminGameAccountSettings(input: Record<string, any>): AdminGameAccountSettings {
+  const current = getAdminGameAccountSettings()
+  const currentStoredSmtp = readStoredSmtpSettings()
+  const smtpInput = input?.smtp
+  const hasSmtpInput = smtpInput !== undefined
+  if (hasSmtpInput && (!smtpInput || typeof smtpInput !== 'object' || Array.isArray(smtpInput))) {
+    throw createError({ statusCode: 400, statusMessage: 'SMTP 配置格式不正确' })
+  }
+
+  const nextSmtp: StoredSmtpSettings = { ...currentStoredSmtp }
+  let smtpPasswordReplaced = false
+  if (hasSmtpInput) {
+    if (smtpInput.host !== undefined) {
+      nextSmtp.host = requireSmtpText(smtpInput.host, 'SMTP 服务器地址', 255, true)
+      if (!/^[A-Za-z0-9.:[\]-]+$/.test(nextSmtp.host)) {
+        throw createError({ statusCode: 400, statusMessage: 'SMTP 服务器地址格式不正确' })
+      }
+    }
+    if (smtpInput.port !== undefined) {
+      const port = Number(smtpInput.port)
+      if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+        throw createError({ statusCode: 400, statusMessage: 'SMTP 端口格式不正确' })
+      }
+      nextSmtp.port = port
+    }
+    if (smtpInput.security !== undefined) {
+      const security = String(smtpInput.security)
+      if (security !== 'none' && security !== 'starttls' && security !== 'tls') {
+        throw createError({ statusCode: 400, statusMessage: 'SMTP 连接安全类型不正确' })
+      }
+      nextSmtp.security = security
+    }
+    if (smtpInput.username !== undefined) {
+      nextSmtp.username = requireSmtpText(smtpInput.username, 'SMTP 用户名', 320)
+    }
+    if (smtpInput.fromAddress !== undefined) {
+      nextSmtp.fromAddress = requireEmailAddress(smtpInput.fromAddress)
+    }
+    if (smtpInput.fromName !== undefined) {
+      nextSmtp.fromName = requireSmtpText(smtpInput.fromName, '发件人名称', 128) || '悠哉世界'
+    }
+    if (smtpInput.password !== undefined && String(smtpInput.password) !== '') {
+      const password = String(smtpInput.password)
+      if (password.length > 1024 || /[\r\n]/.test(password)) {
+        throw createError({ statusCode: 400, statusMessage: 'SMTP 密码格式不正确' })
+      }
+      nextSmtp.encryptedPassword = encryptSmtpPassword(password)
+      smtpPasswordReplaced = true
+    }
+    if (!nextSmtp.username) {
+      if (smtpInput.password !== undefined && String(smtpInput.password) !== '') {
+        throw createError({ statusCode: 400, statusMessage: '填写 SMTP 密码时必须同时填写用户名' })
+      }
+      nextSmtp.encryptedPassword = ''
+    }
+    if (nextSmtp.username && nextSmtp.username !== currentStoredSmtp.username && !smtpPasswordReplaced) {
+      throw createError({ statusCode: 400, statusMessage: '更换 SMTP 用户名时必须重新填写密码' })
+    }
+    if (nextSmtp.security === 'none' && nextSmtp.username) {
+      throw createError({ statusCode: 400, statusMessage: '使用 SMTP 认证时必须启用 STARTTLS 或 TLS' })
+    }
+    if (!smtpSettingsAreComplete(nextSmtp)) {
+      throw createError({ statusCode: 400, statusMessage: '请完整填写 SMTP 服务器配置' })
+    }
+    if (nextSmtp.username && !smtpPasswordReplaced) decryptSmtpPassword(nextSmtp.encryptedPassword)
+  }
+
+  let emailVerificationRequired = current.emailVerificationRequired
+  if (input?.emailVerificationRequired !== undefined) {
+    if (typeof input.emailVerificationRequired !== 'boolean') {
+      throw createError({ statusCode: 400, statusMessage: '邮箱验证开关参数不正确' })
+    }
+    emailVerificationRequired = input.emailVerificationRequired
+  }
+  if (emailVerificationRequired && (hasSmtpInput || input?.emailVerificationRequired === true)) {
+    if (!smtpSettingsAreComplete(nextSmtp)) {
+      throw createError({ statusCode: 400, statusMessage: '启用邮箱验证前必须配置 SMTP 服务器' })
+    }
+    if (nextSmtp.username && !smtpPasswordReplaced) decryptSmtpPassword(nextSmtp.encryptedPassword)
+  }
+
+  const loginCooldown = input?.loginCooldown === undefined
+    ? current.loginCooldown
+    : Math.min(86_400, Math.max(-1, Math.trunc(Number(input.loginCooldown) || 0)))
+
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    setSetting('game_account.login_cooldown', String(loginCooldown))
+    if (hasSmtpInput) {
+      setSetting(SMTP_HOST_SETTING, nextSmtp.host)
+      setSetting(SMTP_PORT_SETTING, String(nextSmtp.port))
+      setSetting(SMTP_SECURITY_SETTING, nextSmtp.security)
+      setSetting(SMTP_USERNAME_SETTING, nextSmtp.username)
+      setSetting(SMTP_FROM_ADDRESS_SETTING, nextSmtp.fromAddress)
+      setSetting(SMTP_FROM_NAME_SETTING, nextSmtp.fromName)
+      if (nextSmtp.encryptedPassword) setSetting(SMTP_PASSWORD_SETTING, nextSmtp.encryptedPassword)
+      else deleteSetting(SMTP_PASSWORD_SETTING)
+    }
+    setSetting(GAME_EMAIL_VERIFICATION_SETTING, emailVerificationRequired ? 'true' : 'false')
+    if (current.emailVerificationRequired && !emailVerificationRequired) {
+      run('DELETE FROM game_registration_sessions')
+    }
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+  return getAdminGameAccountSettings()
+}
+
+interface GameRegistrationSession {
+  account: GameAccount
+  startSession: boolean
+  email: string | null
+  verificationCodeHash: string
+  codeExpiresAt: number
+  resendAfter: number
+  attempts: number
+  expiresAt: number
+}
+
+function cleanupGameRegistrationSessions(now = Date.now()): void {
+  run('DELETE FROM game_registration_sessions WHERE expires_at <= ?', now)
+}
+
+function registrationSessionIdentity(value: unknown): { id: string; hash: string } {
+  const id = String(value ?? '').trim()
+  if (!/^[a-f0-9]{64}$/i.test(id)) {
+    throw createError({ statusCode: 400, statusMessage: '邮箱注册会话 ID 格式不正确' })
+  }
+  return { id, hash: tokenDigest(id) }
+}
+
+function mapGameRegistrationSession(row: Record<string, unknown>): GameRegistrationSession {
+  return {
+    account: {
+      username: String(row.username ?? ''),
+      usernameLower: String(row.username_lower ?? ''),
+      uuid: row.uuid == null ? null : String(row.uuid),
+      email: row.email == null ? null : String(row.email),
+      password: String(row.password_hash ?? ''),
+      lastIp: String(row.last_ip ?? ''),
+      lastLoginIp: String(row.last_login_ip ?? ''),
+      lastAuthenticatedDate: String(row.last_authenticated_date ?? '1970-01-01T00:00:00Z'),
+      registrationDate: String(row.registration_date ?? new Date().toISOString()),
+      loginTries: Number(row.login_tries ?? 0),
+      lastKickedDate: String(row.last_kicked_date ?? '1970-01-01T00:00:00Z'),
+      lastPosition: row.last_position == null ? null : String(row.last_position),
+      inPlaceRespawnCount: Number(row.in_place_respawn_count ?? 0),
+    },
+    startSession: Number(row.start_session ?? 0) === 1,
+    email: row.email == null ? null : String(row.email),
+    verificationCodeHash: String(row.verification_code_hash ?? ''),
+    codeExpiresAt: Number(row.code_expires_at ?? 0),
+    resendAfter: Number(row.resend_after ?? 0),
+    attempts: Number(row.attempts ?? 0),
+    expiresAt: Number(row.expires_at ?? 0),
+  }
+}
+
+function getGameRegistrationSession(sessionId: unknown): { identity: { id: string; hash: string }; session: GameRegistrationSession } {
+  const identity = registrationSessionIdentity(sessionId)
+  cleanupGameRegistrationSessions()
+  const row = get('SELECT * FROM game_registration_sessions WHERE id_hash = ?', identity.hash)
+  if (!row) throw createError({ statusCode: 410, statusMessage: '邮箱注册会话已失效，请重新发起注册' })
+  return { identity, session: mapGameRegistrationSession(row) }
+}
+
+export function createGameRegistrationSession(
+  account: GameAccount,
+  startSession: boolean,
+): { sessionId: string; expiresInSeconds: number } {
+  const now = Date.now()
+  cleanupGameRegistrationSessions(now)
+  const sessionId = randomBytes(32).toString('hex')
+  const expiresAt = now + GAME_REGISTRATION_SESSION_TTL_MS
+  run('DELETE FROM game_registration_sessions WHERE username_lower = ?', account.usernameLower)
+  run(`INSERT INTO game_registration_sessions
+    (id_hash, username_lower, username, uuid, email, password_hash, last_ip, last_login_ip,
+     last_authenticated_date, registration_date, login_tries, last_kicked_date, last_position,
+     in_place_respawn_count, start_session, verification_code_hash, code_expires_at, resend_after,
+     attempts, expires_at, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    tokenDigest(sessionId), account.usernameLower, account.username, account.uuid, account.email,
+    account.password, account.lastIp, account.lastLoginIp, account.lastAuthenticatedDate,
+    account.registrationDate, account.loginTries, account.lastKickedDate, account.lastPosition,
+    account.inPlaceRespawnCount, startSession ? 1 : 0, null, null, 0, 0, expiresAt, now)
+  return { sessionId, expiresInSeconds: Math.floor(GAME_REGISTRATION_SESSION_TTL_MS / 1000) }
+}
+
+function registrationCodeDigest(sessionId: string, email: string, code: string): string {
+  return createHash('sha256').update(`${sessionId}\0${email}\0${code}`, 'utf8').digest('hex')
+}
+
+export function issueGameRegistrationEmailCode(
+  sessionIdValue: unknown,
+  emailValue: unknown,
+): { code: string; email: string; username: string; expiresInSeconds: number; resendAfterSeconds: number } {
+  const { identity, session } = getGameRegistrationSession(sessionIdValue)
+  const email = requireEmailAddress(emailValue)
+  const now = Date.now()
+  if (session.resendAfter > now) {
+    throw createError({
+      statusCode: 429,
+      statusMessage: '邮箱验证码发送过于频繁',
+      data: { retryAfterSeconds: Math.ceil((session.resendAfter - now) / 1000) },
+    })
+  }
+  const code = String(randomInt(0, 1_000_000)).padStart(6, '0')
+  const codeExpiresAt = Math.min(session.expiresAt, now + GAME_EMAIL_CODE_TTL_MS)
+  const update = run(`UPDATE game_registration_sessions
+       SET email = ?, verification_code_hash = ?, code_expires_at = ?, resend_after = ?, attempts = 0
+       WHERE id_hash = ? AND resend_after <= ?`,
+    email, registrationCodeDigest(identity.id, email, code), codeExpiresAt,
+    now + GAME_EMAIL_RESEND_DELAY_MS, identity.hash, now)
+  if (Number(update.changes ?? 0) !== 1) {
+    const latest = get('SELECT resend_after FROM game_registration_sessions WHERE id_hash = ?', identity.hash)
+    const retryAfterSeconds = Math.max(1, Math.ceil((Number(latest?.resend_after ?? now) - now) / 1000))
+    throw createError({
+      statusCode: 429,
+      statusMessage: '邮箱验证码发送过于频繁',
+      data: { retryAfterSeconds },
+    })
+  }
+  return {
+    code,
+    email,
+    username: session.account.username,
+    expiresInSeconds: Math.max(1, Math.ceil((codeExpiresAt - now) / 1000)),
+    resendAfterSeconds: Math.ceil(GAME_EMAIL_RESEND_DELAY_MS / 1000),
+  }
+}
+
+export function revokeGameRegistrationEmailCode(sessionIdValue: unknown, email: string, code: string): void {
+  const identity = registrationSessionIdentity(sessionIdValue)
+  run(`UPDATE game_registration_sessions
+       SET email = NULL, verification_code_hash = NULL, code_expires_at = NULL, resend_after = 0, attempts = 0
+       WHERE id_hash = ? AND verification_code_hash = ?`,
+    identity.hash, registrationCodeDigest(identity.id, email, code))
+}
+
+export function completeGameRegistration(
+  sessionIdValue: unknown,
+  codeValue: unknown,
+): { account: GameAccount; startSession: boolean } {
+  const code = String(codeValue ?? '').trim()
+  if (!/^\d{6}$/.test(code)) {
+    throw createError({ statusCode: 400, statusMessage: '邮箱验证码格式不正确' })
+  }
+  const { identity, session } = getGameRegistrationSession(sessionIdValue)
+  if (!session.email || !session.verificationCodeHash) {
+    throw createError({ statusCode: 409, statusMessage: '请先发送邮箱验证码' })
+  }
+  const now = Date.now()
+  if (session.codeExpiresAt <= now) {
+    run(`UPDATE game_registration_sessions
+         SET email = NULL, verification_code_hash = NULL, code_expires_at = NULL, resend_after = 0, attempts = 0
+         WHERE id_hash = ?`, identity.hash)
+    throw createError({ statusCode: 410, statusMessage: '邮箱验证码已过期，请重新发送' })
+  }
+  const actualHash = registrationCodeDigest(identity.id, session.email, code)
+  if (!safeEqualHex(actualHash, session.verificationCodeHash)) {
+    run('UPDATE game_registration_sessions SET attempts = attempts + 1 WHERE id_hash = ?', identity.hash)
+    const attempts = Number(get('SELECT attempts FROM game_registration_sessions WHERE id_hash = ?', identity.hash)?.attempts ?? GAME_EMAIL_MAX_ATTEMPTS)
+    if (attempts >= GAME_EMAIL_MAX_ATTEMPTS) {
+      run('DELETE FROM game_registration_sessions WHERE id_hash = ?', identity.hash)
+    }
+    throw createError({
+      statusCode: 400,
+      statusMessage: attempts >= GAME_EMAIL_MAX_ATTEMPTS ? '邮箱验证码错误次数过多，请重新注册' : '邮箱验证码错误',
+      data: { remainingAttempts: Math.max(0, GAME_EMAIL_MAX_ATTEMPTS - attempts) },
+    })
+  }
+
+  const account: GameAccount = {
+    ...session.account,
+    email: session.email,
+    lastAuthenticatedDate: session.startSession
+      ? new Date().toISOString()
+      : session.account.lastAuthenticatedDate,
+  }
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    const latest = get('SELECT verification_code_hash FROM game_registration_sessions WHERE id_hash = ?', identity.hash)
+    if (!latest || String(latest.verification_code_hash ?? '') !== session.verificationCodeHash) {
+      throw createError({ statusCode: 409, statusMessage: '邮箱注册会话状态已变化，请重试' })
+    }
+    if (getGameAccount(account.username)?.password) {
+      throw createError({ statusCode: 409, statusMessage: '账户已注册' })
+    }
+    upsertGameAccount(account)
+    run('DELETE FROM game_registration_sessions WHERE id_hash = ?', identity.hash)
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+  return { account, startSession: session.startSession }
 }
 
 function hashAdminPassword(password: string): string {
