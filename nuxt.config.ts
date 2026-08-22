@@ -3,7 +3,7 @@ export default defineNuxtConfig({
   devtools: { enabled: false },
   devServer: {
     host: '127.0.0.1',
-    port: 3000
+    port: 3800
   },
   css: ['~/assets/css/main.css'],
   nitro: {
