@@ -2,7 +2,7 @@
 
 Nuxt API 服务端与管理页面。生产环境建议通过 Cloudflare 以 `https://api.mcyzw.top` 提供访问。
 
-账户系统由本服务端权威保存与认证：游戏账户和当前连接会话存入 SQLite 的 `game_accounts` / `game_sessions`，皮肤与披风存入 `game_cosmetics`。管理页面 `/game-accounts` 可创建、注销、重置密码、解除登录锁定并配置登录冷却。玩家每次加入 Minecraft 服务器都必须重新认证。
+账户系统由本服务端权威保存与认证：游戏账户和当前连接会话存入 SQLite 的 `game_accounts` / `game_sessions`，皮肤与披风存入 `game_cosmetics`，服务器邮件存入 `game_mails` / `game_mail_refs`。管理页面 `/game-accounts` 可创建、注销、重置密码、解除登录锁定并配置登录冷却。玩家每次加入 Minecraft 服务器都必须重新认证。
 
 服务器模组通过 HMAC-SHA256 签名调用 `/api/game/*`。每个请求都必须携带
 `X-Yzwc-Timestamp`、`X-Yzwc-Nonce` 和 `X-Yzwc-Signature`，签名密钥由环境变量
@@ -33,6 +33,45 @@ Nuxt API 服务端与管理页面。生产环境建议通过 Cloudflare 以 `htt
 4. `POST /api/game/deactivate` 提交 `{"password":"当前密码"}`。成功后删除账户、全部认证/邮箱会话及其外观数据。
 
 换绑邮箱会话与验证码均在 10 分钟后失效，60 秒内不可重复发送；连续输入错误 5 次后会话失效。数据库唯一索引与完成验证时的事务复检共同保证每个邮箱最多绑定一个游戏账户。
+
+## 邮件系统
+
+服务器邮件也由本服务端权威保存：邮件正文（含附件）存入 SQLite 的 `game_mails`，每玩家收件箱引用存入 `game_mail_refs`。游戏模组不再保存任何邮件文件，玩家客户端的收件箱、发布、领取都最终落到下列接口上。以下请求同样需要游戏 API 的 HMAC 请求头签名。
+
+| 方法与路径 | 用途 |
+|-----------|------|
+| `GET /api/game/mail/inbox?uuid=&keep_starred=` | 玩家收件箱 + 未读数。`keep_starred=false` 时顺带剔除过期未星标的引用；隐藏中的邮件不下发 |
+| `GET /api/game/mail/unread?uuid=` | 单个玩家未读数 |
+| `POST /api/game/mail/unread` | 批量未读数，提交 `{"uuids":["..."]}`，返回 `{"counts":{"<uuid>":n}}`（一次最多 500 人） |
+| `GET /api/game/mail/sent` | 已发送邮件摘要列表，不含正文与附件 |
+| `GET /api/game/mail/detail?id=&viewer=` | 单封详情 + 编辑前置判定（`can_edit` / `need_hidden` / `deny_reason`）；`viewer` 可省略 |
+| `POST /api/game/mail/refs` | 批量取某封邮件在指定玩家处的引用，提交 `{"mail_id":"...","uuids":[...]}`（一次最多 500 人） |
+| `POST /api/game/mail` | 发布邮件 |
+| `PATCH /api/game/mail` | 编辑邮件，按新收件人列表对收件箱引用做 diff |
+| `DELETE /api/game/mail?id=` | 撤回邮件，返回原收件人 |
+| `POST /api/game/mail/hidden` | 编辑期间隐藏 / 恢复，提交 `{"id":"...","hidden":true}` |
+| `POST /api/game/mail/action` | 已读 / 星标 / 取消星标 / 删除，提交 `{"uuid":"...","mail_id":"...","action":"read\|star\|unstar\|delete"}` |
+| `POST /api/game/mail/claim` | 原子领取奖励 |
+| `POST /api/game/mail/purge` | 清理过期邮件，提交 `{"keep_starred":true}` |
+| `DELETE /api/game/mail/box?uuid=` | 账户注销时清空该玩家收件箱 |
+
+发布与编辑提交 `{sender, type, targets, scope_summary, title, body, expire_time, attachments, recipients}`（编辑另需 `id`，可选 `hidden`）。`type` 为 `ANNOUNCEMENT` / `NOTICE` / `REWARD`，`REWARD` 必须至少带一个附件；`expire_time` 为毫秒时间戳，`null` 表示永久。`targets` 是模组界面选择的原始接收范围（`{scope, args}`，`scope` 0=全体、1=非管理、2=指定玩家、3=角色组），只用于回填编辑界面与展示；实际收件人由 `recipients` 给出——非管理与角色组需要查 LuckPerms，只有模组能解析，因此由模组解析后一并提交。
+
+领取采用「先记账后发放」：`claim` 在一个事务里校验邮件类型、是否过期、引用是否存在与是否已领取，通过后立即写入 `claimed` 并返回附件，再由模组在游戏内实际发放。这样极端情况下最多丢一次奖励，但不会出现重复领取。
+
+清理过期邮件时 `keep_starred` 为真则保留被任意玩家星标过的过期邮件，并一并剔除指向已撤回邮件的悬空引用；返回的 `affected` 用于让模组刷新在线玩家的未读徽标。
+
+后台 `/mail`（导航里叫「服内邮件」）可以查看已发布的邮件，并发布公告与通知：列表给出每封的类型、发件人、接收范围、收件人数与已读 / 已领取统计，点「查看」看正文、接收范围明细、附件以及逐个收件人的读 / 收藏 / 领取状态。这几个接口走后台会话鉴权（`requireAuth`），与上面签名调用的 `/api/game/mail/*` 是两套独立入口：
+
+| 方法与路径 | 用途 |
+|-----------|------|
+| `GET /api/admin/mails` | 邮件列表 + 阅读 / 领取统计 |
+| `GET /api/admin/mails/:id` | 单封详情 + 逐收件人状态 |
+| `POST /api/admin/mails` | 发布公告 / 通知 |
+
+发布提交 `{type, title, body, expireOption, scope, players}`。`type` 只接受 `ANNOUNCEMENT` / `NOTICE`；`expireOption` 与游戏内一致（0=1 天、1=7 天、2=30 天、3=永久）；`scope` 为 `all`（全体账户）或 `players`（配 `players` 玩家代号数组，一次最多 500 个，重复与大小写差异会归一，写库时回填账户表里的规范大小写以便游戏内编辑界面回查）。发件人取当前后台账户的全名或用户名，**不接受请求体指定**，避免冒用他人身份；每次发布都会记入 `/audit-logs`。
+
+奖励邮件、编辑与撤回仍然只在游戏内进行：物品附件的 NBT 只能从管理员物品栏里的物品序列化，网页无法构造。后台发布的邮件没有 S2C 触发点，玩家打开信箱即可看到；未读徽标由模组按 `mail_module.unread_refresh_interval_ticks`（默认约 2.5 分钟）批量刷新后点亮，不是即时的。
 
 首次启动后访问根目录 `/`，设置首个后台用户名（3 至 32 位）、密码（12 至 128 位）、登录入口（12 至 64 位），以及 Turnstile 站点密钥、服务端密钥和允许的前端 hostname。
 设置成功后初始化接口会永久关闭，后续只能通过该入口登录。也可在首次启动前同时配置

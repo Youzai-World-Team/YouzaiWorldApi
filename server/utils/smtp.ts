@@ -3,7 +3,15 @@ import { once } from 'node:events'
 import { createConnection, isIP, type Socket } from 'node:net'
 import { hostname } from 'node:os'
 import { connect as connectTls, type TLSSocket } from 'node:tls'
-import type { SmtpTransportSettings } from './db'
+import { getVerificationEmailTemplates, type SmtpTransportSettings } from './db'
+import {
+  type VerificationEmailTemplate,
+} from './email-templates'
+import {
+  buildVerificationEmailHtml,
+  replaceVerificationEmailHtmlPlaceholders,
+  VERIFICATION_EMAIL_LOGO_URL,
+} from './email-template-renderer'
 
 const SMTP_TIMEOUT_MS = 15_000
 
@@ -143,17 +151,66 @@ function wrapBase64(value: string): string {
   return value.match(/.{1,76}/g)?.join('\r\n') || ''
 }
 
+export function buildVerificationEmailFromTemplate(
+  template: VerificationEmailTemplate,
+  username: string,
+  code: string,
+  logoUrl = VERIFICATION_EMAIL_LOGO_URL,
+): string {
+  const resolved = resolveVerificationEmailTemplateValues(template, username, code)
+  return resolved.html.trim()
+    ? replaceVerificationEmailHtmlPlaceholders(resolved.html, resolved.subject, username, code, logoUrl)
+    : buildVerificationEmailHtml(resolved.subject, username, code, resolved, logoUrl)
+}
+
+function resolveVerificationEmailTemplateValues(
+  template: VerificationEmailTemplate,
+  username: string,
+  code: string,
+): VerificationEmailTemplate {
+  const replacePlaceholders = (value: string) => value
+    .replaceAll('{{username}}', username)
+    .replaceAll('{{code}}', code)
+  return {
+    ...template,
+    subject: replacePlaceholders(template.subject),
+    heading: replacePlaceholders(template.heading),
+    intro: replacePlaceholders(template.intro),
+    expiryNotice: replacePlaceholders(template.expiryNotice),
+    details: template.details.map(replacePlaceholders),
+  }
+}
+
+export function buildVerificationEmailText(
+  template: VerificationEmailTemplate,
+  username: string,
+  code: string,
+): string[] {
+  const resolved = resolveVerificationEmailTemplateValues(template, username, code)
+  return [
+    `你好，${username}！`,
+    resolved.intro,
+    '',
+    `验证码：${code}`,
+    '',
+    resolved.expiryNotice,
+    ...resolved.details,
+  ]
+}
+
 function buildMessage(
   settings: SmtpTransportSettings,
   recipient: string,
   subjectText: string,
   contentLines: string[],
+  htmlContent: string,
 ): string {
   const fromName = encodeHeader(settings.fromName || '悠哉世界')
   const subject = encodeHeader(subjectText)
   const domain = settings.fromAddress.split('@')[1] || 'localhost'
   const messageId = `${randomBytes(16).toString('hex')}@${domain}`
   const content = contentLines.join('\r\n')
+  const boundary = `=_YouzaiWorld_${randomBytes(12).toString('hex')}`
   return [
     `Date: ${new Date().toUTCString()}`,
     `Message-ID: <${messageId}>`,
@@ -161,10 +218,19 @@ function buildMessage(
     `To: <${recipient}>`,
     `Subject: ${subject}`,
     'MIME-Version: 1.0',
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    '',
+    `--${boundary}`,
     'Content-Type: text/plain; charset=UTF-8',
     'Content-Transfer-Encoding: base64',
     '',
     wrapBase64(Buffer.from(content, 'utf8').toString('base64')),
+    `--${boundary}`,
+    'Content-Type: text/html; charset=UTF-8',
+    'Content-Transfer-Encoding: base64',
+    '',
+    wrapBase64(Buffer.from(htmlContent, 'utf8').toString('base64')),
+    `--${boundary}--`,
   ].join('\r\n')
 }
 
@@ -178,17 +244,14 @@ export async function sendRegistrationVerificationEmail(
   username: string,
   code: string,
 ): Promise<void> {
+  const template = getVerificationEmailTemplates().registration
+  const resolved = resolveVerificationEmailTemplateValues(template, username, code)
   const message = buildMessage(
     settings,
     recipient,
-    '悠哉世界游戏账户邮箱验证码',
-    [
-      `你正在为游戏账户 ${username} 验证邮箱。`,
-      '',
-      `验证码：${code}`,
-      '',
-      '验证码 10 分钟内有效。若非本人操作，请忽略此邮件。',
-    ],
+    resolved.subject,
+    buildVerificationEmailText(template, username, code),
+    buildVerificationEmailFromTemplate(template, username, code),
   )
   return sendMessage(settings, recipient, message)
 }
@@ -199,17 +262,14 @@ export async function sendPasswordResetVerificationEmail(
   username: string,
   code: string,
 ): Promise<void> {
+  const template = getVerificationEmailTemplates()['password-reset']
+  const resolved = resolveVerificationEmailTemplateValues(template, username, code)
   const message = buildMessage(
     settings,
     recipient,
-    '悠哉世界游戏账户找回密码验证码',
-    [
-      `你正在为游戏账户 ${username} 找回密码。`,
-      '',
-      `验证码：${code}`,
-      '',
-      '验证码 10 分钟内有效。若非本人操作，请忽略此邮件并保护好账户。',
-    ],
+    resolved.subject,
+    buildVerificationEmailText(template, username, code),
+    buildVerificationEmailFromTemplate(template, username, code),
   )
   return sendMessage(settings, recipient, message)
 }
@@ -220,18 +280,14 @@ export async function sendEmailChangeVerificationEmail(
   username: string,
   code: string,
 ): Promise<void> {
+  const template = getVerificationEmailTemplates()['email-change']
+  const resolved = resolveVerificationEmailTemplateValues(template, username, code)
   const message = buildMessage(
     settings,
     recipient,
-    '悠哉世界游戏账户换绑邮箱验证码',
-    [
-      `你正在为游戏账户 ${username} 换绑邮箱。`,
-      '',
-      `验证码：${code}`,
-      '',
-      '验证码 10 分钟内有效。验证成功后，该邮箱将成为账户的新绑定邮箱。',
-      '若非本人操作，请忽略此邮件并立即修改账户密码。',
-    ],
+    resolved.subject,
+    buildVerificationEmailText(template, username, code),
+    buildVerificationEmailFromTemplate(template, username, code),
   )
   return sendMessage(settings, recipient, message)
 }

@@ -1,0 +1,29 @@
+import {
+  buildVerificationEmailFromTemplate,
+} from '../../utils/smtp'
+import { getRequestURL } from 'h3'
+import { getVerificationEmailTemplates, requireAuth } from '../../utils/db'
+import type { VerificationEmailTemplateKind } from '../../utils/email-templates'
+
+const PREVIEW_KINDS: VerificationEmailTemplateKind[] = [
+  'registration',
+  'password-reset',
+  'email-change',
+]
+
+export default defineEventHandler((event) => {
+  const user = requireAuth(event)
+  const requestedKind = String(getQuery(event).type || 'registration') as VerificationEmailTemplateKind
+  if (!PREVIEW_KINDS.includes(requestedKind)) {
+    throw createError({ statusCode: 400, statusMessage: '不支持的验证码邮件类型' })
+  }
+
+  setResponseHeader(event, 'Cache-Control', 'no-store')
+  setResponseHeader(event, 'Content-Type', 'text/html; charset=UTF-8')
+  return buildVerificationEmailFromTemplate(
+    getVerificationEmailTemplates()[requestedKind],
+    user.fullName || user.username,
+    '123456',
+    `${getRequestURL(event).origin}/images/uzw-tm.png`,
+  )
+})

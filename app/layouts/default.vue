@@ -11,7 +11,8 @@ const baseNavItems = [
   { label: '捐赠列表', icon: 'redeem', to: '/donors' },
   { label: '封禁列表', icon: 'gavel', to: '/bans' },
   { label: '更新服务', icon: 'system_update', to: '/updates' },
-  { label: '游戏账户', icon: 'manage_accounts', to: '/game-accounts' }
+  { label: '游戏账户', icon: 'manage_accounts', to: '/game-accounts' },
+  { label: '服内邮件', icon: 'mail', to: '/mail' }
 ]
 interface CurrentUser {
   username: string

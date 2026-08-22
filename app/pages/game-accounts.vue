@@ -349,6 +349,10 @@ onMounted(() => {
             <md-icon slot="icon">mail</md-icon>
             配置 SMTP
           </md-text-button>
+          <md-text-button :disabled="loading || savingEmailSettings" @click="navigateTo('/game-account-email-templates')">
+            <md-icon slot="icon">edit_note</md-icon>
+            编辑邮件模板
+          </md-text-button>
         </div>
         <p class="smtp-status" :class="{ 'smtp-status--ready': settings.smtpConfigured }">
           {{ settings.smtpConfigured ? `SMTP 已配置：${settings.smtp.host}` : 'SMTP 尚未配置' }}
@@ -385,6 +389,7 @@ onMounted(() => {
       <div slot="content" class="dialog-form"><md-outlined-text-field label="玩家代号" :value="username" @input="username = ($event.target as HTMLInputElement).value"></md-outlined-text-field><md-outlined-text-field type="password" label="初始密码" :value="password" @input="password = ($event.target as HTMLInputElement).value"></md-outlined-text-field><md-outlined-text-field label="离线 UUID（自动生成）" :value="uuid || '输入玩家代号后自动生成'" readonly></md-outlined-text-field></div>
       <div slot="actions"><md-text-button @click="showCreate = false">取消</md-text-button><md-filled-button @click="createAccount">创建</md-filled-button></div>
     </md-dialog>
+
     <md-dialog ref="resetDialog" :open="!!resetTarget" @closed="resetTarget = null">
       <div slot="headline">重置密码</div>
       <div slot="content" class="dialog-form"><p>账户：{{ resetTarget?.username }}</p><md-outlined-text-field type="password" label="新密码" :value="resetPassword" @input="resetPassword = ($event.target as HTMLInputElement).value"></md-outlined-text-field></div>
@@ -525,6 +530,8 @@ onMounted(() => {
 .setting-action {
   display: flex;
   justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 4px;
 }
 
 .email-verification-row {

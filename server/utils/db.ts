@@ -7,12 +7,25 @@ import {
   pbkdf2Sync,
   randomBytes,
   randomInt,
+  randomUUID,
   timingSafeEqual,
 } from 'node:crypto'
 import { mkdirSync, promises as fs } from 'node:fs'
 import path from 'node:path'
 import { getCookie, getHeader, createError, type H3Event } from 'h3'
-import { offlinePlayerUuid, requireEmailAddress } from './game-input'
+import { offlinePlayerUuid, requireEmailAddress, requireGameUsername } from './game-input'
+import type { MailAction, MailAttachment, MailTargetSpec, MailType } from './game-input'
+import {
+  cloneVerificationEmailTemplates,
+  DEFAULT_VERIFICATION_EMAIL_TEMPLATES,
+  resolveVerificationEmailTemplate,
+  VERIFICATION_EMAIL_TEMPLATE_KINDS,
+  type VerificationEmailTemplates,
+} from './email-templates'
+import {
+  buildVerificationEmailTemplateSource,
+  VERIFICATION_EMAIL_LOGO_URL,
+} from './email-template-renderer'
 
 const dataDir = path.resolve(process.cwd(), 'server/data')
 mkdirSync(dataDir, { recursive: true })
@@ -174,6 +187,32 @@ db.exec(`
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (uuid, slot)
   );
+  CREATE TABLE IF NOT EXISTS game_mails (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL,
+    sender TEXT NOT NULL,
+    targets TEXT NOT NULL DEFAULT '[]',
+    scope_summary TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL DEFAULT '',
+    body TEXT NOT NULL DEFAULT '',
+    created_time INTEGER NOT NULL,
+    expire_time INTEGER,
+    claimed INTEGER NOT NULL DEFAULT 0,
+    hidden INTEGER NOT NULL DEFAULT 0,
+    attachments TEXT NOT NULL DEFAULT '[]',
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS game_mails_expire_idx ON game_mails (expire_time);
+  CREATE TABLE IF NOT EXISTS game_mail_refs (
+    mail_id TEXT NOT NULL,
+    player_uuid TEXT NOT NULL,
+    read INTEGER NOT NULL DEFAULT 0,
+    starred INTEGER NOT NULL DEFAULT 0,
+    claimed INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (mail_id, player_uuid)
+  );
+  CREATE INDEX IF NOT EXISTS game_mail_refs_player_idx ON game_mail_refs (player_uuid);
   CREATE TABLE IF NOT EXISTS api_request_nonces (
     nonce TEXT PRIMARY KEY,
     expires_at INTEGER NOT NULL
@@ -188,12 +227,25 @@ db.exec(`
     name TEXT NOT NULL,
     content TEXT NOT NULL,
     avatar TEXT NOT NULL DEFAULT '',
+    role TEXT NOT NULL DEFAULT 'guest',
     ip_hash TEXT NOT NULL,
     ip_location TEXT NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS chat_messages_created_idx ON chat_messages (created_at);
   CREATE INDEX IF NOT EXISTS chat_messages_ip_idx ON chat_messages (ip_hash, created_at);
+  CREATE TABLE IF NOT EXISTS chat_player_sessions (
+    token TEXT PRIMARY KEY,
+    username TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS chat_player_sessions_expires_idx ON chat_player_sessions (expires_at);
+  CREATE TABLE IF NOT EXISTS chat_login_rate_limits (
+    rate_key TEXT PRIMARY KEY,
+    window_started INTEGER NOT NULL,
+    attempts INTEGER NOT NULL
+  );
   CREATE TABLE IF NOT EXISTS ip_locations (
     ip_hash TEXT PRIMARY KEY,
     location TEXT NOT NULL,
@@ -293,15 +345,24 @@ if (!gameAccountEmailIndex) {
   `)
 }
 
-// 后台以自己的账户身份发言时需要保存头像；公开发言留空，由官网按昵称生成像素头像。
+// 后台/玩家身份发言需要保存头像与角色标记；访客两者都是默认值，
+// 由官网按昵称生成像素头像且不显示标记。
 const chatMessageColumns = db.prepare('PRAGMA table_info(chat_messages)').all() as { name?: string }[]
-if (!chatMessageColumns.some((column) => column.name === 'avatar')) {
+for (const [column, definition] of [
+  ['avatar', "TEXT NOT NULL DEFAULT ''"],
+  ['role', "TEXT NOT NULL DEFAULT 'guest'"],
+] as const) {
+  if (chatMessageColumns.some((item) => item.name === column)) continue
   try {
-    db.exec("ALTER TABLE chat_messages ADD COLUMN avatar TEXT NOT NULL DEFAULT ''")
+    db.exec(`ALTER TABLE chat_messages ADD COLUMN ${column} ${definition}`)
   } catch (error) {
     // 多进程同时启动时，允许另一进程已经先完成同一迁移。
     const migratedColumns = db.prepare('PRAGMA table_info(chat_messages)').all() as { name?: string }[]
-    if (!migratedColumns.some((column) => column.name === 'avatar')) throw error
+    if (!migratedColumns.some((item) => item.name === column)) throw error
+  }
+  // role 取代了早期的布尔列 is_admin，迁移时把既有管理员消息标记搬过来。
+  if (column === 'role' && chatMessageColumns.some((item) => item.name === 'is_admin')) {
+    db.exec("UPDATE chat_messages SET role = 'admin' WHERE is_admin = 1")
   }
 }
 
@@ -329,6 +390,7 @@ const SMTP_USERNAME_SETTING = 'game_account.smtp.username'
 const SMTP_PASSWORD_SETTING = 'game_account.smtp.password'
 const SMTP_FROM_ADDRESS_SETTING = 'game_account.smtp.from_address'
 const SMTP_FROM_NAME_SETTING = 'game_account.smtp.from_name'
+const EMAIL_TEMPLATES_SETTING = 'game_account.email_templates'
 const TURNSTILE_SITE_KEY_SETTING = 'turnstile.site_key'
 const TURNSTILE_SECRET_SETTING = 'turnstile.secret'
 const TURNSTILE_HOSTNAMES_SETTING = 'turnstile.hostnames'
@@ -344,12 +406,15 @@ const CHAT_RATE_MAX_MESSAGES = 5
 const CHAT_HISTORY_LIMIT = 200
 const CHAT_RETAINED_ROWS = 500
 const CHAT_NAME_RE = /^[一-龥A-Za-z0-9_-]{2,16}$/
+const CHAT_PLAYER_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000
+const CHAT_LOGIN_RATE_WINDOW_MS = 15 * 60 * 1000
+const CHAT_LOGIN_RATE_MAX_ATTEMPTS = 5
 const IP_LOCATION_TTL_MS = 7 * 24 * 60 * 60 * 1000
 const ADMIN_ENTRY_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{11,63}$/
 const ADMIN_AVATAR_RE = /^\/(?:favicon\.ico|api\/uploads\/[A-Za-z0-9._-]+\.(?:png|jpe?g|webp|gif|avif))$/
 const RESERVED_ADMIN_ENTRIES = new Set([
   'login', 'account', 'activity', 'donors', 'bans', 'updates', 'game-accounts',
-  'admin-users', 'audit-logs', 'chat', 'api', '_nuxt', '_ipx', 'favicon', '__nuxt_error',
+  'admin-users', 'audit-logs', 'chat', 'mail', 'api', '_nuxt', '_ipx', 'favicon', '__nuxt_error',
 ])
 
 export const ADMIN_COOKIE_NAME = '__Host-yzwc_admin'
@@ -849,12 +914,17 @@ export function deleteUpdate(id: string) {
   run('DELETE FROM updates WHERE id = ?', id)
 }
 
+/** 访客只填昵称；玩家用游戏账户登录；管理员由后台代发。 */
+export type ChatRole = 'guest' | 'player' | 'admin'
+
 export interface ChatMessage {
   id: string
   name: string
   content: string
-  /** 后台代发时为管理员头像路径；公开发言为空串，由官网按昵称生成像素头像。 */
+  /** 后台代发时为管理员头像路径；其余为空串，由官网按昵称生成像素头像。 */
   avatar: string
+  /** 由服务端按凭据判定，公开接口无法自行指定，因此可作为可信标记。 */
+  role: ChatRole
   location: string
   time: number
 }
@@ -901,12 +971,17 @@ export function requireChatContent(value: unknown): string {
   return content
 }
 
+function normalizeChatRole(value: unknown): ChatRole {
+  return value === 'admin' || value === 'player' ? value : 'guest'
+}
+
 function mapChatMessage(row: Record<string, unknown>): ChatMessage {
   return {
     id: String(row.id),
     name: String(row.name),
     content: String(row.content),
     avatar: String(row.avatar || ''),
+    role: normalizeChatRole(row.role),
     location: String(row.ip_location || '未知'),
     time: Number(row.created_at) || 0,
   }
@@ -920,7 +995,7 @@ function normalizeChatLimit(limit: number): number {
 // 返回最旧在前，前端可直接顺序渲染成聊天流。
 export function listChatMessages(limit = CHAT_HISTORY_LIMIT): ChatMessage[] {
   const rows = all(
-    'SELECT id, name, content, avatar, ip_location, created_at FROM chat_messages ORDER BY created_at DESC, rowid DESC LIMIT ?',
+    'SELECT id, name, content, avatar, role, ip_location, created_at FROM chat_messages ORDER BY created_at DESC, rowid DESC LIMIT ?',
     normalizeChatLimit(limit),
   )
   return rows.map(mapChatMessage).reverse()
@@ -928,7 +1003,7 @@ export function listChatMessages(limit = CHAT_HISTORY_LIMIT): ChatMessage[] {
 
 export function listAdminChatMessages(limit = CHAT_RETAINED_ROWS): AdminChatMessage[] {
   const rows = all(
-    'SELECT id, name, content, avatar, ip_location, ip_hash, created_at FROM chat_messages ORDER BY created_at DESC, rowid DESC LIMIT ?',
+    'SELECT id, name, content, avatar, role, ip_location, ip_hash, created_at FROM chat_messages ORDER BY created_at DESC, rowid DESC LIMIT ?',
     normalizeChatLimit(limit),
   )
   return rows.map((row) => ({ ...mapChatMessage(row), ipTag: String(row.ip_hash).slice(0, 12) }))
@@ -970,6 +1045,7 @@ export function insertChatMessage(input: {
   ipHash: string
   location: string
   avatar?: string
+  role?: ChatRole
 }): ChatMessage {
   const now = Date.now()
   const message: ChatMessage = {
@@ -978,12 +1054,15 @@ export function insertChatMessage(input: {
     name: input.name.slice(0, 64),
     content: input.content,
     avatar: (input.avatar || '').slice(0, 256),
+    role: normalizeChatRole(input.role),
     location: input.location || '未知',
     time: now,
   }
   run(
-    'INSERT INTO chat_messages (id, name, content, avatar, ip_hash, ip_location, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    message.id, message.name, message.content, message.avatar, input.ipHash, message.location, now,
+    `INSERT INTO chat_messages (id, name, content, avatar, role, ip_hash, ip_location, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    message.id, message.name, message.content, message.avatar, message.role,
+    input.ipHash, message.location, now,
   )
   // 只回收超出保留条数且已经离开限流窗口的记录，避免高峰期把限流依据删掉。
   run(
@@ -1003,6 +1082,102 @@ export function deleteChatMessage(id: string): boolean {
 export function clearChatMessages(): number {
   const result = run('DELETE FROM chat_messages')
   return Number(result.changes ?? 0)
+}
+
+/*
+ * 聊天区玩家登录：独立于 game_sessions。
+ * 刻意不复用 createGameSession —— 后者会删掉该玩家已有的游戏会话，
+ * 网页登录一次就会把人踢下线。这里也不读写 game_accounts.loginTries，
+ * 避免有人拿别人的玩家代号在网页上乱试密码、把对方锁在游戏外。
+ */
+
+export function assertChatLoginAllowed(ip: string): void {
+  const now = Date.now()
+  const key = tokenDigest(ip || 'unknown')
+  const row = get('SELECT window_started, attempts FROM chat_login_rate_limits WHERE rate_key = ?', key)
+  if (!row) return
+  const started = Number(row.window_started)
+  if (!Number.isFinite(started) || started + CHAT_LOGIN_RATE_WINDOW_MS <= now) {
+    run('DELETE FROM chat_login_rate_limits WHERE rate_key = ?', key)
+    return
+  }
+  if (Number(row.attempts) >= CHAT_LOGIN_RATE_MAX_ATTEMPTS) {
+    const retryAfterSeconds = Math.max(1, Math.ceil((started + CHAT_LOGIN_RATE_WINDOW_MS - now) / 1000))
+    throw createError({
+      statusCode: 429,
+      statusMessage: '登录尝试过多，请稍后重试',
+      data: { retryAfterSeconds },
+    })
+  }
+}
+
+export function recordChatLoginFailure(ip: string): void {
+  const now = Date.now()
+  const key = tokenDigest(ip || 'unknown')
+  const row = get('SELECT window_started FROM chat_login_rate_limits WHERE rate_key = ?', key)
+  const started = Number(row?.window_started)
+  if (!row || !Number.isFinite(started) || started + CHAT_LOGIN_RATE_WINDOW_MS <= now) {
+    run(`INSERT INTO chat_login_rate_limits (rate_key, window_started, attempts) VALUES (?, ?, 1)
+         ON CONFLICT(rate_key) DO UPDATE SET window_started = excluded.window_started, attempts = 1`, key, now)
+    return
+  }
+  run('UPDATE chat_login_rate_limits SET attempts = attempts + 1 WHERE rate_key = ?', key)
+}
+
+export function clearChatLoginFailures(ip: string): void {
+  run('DELETE FROM chat_login_rate_limits WHERE rate_key = ?', tokenDigest(ip || 'unknown'))
+}
+
+/** 校验游戏账户凭据，成功返回账户内记录的规范大小写玩家代号。 */
+export function verifyChatPlayerLogin(usernameValue: unknown, passwordValue: unknown): string {
+  const username = requireGameUsername(usernameValue)
+  const account = getGameAccount(username)
+  const password = typeof passwordValue === 'string' ? passwordValue : ''
+
+  // 账户不存在与密码错误返回同一条文案，避免暴露哪些玩家代号已注册。
+  if (!account?.password || !verifyGamePassword(password, account.password)) {
+    throw createError({ statusCode: 401, statusMessage: '玩家代号或密码错误' })
+  }
+  return account.username
+}
+
+export function createChatPlayerSession(username: string): { token: string; expiresAt: number } {
+  cleanupChatPlayerSessions()
+  const token = randomBytes(32).toString('hex')
+  const expiresAt = Date.now() + CHAT_PLAYER_SESSION_TTL_MS
+  run(
+    'INSERT INTO chat_player_sessions (token, username, created_at, expires_at) VALUES (?, ?, ?, ?)',
+    tokenDigest(token), username, Date.now(), expiresAt,
+  )
+  return { token, expiresAt }
+}
+
+/** 校验聊天会话令牌，返回玩家代号；失效时抛 401。 */
+export function requireChatPlayerSession(tokenValue: unknown): string {
+  const token = typeof tokenValue === 'string' ? tokenValue.trim() : ''
+  if (!token || token.length > 128) {
+    throw createError({ statusCode: 401, statusMessage: '登录状态已失效，请重新登录' })
+  }
+  const digest = tokenDigest(token)
+  const row = get('SELECT username, expires_at FROM chat_player_sessions WHERE token = ?', digest)
+  if (!row) {
+    throw createError({ statusCode: 401, statusMessage: '登录状态已失效，请重新登录' })
+  }
+  if (Number(row.expires_at) <= Date.now()) {
+    run('DELETE FROM chat_player_sessions WHERE token = ?', digest)
+    throw createError({ statusCode: 401, statusMessage: '登录状态已过期，请重新登录' })
+  }
+  return String(row.username)
+}
+
+export function deleteChatPlayerSession(tokenValue: unknown): void {
+  const token = typeof tokenValue === 'string' ? tokenValue.trim() : ''
+  if (!token) return
+  run('DELETE FROM chat_player_sessions WHERE token = ?', tokenDigest(token))
+}
+
+function cleanupChatPlayerSessions(now = Date.now()): void {
+  run('DELETE FROM chat_player_sessions WHERE expires_at <= ?', now)
 }
 
 export function getCachedIpLocation(ipHash: string): string | undefined {
@@ -1286,6 +1461,7 @@ export interface GameAccountSettings {
 
 export interface AdminGameAccountSettings extends GameAccountSettings {
   smtp: Omit<SmtpTransportSettings, 'password'> & { passwordConfigured: boolean }
+  emailTemplates: VerificationEmailTemplates
 }
 
 interface StoredSmtpSettings extends Omit<SmtpTransportSettings, 'password'> {
@@ -1390,7 +1566,35 @@ export function getAdminGameAccountSettings(): AdminGameAccountSettings {
       fromName: smtp.fromName,
       passwordConfigured: Boolean(smtp.encryptedPassword),
     },
+    emailTemplates: getVerificationEmailTemplates(),
   }
+}
+
+export function getVerificationEmailTemplates(): VerificationEmailTemplates {
+  const templates = cloneVerificationEmailTemplates()
+  const raw = getSetting(EMAIL_TEMPLATES_SETTING)
+  if (!raw) {
+    for (const kind of VERIFICATION_EMAIL_TEMPLATE_KINDS) {
+      templates[kind].html = buildVerificationEmailTemplateSource(templates[kind])
+    }
+    return templates
+  }
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    for (const kind of VERIFICATION_EMAIL_TEMPLATE_KINDS) {
+      templates[kind] = resolveVerificationEmailTemplate(parsed?.[kind], DEFAULT_VERIFICATION_EMAIL_TEMPLATES[kind])
+      if (!templates[kind].html.trim()) templates[kind].html = buildVerificationEmailTemplateSource(templates[kind])
+      templates[kind].html = templates[kind].html
+        .replaceAll(VERIFICATION_EMAIL_LOGO_URL, '{{logoUrl}}')
+        .replaceAll('/images/uzw-tm.png', '{{logoUrl}}')
+    }
+  } catch {
+    for (const kind of VERIFICATION_EMAIL_TEMPLATE_KINDS) {
+      templates[kind].html = buildVerificationEmailTemplateSource(templates[kind])
+    }
+    return templates
+  }
+  return templates
 }
 
 export function getSmtpTransportSettings(): SmtpTransportSettings {
@@ -1427,6 +1631,27 @@ export function setAdminGameAccountSettings(input: Record<string, any>): AdminGa
   const hasSmtpInput = smtpInput !== undefined
   if (hasSmtpInput && (!smtpInput || typeof smtpInput !== 'object' || Array.isArray(smtpInput))) {
     throw createError({ statusCode: 400, message: 'SMTP 配置格式不正确' })
+  }
+
+  const emailTemplatesInput = input?.emailTemplates
+  const hasEmailTemplatesInput = emailTemplatesInput !== undefined
+  if (hasEmailTemplatesInput && (!emailTemplatesInput || typeof emailTemplatesInput !== 'object' || Array.isArray(emailTemplatesInput))) {
+    throw createError({ statusCode: 400, message: '邮件模板格式不正确' })
+  }
+  const nextEmailTemplates = getVerificationEmailTemplates()
+  if (hasEmailTemplatesInput) {
+    try {
+      for (const kind of VERIFICATION_EMAIL_TEMPLATE_KINDS) {
+        if (emailTemplatesInput[kind] !== undefined) {
+          nextEmailTemplates[kind] = resolveVerificationEmailTemplate(
+            emailTemplatesInput[kind],
+            nextEmailTemplates[kind],
+          )
+        }
+      }
+    } catch (error) {
+      throw createError({ statusCode: 400, message: error instanceof Error ? error.message : '邮件模板格式不正确' })
+    }
   }
 
   const nextSmtp: StoredSmtpSettings = { ...currentStoredSmtp }
@@ -1518,6 +1743,7 @@ export function setAdminGameAccountSettings(input: Record<string, any>): AdminGa
       if (nextSmtp.encryptedPassword) setSetting(SMTP_PASSWORD_SETTING, nextSmtp.encryptedPassword)
       else deleteSetting(SMTP_PASSWORD_SETTING)
     }
+    if (hasEmailTemplatesInput) setSetting(EMAIL_TEMPLATES_SETTING, JSON.stringify(nextEmailTemplates))
     setSetting(GAME_EMAIL_VERIFICATION_SETTING, emailVerificationRequired ? 'true' : 'false')
     if (current.emailVerificationRequired && !emailVerificationRequired) {
       run('DELETE FROM game_registration_sessions')
@@ -2285,6 +2511,569 @@ export function replaceGameCosmetics(uuid: string, slots: Record<string, Uint8Ar
   } catch (error) {
     db.exec('ROLLBACK')
     throw error
+  }
+}
+
+// ============================================================================
+// 邮件系统（原模组 SentMailRepository + MailDataStorage 的权威存储）
+// ----------------------------------------------------------------------------
+// game_mails      —— 邮件正文仓库，等价于旧 data.json 的 sent_mails 块
+// game_mail_refs  —— 每玩家收件箱引用，等价于旧 box/<player-uuid>.json
+// 接收范围（NONADMIN / ROLE）需要 LuckPerms，仍由模组解析后把收件人 UUID 传进来。
+// ============================================================================
+
+export interface GameMail {
+  id: string
+  type: MailType
+  sender: string
+  targets: MailTargetSpec[]
+  scopeSummary: string
+  title: string
+  body: string
+  createdTime: number
+  expireTime: number | null
+  claimed: boolean
+  hidden: boolean
+  attachments: MailAttachment[]
+}
+
+export interface GameMailRef {
+  mailId: string
+  read: boolean
+  starred: boolean
+  claimed: boolean
+}
+
+/** 发布 / 编辑邮件时的字段集合，不含运行期状态（claimed / hidden）。 */
+export interface GameMailInput {
+  type: MailType
+  sender: string
+  targets: MailTargetSpec[]
+  scopeSummary: string
+  title: string
+  body: string
+  expireTime: number | null
+  attachments: MailAttachment[]
+}
+
+export interface GameMailEditState {
+  canEdit: boolean
+  needHidden: boolean
+  denyReason: string
+}
+
+function parseJsonArray<T>(value: unknown): T[] {
+  try {
+    const parsed = JSON.parse(String(value ?? '[]'))
+    return Array.isArray(parsed) ? (parsed as T[]) : []
+  } catch {
+    // 单行数据损坏不应让整个信箱查询失败；缺失的部分按空列表处理。
+    return []
+  }
+}
+
+function mapGameMail(row: Record<string, unknown>): GameMail {
+  const expireTime = row.expire_time == null ? null : Number(row.expire_time)
+  return {
+    id: String(row.id ?? ''),
+    type: String(row.type ?? 'NOTICE') as MailType,
+    sender: String(row.sender ?? ''),
+    targets: parseJsonArray<MailTargetSpec>(row.targets),
+    scopeSummary: String(row.scope_summary ?? ''),
+    title: String(row.title ?? ''),
+    body: String(row.body ?? ''),
+    createdTime: Number(row.created_time ?? 0),
+    expireTime: expireTime != null && Number.isFinite(expireTime) ? expireTime : null,
+    claimed: Number(row.claimed ?? 0) === 1,
+    hidden: Number(row.hidden ?? 0) === 1,
+    attachments: parseJsonArray<MailAttachment>(row.attachments),
+  }
+}
+
+function mapGameMailRef(row: Record<string, unknown>): GameMailRef {
+  return {
+    mailId: String(row.mail_id ?? ''),
+    read: Number(row.read ?? 0) === 1,
+    starred: Number(row.starred ?? 0) === 1,
+    claimed: Number(row.claimed ?? 0) === 1,
+  }
+}
+
+export function gameMailWire(mail: GameMail) {
+  return {
+    id: mail.id,
+    type: mail.type,
+    sender: mail.sender,
+    targets: mail.targets,
+    scope_summary: mail.scopeSummary,
+    title: mail.title,
+    body: mail.body,
+    created_time: mail.createdTime,
+    expire_time: mail.expireTime,
+    claimed: mail.claimed,
+    hidden: mail.hidden,
+    attachments: mail.attachments.map((attachment) => ({
+      type: attachment.type,
+      data: attachment.data,
+      amount: attachment.amount,
+      item_nbt: attachment.itemNbt,
+    })),
+  }
+}
+
+/** 已发送列表只需要摘要字段，不下发正文与附件。 */
+export function gameMailSummaryWire(mail: GameMail) {
+  return {
+    id: mail.id,
+    type: mail.type,
+    title: mail.title,
+    scope_summary: mail.scopeSummary,
+    created_time: mail.createdTime,
+    expire_time: mail.expireTime,
+    sender: mail.sender,
+  }
+}
+
+export function gameMailRefWire(ref: GameMailRef) {
+  return { mail_id: ref.mailId, read: ref.read, starred: ref.starred, claimed: ref.claimed }
+}
+
+function gameMailIsExpired(mail: GameMail, now = Date.now()): boolean {
+  return mail.expireTime != null && now > mail.expireTime
+}
+
+/** 与模组 {@code MailManager.computeCanEdit} 完全一致的编辑前置判定。 */
+export function computeGameMailEditState(mail: GameMail): GameMailEditState {
+  if (mail.attachments.length === 0) return { canEdit: true, needHidden: false, denyReason: '' }
+  if (mail.claimed) {
+    return { canEdit: false, needHidden: true, denyReason: '已有玩家领取过附件，不可编辑，仅可撤回' }
+  }
+  return { canEdit: true, needHidden: true, denyReason: '' }
+}
+
+export function getGameMail(id: string): GameMail | undefined {
+  const row = get('SELECT * FROM game_mails WHERE id = ?', id)
+  return row ? mapGameMail(row) : undefined
+}
+
+export function listGameMails(): GameMail[] {
+  return all('SELECT * FROM game_mails ORDER BY created_time DESC, id').map(mapGameMail)
+}
+
+export function listGameMailRecipients(mailId: string): string[] {
+  return all('SELECT player_uuid FROM game_mail_refs WHERE mail_id = ?', mailId)
+    .map((row) => String(row.player_uuid))
+}
+
+export function getGameMailRef(mailId: string, playerUuid: string): GameMailRef | undefined {
+  const row = get('SELECT * FROM game_mail_refs WHERE mail_id = ? AND player_uuid = ?', mailId, playerUuid)
+  return row ? mapGameMailRef(row) : undefined
+}
+
+/** 删除指向已撤回邮件的悬空引用，返回受影响的引用条数。 */
+function pruneDanglingGameMailRefs(playerUuid?: string): number {
+  const result = playerUuid
+    ? run(`DELETE FROM game_mail_refs
+           WHERE player_uuid = ? AND mail_id NOT IN (SELECT id FROM game_mails)`, playerUuid)
+    : run('DELETE FROM game_mail_refs WHERE mail_id NOT IN (SELECT id FROM game_mails)')
+  return Number(result.changes ?? 0)
+}
+
+/**
+ * 加载收件箱前的清理，语义对齐旧 {@code MailDataStorage.load}：
+ * 悬空引用一律剔除；仅当配置关闭「过期后保留星标」时，才连过期未星标的引用一起剔除。
+ */
+function cleanupGameMailbox(playerUuid: string, keepStarred: boolean): void {
+  pruneDanglingGameMailRefs(playerUuid)
+  if (keepStarred) return
+  run(`DELETE FROM game_mail_refs
+       WHERE player_uuid = ? AND starred = 0 AND mail_id IN (
+         SELECT id FROM game_mails WHERE expire_time IS NOT NULL AND expire_time < ?
+       )`, playerUuid, Date.now())
+}
+
+/** 未读数只统计客户端真正能看到的邮件：排除悬空引用与编辑中隐藏的邮件。 */
+export function countGameMailUnread(playerUuid: string): number {
+  const row = get(`SELECT COUNT(*) AS total FROM game_mail_refs r
+                   JOIN game_mails m ON m.id = r.mail_id
+                   WHERE r.player_uuid = ? AND r.read = 0 AND m.hidden = 0`, playerUuid)
+  return Number(row?.total ?? 0)
+}
+
+/**
+ * 批量取某封邮件在指定玩家处的引用。编辑 / 取消编辑之后要给每个在线收件人
+ * 推送带自身读、星标、领取状态的条目，逐人查询会打出几十次请求。
+ */
+export function listGameMailRefsFor(
+  mailId: string,
+  playerUuids: string[],
+): Record<string, GameMailRef> {
+  const refs: Record<string, GameMailRef> = {}
+  if (playerUuids.length === 0) return refs
+  const placeholders = playerUuids.map(() => '?').join(', ')
+  const rows = all(`SELECT * FROM game_mail_refs
+                    WHERE mail_id = ? AND player_uuid IN (${placeholders})`, mailId, ...playerUuids)
+  for (const row of rows) refs[String(row.player_uuid)] = mapGameMailRef(row)
+  return refs
+}
+
+/**
+ * 批量未读数。群发 / 撤回 / 清理之后模组要给所有在线收件人刷新徽标，
+ * 逐人查询会打出几十次请求，这里一次算完；未出现在结果里的玩家按 0 处理。
+ */
+export function countGameMailUnreadBatch(playerUuids: string[]): Record<string, number> {
+  const counts: Record<string, number> = {}
+  for (const playerUuid of playerUuids) counts[playerUuid] = 0
+  if (playerUuids.length === 0) return counts
+  const placeholders = playerUuids.map(() => '?').join(', ')
+  const rows = all(`SELECT r.player_uuid AS player_uuid, COUNT(*) AS total
+                    FROM game_mail_refs r
+                    JOIN game_mails m ON m.id = r.mail_id
+                    WHERE r.read = 0 AND m.hidden = 0 AND r.player_uuid IN (${placeholders})
+                    GROUP BY r.player_uuid`, ...playerUuids)
+  for (const row of rows) counts[String(row.player_uuid)] = Number(row.total ?? 0)
+  return counts
+}
+
+export function listGameMailInbox(
+  playerUuid: string,
+  keepStarred: boolean,
+): { ref: GameMailRef; mail: GameMail }[] {
+  cleanupGameMailbox(playerUuid, keepStarred)
+  // 引用列必须换名：game_mails 也有 claimed 列，同名会在结果行里互相覆盖。
+  return all(`SELECT r.mail_id AS ref_mail_id, r.read AS ref_read,
+                     r.starred AS ref_starred, r.claimed AS ref_claimed, m.*
+              FROM game_mail_refs r
+              JOIN game_mails m ON m.id = r.mail_id
+              WHERE r.player_uuid = ? AND m.hidden = 0
+              ORDER BY m.created_time DESC, m.id`, playerUuid)
+    .map((row) => ({
+      ref: mapGameMailRef({
+        mail_id: row.ref_mail_id,
+        read: row.ref_read,
+        starred: row.ref_starred,
+        claimed: row.ref_claimed,
+      }),
+      mail: mapGameMail(row),
+    }))
+}
+
+function writeGameMailRow(id: string, input: GameMailInput, createdTime: number,
+  claimed: boolean, hidden: boolean): void {
+  run(`INSERT INTO game_mails
+       (id, type, sender, targets, scope_summary, title, body, created_time, expire_time,
+        claimed, hidden, attachments, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         type = excluded.type, sender = excluded.sender, targets = excluded.targets,
+         scope_summary = excluded.scope_summary, title = excluded.title, body = excluded.body,
+         expire_time = excluded.expire_time, claimed = excluded.claimed, hidden = excluded.hidden,
+         attachments = excluded.attachments, updated_at = excluded.updated_at`,
+    id, input.type, input.sender, JSON.stringify(input.targets), input.scopeSummary,
+    input.title, input.body, createdTime, input.expireTime,
+    claimed ? 1 : 0, hidden ? 1 : 0, JSON.stringify(input.attachments), Date.now())
+}
+
+function insertGameMailRefs(mailId: string, recipients: string[]): void {
+  const now = Date.now()
+  for (const playerUuid of recipients) {
+    run(`INSERT INTO game_mail_refs (mail_id, player_uuid, read, starred, claimed, created_at)
+         VALUES (?, ?, 0, 0, 0, ?)
+         ON CONFLICT(mail_id, player_uuid) DO NOTHING`, mailId, playerUuid, now)
+  }
+}
+
+export function insertGameMail(
+  input: GameMailInput,
+  recipients: string[],
+): { mail: GameMail; recipients: string[] } {
+  const id = randomUUID()
+  const createdTime = Date.now()
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    writeGameMailRow(id, input, createdTime, false, false)
+    insertGameMailRefs(id, recipients)
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+  const mail = getGameMail(id)
+  if (!mail) throw createError({ statusCode: 500, message: '邮件写入失败' })
+  return { mail, recipients: listGameMailRecipients(id) }
+}
+
+/**
+ * 编辑邮件并对接收范围做 diff：新增收件人建引用，被移出且未领取的删引用，
+ * 已领取的引用一律保留（与旧 {@code MailManager.edit} 一致）。
+ */
+export function updateGameMail(
+  id: string,
+  input: GameMailInput,
+  recipients: string[],
+  hidden: boolean | undefined,
+): { mail: GameMail; recipients: string[]; removed: string[] } {
+  const removed: string[] = []
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    const current = getGameMail(id)
+    if (!current) throw createError({ statusCode: 404, message: '邮件不存在或已撤回' })
+    const editState = computeGameMailEditState(current)
+    if (!editState.canEdit) {
+      throw createError({ statusCode: 409, message: editState.denyReason || '邮件不可编辑' })
+    }
+    const keep = new Set(recipients)
+    for (const row of all('SELECT player_uuid, claimed FROM game_mail_refs WHERE mail_id = ?', id)) {
+      const playerUuid = String(row.player_uuid)
+      if (keep.has(playerUuid) || Number(row.claimed ?? 0) === 1) continue
+      run('DELETE FROM game_mail_refs WHERE mail_id = ? AND player_uuid = ?', id, playerUuid)
+      removed.push(playerUuid)
+    }
+    writeGameMailRow(id, input, current.createdTime, current.claimed,
+      hidden === undefined ? current.hidden : hidden)
+    insertGameMailRefs(id, recipients)
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+  const mail = getGameMail(id)
+  if (!mail) throw createError({ statusCode: 500, message: '邮件写入失败' })
+  return { mail, recipients: listGameMailRecipients(id), removed }
+}
+
+/** 编辑期间隐藏 / 恢复邮件；隐藏的邮件不出现在任何收件箱里。 */
+export function setGameMailHidden(
+  id: string,
+  hidden: boolean,
+): { mail: GameMail; recipients: string[] } {
+  const result = run('UPDATE game_mails SET hidden = ?, updated_at = ? WHERE id = ?',
+    hidden ? 1 : 0, Date.now(), id)
+  if (Number(result.changes ?? 0) === 0) {
+    throw createError({ statusCode: 404, message: '邮件不存在或已撤回' })
+  }
+  const mail = getGameMail(id)
+  if (!mail) throw createError({ statusCode: 404, message: '邮件不存在或已撤回' })
+  return { mail, recipients: listGameMailRecipients(id) }
+}
+
+/** 撤回邮件：删正文与全部引用，返回原收件人便于模组推送移除。 */
+export function deleteGameMail(id: string): { removed: boolean; recipients: string[] } {
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    const recipients = listGameMailRecipients(id)
+    const result = run('DELETE FROM game_mails WHERE id = ?', id)
+    run('DELETE FROM game_mail_refs WHERE mail_id = ?', id)
+    db.exec('COMMIT')
+    return { removed: Number(result.changes ?? 0) > 0, recipients }
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+}
+
+/** 已读 / 星标 / 取消星标 / 删除；删除后 ref 为 null。 */
+export function applyGameMailAction(
+  playerUuid: string,
+  mailId: string,
+  action: MailAction,
+): { ref: GameMailRef | null; unread: number } {
+  const existing = getGameMailRef(mailId, playerUuid)
+  if (!existing) throw createError({ statusCode: 404, message: '收件箱中没有这封邮件' })
+  switch (action) {
+    case 'read':
+      run('UPDATE game_mail_refs SET read = 1 WHERE mail_id = ? AND player_uuid = ?', mailId, playerUuid)
+      break
+    case 'star':
+      run('UPDATE game_mail_refs SET starred = 1 WHERE mail_id = ? AND player_uuid = ?', mailId, playerUuid)
+      break
+    case 'unstar':
+      run('UPDATE game_mail_refs SET starred = 0 WHERE mail_id = ? AND player_uuid = ?', mailId, playerUuid)
+      break
+    case 'delete':
+      run('DELETE FROM game_mail_refs WHERE mail_id = ? AND player_uuid = ?', mailId, playerUuid)
+      break
+  }
+  return {
+    ref: action === 'delete' ? null : getGameMailRef(mailId, playerUuid) ?? null,
+    unread: countGameMailUnread(playerUuid),
+  }
+}
+
+/**
+ * 原子领取奖励：校验通过后立即写入 claimed，再把附件交给模组发放。
+ * 先标记后发放是刻意的 —— 宁可在极端崩溃下丢一次奖励，也不能让同一封邮件被领两次。
+ */
+export function claimGameMail(
+  playerUuid: string,
+  mailId: string,
+): { mail: GameMail; ref: GameMailRef; unread: number } {
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    const mail = getGameMail(mailId)
+    if (!mail) throw createError({ statusCode: 404, message: '邮件不存在或已撤回' })
+    if (mail.type !== 'REWARD') throw createError({ statusCode: 409, message: '该邮件没有可领取的奖励' })
+    if (gameMailIsExpired(mail)) throw createError({ statusCode: 410, message: '邮件已过期' })
+    const ref = getGameMailRef(mailId, playerUuid)
+    if (!ref) throw createError({ statusCode: 404, message: '收件箱中没有这封邮件' })
+    if (ref.claimed) throw createError({ statusCode: 409, message: '奖励已经领取过了' })
+    // 领取即视为已读，避免领完奖励红点仍在。
+    run(`UPDATE game_mail_refs SET claimed = 1, read = 1
+         WHERE mail_id = ? AND player_uuid = ? AND claimed = 0`, mailId, playerUuid)
+    run('UPDATE game_mails SET claimed = 1, updated_at = ? WHERE id = ?', Date.now(), mailId)
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+  const mail = getGameMail(mailId)
+  const ref = getGameMailRef(mailId, playerUuid)
+  if (!mail || !ref) throw createError({ statusCode: 500, message: '领取状态写入失败' })
+  return { mail, ref, unread: countGameMailUnread(playerUuid) }
+}
+
+/**
+ * 清理过期邮件。keepStarred 为真时，只要还有任意玩家星标过就保留，
+ * 与界面提示「已收藏的过期邮件将保留」一致。顺带剔除全部悬空引用。
+ */
+export function purgeGameMails(keepStarred: boolean): {
+  removed: number
+  removedIds: string[]
+  affected: string[]
+  prunedRefs: number
+} {
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    const now = Date.now()
+    const expired = all(`SELECT id FROM game_mails
+                         WHERE expire_time IS NOT NULL AND expire_time < ?`, now)
+      .map((row) => String(row.id))
+    const starred = new Set(keepStarred
+      ? all('SELECT DISTINCT mail_id FROM game_mail_refs WHERE starred = 1').map((row) => String(row.mail_id))
+      : [])
+    const removedIds = expired.filter((id) => !starred.has(id))
+    const affected = new Set<string>()
+    for (const id of removedIds) {
+      for (const playerUuid of listGameMailRecipients(id)) affected.add(playerUuid)
+      run('DELETE FROM game_mails WHERE id = ?', id)
+      run('DELETE FROM game_mail_refs WHERE mail_id = ?', id)
+    }
+    const prunedRefs = pruneDanglingGameMailRefs()
+    db.exec('COMMIT')
+    return { removed: removedIds.length, removedIds, affected: [...affected], prunedRefs }
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+}
+
+/** 账户注销时清空其收件箱（正文仓库不动，其他收件人仍能看到）。 */
+export function deleteGameMailbox(playerUuid: string): number {
+  const result = run('DELETE FROM game_mail_refs WHERE player_uuid = ?', playerUuid)
+  return Number(result.changes ?? 0)
+}
+
+// ===== 后台只读查询 =====
+// 供管理页面查看游戏内已发布的邮件。发布 / 编辑仍然只在游戏内进行：
+// 物品附件的 NBT 只能从管理员物品栏序列化，网页无法构造。
+
+export interface AdminGameMailSummary {
+  id: string
+  type: MailType
+  sender: string
+  title: string
+  scopeSummary: string
+  createdTime: number
+  expireTime: number | null
+  expired: boolean
+  claimed: boolean
+  hidden: boolean
+  attachmentCount: number
+  recipientCount: number
+  readCount: number
+  starredCount: number
+  claimedCount: number
+}
+
+export interface AdminGameMailRecipient {
+  uuid: string
+  /** 账户表里匹配得到的玩家代号；匹配不到时为 null，由前端回退显示 UUID。 */
+  username: string | null
+  read: boolean
+  starred: boolean
+  claimed: boolean
+}
+
+export interface AdminGameMailDetail extends AdminGameMailSummary {
+  body: string
+  targets: MailTargetSpec[]
+  attachments: MailAttachment[]
+  recipients: AdminGameMailRecipient[]
+}
+
+function adminGameMailSummary(row: Record<string, unknown>, now: number): AdminGameMailSummary {
+  const mail = mapGameMail(row)
+  return {
+    id: mail.id,
+    type: mail.type,
+    sender: mail.sender,
+    title: mail.title,
+    scopeSummary: mail.scopeSummary,
+    createdTime: mail.createdTime,
+    expireTime: mail.expireTime,
+    expired: gameMailIsExpired(mail, now),
+    claimed: mail.claimed,
+    hidden: mail.hidden,
+    attachmentCount: mail.attachments.length,
+    recipientCount: Number(row.recipient_count ?? 0),
+    readCount: Number(row.read_count ?? 0),
+    starredCount: Number(row.starred_count ?? 0),
+    claimedCount: Number(row.claimed_count ?? 0),
+  }
+}
+
+// 聚合列另起别名：game_mails 自己也有 claimed 列，同名会在结果行里互相覆盖。
+const ADMIN_MAIL_STATS_SQL = `
+  SELECT m.*,
+         COUNT(r.player_uuid) AS recipient_count,
+         COALESCE(SUM(r.read), 0) AS read_count,
+         COALESCE(SUM(r.starred), 0) AS starred_count,
+         COALESCE(SUM(r.claimed), 0) AS claimed_count
+  FROM game_mails m
+  LEFT JOIN game_mail_refs r ON r.mail_id = m.id
+`
+
+export function listAdminGameMails(): AdminGameMailSummary[] {
+  const now = Date.now()
+  return all(`${ADMIN_MAIL_STATS_SQL} GROUP BY m.id ORDER BY m.created_time DESC, m.id`)
+    .map((row) => adminGameMailSummary(row, now))
+}
+
+export function getAdminGameMailDetail(id: string): AdminGameMailDetail | undefined {
+  const row = get(`${ADMIN_MAIL_STATS_SQL} WHERE m.id = ? GROUP BY m.id`, id)
+  if (!row) return undefined
+  const mail = mapGameMail(row)
+  // uuid 列历史上可能存过大写，这里按小写比对；收件人列表是单封邮件的量级，不走索引也可接受。
+  const recipients = all(`SELECT r.player_uuid AS player_uuid, r.read AS ref_read,
+                                 r.starred AS ref_starred, r.claimed AS ref_claimed,
+                                 a.username AS username
+                          FROM game_mail_refs r
+                          LEFT JOIN game_accounts a ON lower(a.uuid) = r.player_uuid
+                          WHERE r.mail_id = ?
+                          ORDER BY a.username COLLATE NOCASE, r.player_uuid`, id)
+    .map((item) => ({
+      uuid: String(item.player_uuid),
+      username: item.username == null ? null : String(item.username),
+      read: Number(item.ref_read ?? 0) === 1,
+      starred: Number(item.ref_starred ?? 0) === 1,
+      claimed: Number(item.ref_claimed ?? 0) === 1,
+    }))
+  return {
+    ...adminGameMailSummary(row, Date.now()),
+    body: mail.body,
+    targets: mail.targets,
+    attachments: mail.attachments,
+    recipients,
   }
 }
 

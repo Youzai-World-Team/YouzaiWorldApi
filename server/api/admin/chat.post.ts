@@ -25,6 +25,7 @@ export default defineEventHandler(async (event) => {
     ipHash: chatIpHash(ip),
     location,
     avatar: user.avatar,
+    role: 'admin',
   })
   recordAudit(event, user, '后台发送聊天消息')
 

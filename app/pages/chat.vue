@@ -3,11 +3,14 @@ import { computed, ref, onMounted } from 'vue'
 
 useHead({ title: '聊天区' })
 
+type ChatRole = 'guest' | 'player' | 'admin'
+
 interface ChatMessage {
   id: string
   name: string
   content: string
   avatar: string
+  role: ChatRole
   location: string
   time: number
   ipTag: string
@@ -81,6 +84,12 @@ async function load() {
     loading.value = false
     refreshing.value = false
   }
+}
+
+const ROLE_LABELS: Record<ChatRole, string> = {
+  admin: '管理员',
+  player: '玩家',
+  guest: '访客',
 }
 
 function formatTime(value: number) {
@@ -236,6 +245,9 @@ async function confirmClear() {
                 <span class="sender">
                   <img v-if="m.avatar" class="sender-avatar" :src="m.avatar" :alt="m.name">
                   <span>{{ m.name }}</span>
+                  <span v-if="m.role !== 'guest'" class="sender-badge" :class="`sender-badge--${m.role}`">
+                    {{ ROLE_LABELS[m.role] }}
+                  </span>
                 </span>
               </td>
               <td class="cell-content">{{ m.content }}</td>
@@ -430,6 +442,27 @@ async function confirmClear() {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
+}
+
+.sender-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.sender-badge--admin {
+  background: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-primary);
+}
+
+.sender-badge--player {
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
 }
 
 .sender-avatar {
