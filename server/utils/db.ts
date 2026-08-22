@@ -138,6 +138,19 @@ db.exec(`
     ON game_registration_sessions (username_lower);
   CREATE INDEX IF NOT EXISTS game_registration_sessions_expires_idx
     ON game_registration_sessions (expires_at);
+  CREATE TABLE IF NOT EXISTS game_password_reset_sessions (
+    id_hash TEXT PRIMARY KEY,
+    username_lower TEXT NOT NULL UNIQUE,
+    email TEXT NOT NULL,
+    verification_code_hash TEXT NOT NULL,
+    code_expires_at INTEGER NOT NULL,
+    resend_after INTEGER NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS game_password_reset_sessions_expires_idx
+    ON game_password_reset_sessions (expires_at);
   CREATE TABLE IF NOT EXISTS game_cosmetics (
     uuid TEXT NOT NULL,
     slot TEXT NOT NULL,
@@ -238,6 +251,7 @@ const GAME_REGISTRATION_SESSION_TTL_MS = 15 * 60 * 1000
 const GAME_EMAIL_CODE_TTL_MS = 10 * 60 * 1000
 const GAME_EMAIL_RESEND_DELAY_MS = 60 * 1000
 const GAME_EMAIL_MAX_ATTEMPTS = 5
+const GAME_PASSWORD_RESET_SESSION_TTL_MS = 10 * 60 * 1000
 const GAME_API_KEY_ENV = 'YZWC_GAME_API_KEY'
 const GAME_API_KEY_SETTING = 'game_api.key'
 const ADMIN_PASSWORD_ENV = 'YZWC_ADMIN_PASSWORD'
@@ -911,6 +925,7 @@ export function deleteGameAccount(username: string): boolean {
   const result = run('DELETE FROM game_accounts WHERE username_lower = ?', key)
   run('DELETE FROM game_sessions WHERE username_lower = ?', key)
   run('DELETE FROM game_registration_sessions WHERE username_lower = ?', key)
+  run('DELETE FROM game_password_reset_sessions WHERE username_lower = ?', key)
   return Number(result.changes ?? 0) > 0
 }
 
@@ -944,7 +959,10 @@ export function deleteGameSession(token: string) {
 }
 
 export function deleteGameSessionsForUser(username: string) {
-  run('DELETE FROM game_sessions WHERE username_lower = ?', username.trim().toLocaleLowerCase('en-US'))
+  const key = username.trim().toLocaleLowerCase('en-US')
+  run('DELETE FROM game_sessions WHERE username_lower = ?', key)
+  // 登录、改密或管理员重置后，旧的找回密码验证码不应继续有效。
+  run('DELETE FROM game_password_reset_sessions WHERE username_lower = ?', key)
 }
 
 function gameSessionTtlMs(): number {
@@ -1417,6 +1435,210 @@ export function completeGameRegistration(
     throw error
   }
   return { account, startSession: session.startSession }
+}
+
+interface GamePasswordResetSession {
+  usernameLower: string
+  email: string
+  verificationCodeHash: string
+  codeExpiresAt: number
+  resendAfter: number
+  attempts: number
+  expiresAt: number
+}
+
+function cleanupGamePasswordResetSessions(now = Date.now()): void {
+  run('DELETE FROM game_password_reset_sessions WHERE expires_at <= ?', now)
+}
+
+function passwordResetSessionIdentity(value: unknown): { id: string; hash: string } {
+  const id = String(value ?? '').trim()
+  if (!/^[a-f0-9]{64}$/i.test(id)) {
+    throw createError({ statusCode: 400, message: '找回密码会话 ID 格式不正确' })
+  }
+  return { id, hash: tokenDigest(id) }
+}
+
+function passwordResetCodeDigest(sessionId: string, email: string, code: string): string {
+  return createHash('sha256')
+    .update(`password-reset\0${sessionId}\0${email}\0${code}`, 'utf8')
+    .digest('hex')
+}
+
+function mapGamePasswordResetSession(row: Record<string, unknown>): GamePasswordResetSession {
+  return {
+    usernameLower: String(row.username_lower ?? ''),
+    email: String(row.email ?? ''),
+    verificationCodeHash: String(row.verification_code_hash ?? ''),
+    codeExpiresAt: Number(row.code_expires_at ?? 0),
+    resendAfter: Number(row.resend_after ?? 0),
+    attempts: Number(row.attempts ?? 0),
+    expiresAt: Number(row.expires_at ?? 0),
+  }
+}
+
+function getGamePasswordResetSession(
+  sessionIdValue: unknown,
+): { identity: { id: string; hash: string }; session: GamePasswordResetSession } {
+  const identity = passwordResetSessionIdentity(sessionIdValue)
+  cleanupGamePasswordResetSessions()
+  const row = get('SELECT * FROM game_password_reset_sessions WHERE id_hash = ?', identity.hash)
+  if (!row) throw createError({ statusCode: 410, message: '找回密码会话已失效，请重新发送验证码' })
+  return { identity, session: mapGamePasswordResetSession(row) }
+}
+
+export function issueGamePasswordResetEmailCode(
+  usernameValue: unknown,
+  emailValue: unknown,
+): {
+    code: string
+    email: string
+    username: string
+    sessionId: string
+    expiresInSeconds: number
+    resendAfterSeconds: number
+  } {
+  const username = String(usernameValue ?? '').trim()
+  const usernameLower = username.toLocaleLowerCase('en-US')
+  const email = requireEmailAddress(emailValue)
+  const account = getGameAccount(username)
+  if (!account?.password) {
+    throw createError({ statusCode: 404, message: '游戏账户不存在或尚未注册' })
+  }
+  if (!account.email) {
+    throw createError({ statusCode: 409, message: '该游戏账户未绑定找回邮箱' })
+  }
+  if (account.email.toLocaleLowerCase('en-US') !== email) {
+    throw createError({ statusCode: 403, message: '邮箱与该游戏账户绑定邮箱不匹配' })
+  }
+
+  const now = Date.now()
+  cleanupGamePasswordResetSessions(now)
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    const existing = get(
+      'SELECT resend_after FROM game_password_reset_sessions WHERE username_lower = ?',
+      usernameLower,
+    )
+    const resendAfter = Number(existing?.resend_after ?? 0)
+    if (resendAfter > now) {
+      throw createError({
+        statusCode: 429,
+        message: '找回密码验证码发送过于频繁',
+        data: { retryAfterSeconds: Math.ceil((resendAfter - now) / 1000) },
+      })
+    }
+
+    const sessionId = randomBytes(32).toString('hex')
+    const code = String(randomInt(0, 1_000_000)).padStart(6, '0')
+    const expiresAt = now + GAME_PASSWORD_RESET_SESSION_TTL_MS
+    run('DELETE FROM game_password_reset_sessions WHERE username_lower = ?', usernameLower)
+    run(`INSERT INTO game_password_reset_sessions
+      (id_hash, username_lower, email, verification_code_hash, code_expires_at,
+       resend_after, attempts, expires_at, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+      tokenDigest(sessionId), usernameLower, email,
+      passwordResetCodeDigest(sessionId, email, code), expiresAt,
+      now + GAME_EMAIL_RESEND_DELAY_MS, expiresAt, now)
+    db.exec('COMMIT')
+    return {
+      code,
+      email,
+      username: account.username,
+      sessionId,
+      expiresInSeconds: Math.floor(GAME_PASSWORD_RESET_SESSION_TTL_MS / 1000),
+      resendAfterSeconds: Math.ceil(GAME_EMAIL_RESEND_DELAY_MS / 1000),
+    }
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+}
+
+export function revokeGamePasswordResetEmailCode(
+  sessionIdValue: unknown,
+  email: string,
+  code: string,
+): void {
+  const identity = passwordResetSessionIdentity(sessionIdValue)
+  run(`DELETE FROM game_password_reset_sessions
+       WHERE id_hash = ? AND verification_code_hash = ?`,
+    identity.hash, passwordResetCodeDigest(identity.id, email, code))
+}
+
+export function completeGamePasswordReset(
+  sessionIdValue: unknown,
+  codeValue: unknown,
+  newPasswordValue: unknown,
+): { username: string } {
+  const code = String(codeValue ?? '').trim()
+  if (!/^\d{6}$/.test(code)) {
+    throw createError({ statusCode: 400, message: '邮箱验证码格式不正确' })
+  }
+  const newPassword = String(newPasswordValue ?? '')
+  if (newPassword.length < 4 || newPassword.length > 128) {
+    throw createError({ statusCode: 400, message: '新密码长度需要为 4 至 128 位' })
+  }
+
+  const { identity, session } = getGamePasswordResetSession(sessionIdValue)
+  const now = Date.now()
+  if (session.codeExpiresAt <= now || session.expiresAt <= now) {
+    run('DELETE FROM game_password_reset_sessions WHERE id_hash = ?', identity.hash)
+    throw createError({ statusCode: 410, message: '找回密码验证码已过期，请重新发送' })
+  }
+
+  const actualHash = passwordResetCodeDigest(identity.id, session.email, code)
+  if (!safeEqualHex(actualHash, session.verificationCodeHash)) {
+    run('UPDATE game_password_reset_sessions SET attempts = attempts + 1 WHERE id_hash = ?', identity.hash)
+    const attempts = Number(get(
+      'SELECT attempts FROM game_password_reset_sessions WHERE id_hash = ?',
+      identity.hash,
+    )?.attempts ?? GAME_EMAIL_MAX_ATTEMPTS)
+    if (attempts >= GAME_EMAIL_MAX_ATTEMPTS) {
+      run('DELETE FROM game_password_reset_sessions WHERE id_hash = ?', identity.hash)
+    }
+    throw createError({
+      statusCode: 400,
+      message: attempts >= GAME_EMAIL_MAX_ATTEMPTS
+        ? '邮箱验证码错误次数过多，请重新发送'
+        : '邮箱验证码错误',
+      data: { remainingAttempts: Math.max(0, GAME_EMAIL_MAX_ATTEMPTS - attempts) },
+    })
+  }
+
+  const passwordHash = hashGamePassword(newPassword)
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    const latest = get('SELECT * FROM game_password_reset_sessions WHERE id_hash = ?', identity.hash)
+    if (!latest || String(latest.verification_code_hash ?? '') !== session.verificationCodeHash) {
+      throw createError({ statusCode: 409, message: '找回密码会话状态已变化，请重试' })
+    }
+    if (Number(latest.code_expires_at ?? 0) <= Date.now()
+        || Number(latest.expires_at ?? 0) <= Date.now()) {
+      run('DELETE FROM game_password_reset_sessions WHERE id_hash = ?', identity.hash)
+      throw createError({ statusCode: 410, message: '找回密码验证码已过期，请重新发送' })
+    }
+    const account = get('SELECT username, email, password FROM game_accounts WHERE username_lower = ?',
+      session.usernameLower)
+    if (!account || !String(account.password ?? '')) {
+      throw createError({ statusCode: 404, message: '游戏账户不存在或尚未注册' })
+    }
+    if (String(account.email ?? '').toLocaleLowerCase('en-US') !== session.email) {
+      throw createError({ statusCode: 409, message: '账户绑定邮箱已变化，请重新发送验证码' })
+    }
+
+    run(`UPDATE game_accounts
+         SET password = ?, login_tries = 0, last_kicked_date = ?, updated_at = ?
+         WHERE username_lower = ?`,
+      passwordHash, '1970-01-01T00:00:00Z', now, session.usernameLower)
+    run('DELETE FROM game_sessions WHERE username_lower = ?', session.usernameLower)
+    run('DELETE FROM game_password_reset_sessions WHERE username_lower = ?', session.usernameLower)
+    db.exec('COMMIT')
+    return { username: String(account.username ?? session.usernameLower) }
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
 }
 
 function hashAdminPassword(password: string): string {

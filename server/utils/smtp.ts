@@ -143,23 +143,17 @@ function wrapBase64(value: string): string {
   return value.match(/.{1,76}/g)?.join('\r\n') || ''
 }
 
-function buildVerificationMessage(
+function buildMessage(
   settings: SmtpTransportSettings,
   recipient: string,
-  username: string,
-  code: string,
+  subjectText: string,
+  contentLines: string[],
 ): string {
   const fromName = encodeHeader(settings.fromName || '悠哉世界')
-  const subject = encodeHeader('悠哉世界游戏账户邮箱验证码')
+  const subject = encodeHeader(subjectText)
   const domain = settings.fromAddress.split('@')[1] || 'localhost'
   const messageId = `${randomBytes(16).toString('hex')}@${domain}`
-  const content = [
-    `你正在为游戏账户 ${username} 验证邮箱。`,
-    '',
-    `验证码：${code}`,
-    '',
-    '验证码 10 分钟内有效。若非本人操作，请忽略此邮件。',
-  ].join('\r\n')
+  const content = contentLines.join('\r\n')
   return [
     `Date: ${new Date().toUTCString()}`,
     `Message-ID: <${messageId}>`,
@@ -183,6 +177,47 @@ export async function sendRegistrationVerificationEmail(
   recipient: string,
   username: string,
   code: string,
+): Promise<void> {
+  const message = buildMessage(
+    settings,
+    recipient,
+    '悠哉世界游戏账户邮箱验证码',
+    [
+      `你正在为游戏账户 ${username} 验证邮箱。`,
+      '',
+      `验证码：${code}`,
+      '',
+      '验证码 10 分钟内有效。若非本人操作，请忽略此邮件。',
+    ],
+  )
+  return sendMessage(settings, recipient, message)
+}
+
+export async function sendPasswordResetVerificationEmail(
+  settings: SmtpTransportSettings,
+  recipient: string,
+  username: string,
+  code: string,
+): Promise<void> {
+  const message = buildMessage(
+    settings,
+    recipient,
+    '悠哉世界游戏账户找回密码验证码',
+    [
+      `你正在为游戏账户 ${username} 找回密码。`,
+      '',
+      `验证码：${code}`,
+      '',
+      '验证码 10 分钟内有效。若非本人操作，请忽略此邮件并保护好账户。',
+    ],
+  )
+  return sendMessage(settings, recipient, message)
+}
+
+async function sendMessage(
+  settings: SmtpTransportSettings,
+  recipient: string,
+  message: string,
 ): Promise<void> {
   if (settings.security === 'none' && settings.username) {
     throw new Error('拒绝通过未加密连接发送 SMTP 认证信息')
@@ -232,8 +267,7 @@ export async function sendRegistrationVerificationEmail(
     await command(socket, reader, `MAIL FROM:<${settings.fromAddress}>`, [250])
     await command(socket, reader, `RCPT TO:<${recipient}>`, [250, 251])
     await command(socket, reader, 'DATA', [354])
-    const message = dotStuff(buildVerificationMessage(settings, recipient, username, code))
-    socket.write(`${message}\r\n.\r\n`, 'utf8')
+    socket.write(`${dotStuff(message)}\r\n.\r\n`, 'utf8')
     await expectResponse(reader, [250])
     try {
       await command(socket, reader, 'QUIT', [221])
