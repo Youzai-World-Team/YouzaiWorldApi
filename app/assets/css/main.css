@@ -1,6 +1,7 @@
 :root,
 :root[data-theme='light'] {
   color-scheme: light;
+  --app-control-height: 40px;
   --md-sys-color-primary: #8bc34a;
   --md-sys-color-on-primary: #1e3300;
   --md-sys-color-primary-container: #d9f2b0;
@@ -70,8 +71,43 @@ body {
   transition: background-color 220ms ease, color 180ms ease;
 }
 
+/* 深浅主题切换时，由点击按钮中心向页面边缘扩散新主题。 */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none !important;
+  mix-blend-mode: normal;
+}
+
+::view-transition-old(root) {
+  z-index: 1;
+}
+
+::view-transition-new(root) {
+  z-index: 2;
+}
+
+:root.theme-transition,
+:root.theme-transition * {
+  transition: none !important;
+}
+
 md-icon {
   --md-icon-size: 22px;
+}
+
+/* 单行输入控件与主要按钮使用同一高度。 */
+md-filled-button {
+  --md-filled-button-container-height: var(--app-control-height);
+}
+
+md-outlined-text-field:not([type='textarea']) {
+  --md-outlined-text-field-top-space: calc((var(--app-control-height) - 24px) / 2);
+  --md-outlined-text-field-bottom-space: calc((var(--app-control-height) - 24px) / 2);
+}
+
+md-outlined-select {
+  --md-outlined-field-top-space: calc((var(--app-control-height) - 24px) / 2);
+  --md-outlined-field-bottom-space: calc((var(--app-control-height) - 24px) / 2);
 }
 
 .page {

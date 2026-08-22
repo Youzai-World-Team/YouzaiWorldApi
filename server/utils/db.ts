@@ -34,6 +34,8 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL COLLATE NOCASE UNIQUE,
     password_hash TEXT NOT NULL,
+    avatar TEXT NOT NULL DEFAULT '',
+    full_name TEXT NOT NULL DEFAULT '',
     is_owner INTEGER NOT NULL DEFAULT 0,
     is_active INTEGER NOT NULL DEFAULT 1,
     created_at INTEGER NOT NULL,
@@ -155,7 +157,41 @@ db.exec(`
     window_started INTEGER NOT NULL,
     attempts INTEGER NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS chat_messages (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    content TEXT NOT NULL,
+    avatar TEXT NOT NULL DEFAULT '',
+    ip_hash TEXT NOT NULL,
+    ip_location TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS chat_messages_created_idx ON chat_messages (created_at);
+  CREATE INDEX IF NOT EXISTS chat_messages_ip_idx ON chat_messages (ip_hash, created_at);
+  CREATE TABLE IF NOT EXISTS ip_locations (
+    ip_hash TEXT PRIMARY KEY,
+    location TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
 `)
+
+const adminUserColumns = db.prepare('PRAGMA table_info(admin_users)').all() as { name?: string }[]
+if (!adminUserColumns.some((column) => column.name === 'avatar')) {
+  try {
+    db.exec("ALTER TABLE admin_users ADD COLUMN avatar TEXT NOT NULL DEFAULT ''")
+  } catch (error) {
+    const migratedColumns = db.prepare('PRAGMA table_info(admin_users)').all() as { name?: string }[]
+    if (!migratedColumns.some((column) => column.name === 'avatar')) throw error
+  }
+}
+if (!adminUserColumns.some((column) => column.name === 'full_name')) {
+  try {
+    db.exec("ALTER TABLE admin_users ADD COLUMN full_name TEXT NOT NULL DEFAULT ''")
+  } catch (error) {
+    const migratedColumns = db.prepare('PRAGMA table_info(admin_users)').all() as { name?: string }[]
+    if (!migratedColumns.some((column) => column.name === 'full_name')) throw error
+  }
+}
 
 const sessionColumns = db.prepare('PRAGMA table_info(sessions)').all() as { name?: string }[]
 if (!sessionColumns.some((column) => column.name === 'user_id')) {
@@ -231,6 +267,18 @@ if (!gameAccountEmailIndex) {
   `)
 }
 
+// 后台以自己的账户身份发言时需要保存头像；公开发言留空，由官网按昵称生成像素头像。
+const chatMessageColumns = db.prepare('PRAGMA table_info(chat_messages)').all() as { name?: string }[]
+if (!chatMessageColumns.some((column) => column.name === 'avatar')) {
+  try {
+    db.exec("ALTER TABLE chat_messages ADD COLUMN avatar TEXT NOT NULL DEFAULT ''")
+  } catch (error) {
+    // 多进程同时启动时，允许另一进程已经先完成同一迁移。
+    const migratedColumns = db.prepare('PRAGMA table_info(chat_messages)').all() as { name?: string }[]
+    if (!migratedColumns.some((column) => column.name === 'avatar')) throw error
+  }
+}
+
 const ADMIN_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000
 const GAME_REQUEST_MAX_SKEW_SECONDS = 300
 const GAME_REQUEST_NONCE_TTL_MS = 10 * 60 * 1000
@@ -261,14 +309,24 @@ const TURNSTILE_SECRET_ENV = 'TURNSTILE_SECRET'
 const TURNSTILE_HOSTNAMES_ENV = 'TURNSTILE_HOSTNAMES'
 const LOGIN_RATE_WINDOW_MS = 15 * 60 * 1000
 const LOGIN_RATE_MAX_ATTEMPTS = 5
+const CHAT_NAME_MAX = 16
+const CHAT_CONTENT_MAX = 200
+const CHAT_RATE_WINDOW_MS = 60 * 1000
+const CHAT_RATE_MAX_MESSAGES = 5
+const CHAT_HISTORY_LIMIT = 200
+const CHAT_RETAINED_ROWS = 500
+const CHAT_NAME_RE = /^[一-龥A-Za-z0-9_-]{2,16}$/
+const IP_LOCATION_TTL_MS = 7 * 24 * 60 * 60 * 1000
 const ADMIN_ENTRY_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{11,63}$/
+const ADMIN_AVATAR_RE = /^\/(?:favicon\.ico|api\/uploads\/[A-Za-z0-9._-]+\.(?:png|jpe?g|webp|gif|avif))$/
 const RESERVED_ADMIN_ENTRIES = new Set([
   'login', 'account', 'activity', 'donors', 'bans', 'updates', 'game-accounts',
-  'admin-users', 'audit-logs', 'api', '_nuxt', '_ipx', 'favicon', '__nuxt_error',
+  'admin-users', 'audit-logs', 'chat', 'api', '_nuxt', '_ipx', 'favicon', '__nuxt_error',
 ])
 
 export const ADMIN_COOKIE_NAME = '__Host-yzwc_admin'
 const ADMIN_USER_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{2,31}$/
+const DEFAULT_ADMIN_AVATAR = '/favicon.ico'
 
 function all(sql: string, ...params: any[]) {
   return db.prepare(sql).all(...params) as Record<string, unknown>[]
@@ -374,6 +432,8 @@ function tokenDigest(token: string): string {
 export interface AdminUser {
   id: number
   username: string
+  avatar: string
+  fullName: string
   isOwner: boolean
   isActive: boolean
   createdAt: number
@@ -383,6 +443,8 @@ function mapAdminUser(row: Record<string, unknown>): AdminUser {
   return {
     id: Number(row.id),
     username: String(row.username ?? ''),
+    avatar: String(row.avatar ?? ''),
+    fullName: String(row.full_name ?? ''),
     isOwner: Number(row.is_owner ?? 0) === 1,
     isActive: Number(row.is_active ?? 0) === 1,
     createdAt: Number(row.created_at ?? 0),
@@ -390,12 +452,12 @@ function mapAdminUser(row: Record<string, unknown>): AdminUser {
 }
 
 function getAdminUserById(id: number): AdminUser | undefined {
-  const row = get('SELECT id, username, is_owner, is_active, created_at FROM admin_users WHERE id = ?', id)
+  const row = get('SELECT id, username, avatar, full_name, is_owner, is_active, created_at FROM admin_users WHERE id = ?', id)
   return row ? mapAdminUser(row) : undefined
 }
 
 export function listAdminUsers(): AdminUser[] {
-  return all('SELECT id, username, is_owner, is_active, created_at FROM admin_users ORDER BY is_owner DESC, username COLLATE NOCASE')
+  return all('SELECT id, username, avatar, full_name, is_owner, is_active, created_at FROM admin_users ORDER BY is_owner DESC, username COLLATE NOCASE')
     .map(mapAdminUser)
 }
 
@@ -415,14 +477,21 @@ function requireAdminPassword(value: unknown, label = '密码'): string {
   return password
 }
 
-export function createAdminUser(usernameValue: unknown, passwordValue: unknown, isOwner = false): AdminUser {
+export function createAdminUser(
+  usernameValue: unknown,
+  passwordValue: unknown,
+  isOwner = false,
+  profile: { avatar?: unknown; fullName?: unknown } = {},
+): AdminUser {
   const username = requireAdminUsername(usernameValue)
   const password = requireAdminPassword(passwordValue)
+  const avatar = requireAdminAvatar(profile.avatar) || (isOwner ? DEFAULT_ADMIN_AVATAR : '')
+  const fullName = requireAdminFullName(profile.fullName)
   const now = Date.now()
   try {
     const result = run(
-      'INSERT INTO admin_users (username, password_hash, is_owner, is_active, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)',
-      username, hashAdminPassword(password), isOwner ? 1 : 0, now, now,
+      'INSERT INTO admin_users (username, password_hash, avatar, full_name, is_owner, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)',
+      username, hashAdminPassword(password), avatar, fullName, isOwner ? 1 : 0, now, now,
     )
     const user = getAdminUserById(Number(result.lastInsertRowid))
     if (!user) throw createError({ statusCode: 500, statusMessage: '用户创建失败' })
@@ -433,6 +502,37 @@ export function createAdminUser(usernameValue: unknown, passwordValue: unknown, 
     }
     throw error
   }
+}
+
+function requireAdminAvatar(value: unknown): string {
+  const avatar = String(value ?? '').trim()
+  if (!avatar) return ''
+  if (!ADMIN_AVATAR_RE.test(avatar)) {
+    throw createError({ statusCode: 400, statusMessage: '头像地址无效' })
+  }
+  return avatar
+}
+
+export function updateAdminAvatar(userId: number, avatarValue: unknown): AdminUser {
+  const current = getAdminUserById(userId)
+  if (!current) throw createError({ statusCode: 404, statusMessage: '后台用户不存在' })
+  run('UPDATE admin_users SET avatar = ?, updated_at = ? WHERE id = ?', requireAdminAvatar(avatarValue), Date.now(), userId)
+  return getAdminUserById(userId) as AdminUser
+}
+
+function requireAdminFullName(value: unknown): string {
+  const fullName = String(value ?? '').trim().replace(/\s+/g, ' ')
+  if (fullName.length > 64 || /[\u0000-\u001f\u007f]/.test(fullName)) {
+    throw createError({ statusCode: 400, statusMessage: '全名不能超过 64 个字符或包含控制字符' })
+  }
+  return fullName
+}
+
+export function updateAdminFullName(userId: number, fullNameValue: unknown): AdminUser {
+  const current = getAdminUserById(userId)
+  if (!current) throw createError({ statusCode: 404, statusMessage: '后台用户不存在' })
+  run('UPDATE admin_users SET full_name = ?, updated_at = ? WHERE id = ?', requireAdminFullName(fullNameValue), Date.now(), userId)
+  return getAdminUserById(userId) as AdminUser
 }
 
 export function updateAdminUser(userId: number, changes: { password?: unknown; active?: unknown }): AdminUser {
@@ -486,7 +586,7 @@ export function requireOwner(event: H3Event): AdminUser {
 
 export function getAdminUserForLogin(usernameValue: unknown, password: string): AdminUser | undefined {
   const username = String(usernameValue ?? '').trim()
-  const row = get('SELECT id, username, password_hash, is_owner, is_active, created_at FROM admin_users WHERE username = ?', username)
+  const row = get('SELECT id, username, avatar, full_name, password_hash, is_owner, is_active, created_at FROM admin_users WHERE username = ?', username)
   if (!row || Number(row.is_active) !== 1 || !verifyGamePassword(password, String(row.password_hash ?? ''))) return undefined
   return mapAdminUser(row)
 }
@@ -719,6 +819,184 @@ export function updateUpdate(item: UpdateEntry) {
 
 export function deleteUpdate(id: string) {
   run('DELETE FROM updates WHERE id = ?', id)
+}
+
+export interface ChatMessage {
+  id: string
+  name: string
+  content: string
+  /** 后台代发时为管理员头像路径；公开发言为空串，由官网按昵称生成像素头像。 */
+  avatar: string
+  location: string
+  time: number
+}
+
+export interface AdminChatMessage extends ChatMessage {
+  // 只暴露 IP 哈希前缀，便于后台辨认惯犯，同时不还原真实 IP。
+  ipTag: string
+}
+
+export function chatIpHash(ip: string): string {
+  return tokenDigest(ip || 'unknown')
+}
+
+export function requireChatName(value: unknown): string {
+  const name = typeof value === 'string' ? value.trim() : ''
+  if (!CHAT_NAME_RE.test(name)) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: `昵称需为 2-${CHAT_NAME_MAX} 位中英文、数字、下划线或连字符`,
+    })
+  }
+  return name
+}
+
+export function requireChatContent(value: unknown): string {
+  const raw = typeof value === 'string' ? value : ''
+  // 只保留换行和可打印字符，滤掉终端转义、NUL 等不可见控制字符。
+  const printable = Array.from(raw)
+    .filter((char) => {
+      const code = char.codePointAt(0) ?? 0
+      return char === '\n' || char === '\r' || (code >= 32 && code !== 127)
+    })
+    .join('')
+  const content = printable
+    .replace(/\r\n?/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+  if (!content) {
+    throw createError({ statusCode: 400, statusMessage: '消息内容不能为空' })
+  }
+  if (content.length > CHAT_CONTENT_MAX) {
+    throw createError({ statusCode: 400, statusMessage: `消息内容不能超过 ${CHAT_CONTENT_MAX} 个字符` })
+  }
+  return content
+}
+
+function mapChatMessage(row: Record<string, unknown>): ChatMessage {
+  return {
+    id: String(row.id),
+    name: String(row.name),
+    content: String(row.content),
+    avatar: String(row.avatar || ''),
+    location: String(row.ip_location || '未知'),
+    time: Number(row.created_at) || 0,
+  }
+}
+
+function normalizeChatLimit(limit: number): number {
+  const normalized = Number.isFinite(limit) ? Math.trunc(limit) : CHAT_HISTORY_LIMIT
+  return Math.min(CHAT_RETAINED_ROWS, Math.max(1, normalized))
+}
+
+// 返回最旧在前，前端可直接顺序渲染成聊天流。
+export function listChatMessages(limit = CHAT_HISTORY_LIMIT): ChatMessage[] {
+  const rows = all(
+    'SELECT id, name, content, avatar, ip_location, created_at FROM chat_messages ORDER BY created_at DESC, rowid DESC LIMIT ?',
+    normalizeChatLimit(limit),
+  )
+  return rows.map(mapChatMessage).reverse()
+}
+
+export function listAdminChatMessages(limit = CHAT_RETAINED_ROWS): AdminChatMessage[] {
+  const rows = all(
+    'SELECT id, name, content, avatar, ip_location, ip_hash, created_at FROM chat_messages ORDER BY created_at DESC, rowid DESC LIMIT ?',
+    normalizeChatLimit(limit),
+  )
+  return rows.map((row) => ({ ...mapChatMessage(row), ipTag: String(row.ip_hash).slice(0, 12) }))
+}
+
+export function assertChatSendAllowed(ipHash: string, content: string): void {
+  const now = Date.now()
+
+  const recent = get(
+    'SELECT COUNT(*) AS total FROM chat_messages WHERE ip_hash = ? AND created_at > ?',
+    ipHash, now - CHAT_RATE_WINDOW_MS,
+  )
+  if (Number(recent?.total ?? 0) >= CHAT_RATE_MAX_MESSAGES) {
+    const oldest = get(
+      'SELECT MIN(created_at) AS earliest FROM chat_messages WHERE ip_hash = ? AND created_at > ?',
+      ipHash, now - CHAT_RATE_WINDOW_MS,
+    )
+    const earliest = Number(oldest?.earliest ?? now)
+    const retryAfterSeconds = Math.max(1, Math.ceil((earliest + CHAT_RATE_WINDOW_MS - now) / 1000))
+    throw createError({
+      statusCode: 429,
+      statusMessage: `发言过于频繁，每分钟最多 ${CHAT_RATE_MAX_MESSAGES} 条，请 ${retryAfterSeconds} 秒后再试`,
+      data: { retryAfterSeconds },
+    })
+  }
+
+  const last = get(
+    'SELECT content FROM chat_messages WHERE ip_hash = ? ORDER BY created_at DESC, rowid DESC LIMIT 1',
+    ipHash,
+  )
+  if (last && String(last.content) === content) {
+    throw createError({ statusCode: 400, statusMessage: '不能连续发送相同的消息' })
+  }
+}
+
+export function insertChatMessage(input: {
+  name: string
+  content: string
+  ipHash: string
+  location: string
+  avatar?: string
+}): ChatMessage {
+  const now = Date.now()
+  const message: ChatMessage = {
+    id: `chat_${now.toString(36)}${randomBytes(6).toString('hex')}`,
+    // 后台代发时昵称来自管理员全名（上限 64），这里统一做一次防御性截断。
+    name: input.name.slice(0, 64),
+    content: input.content,
+    avatar: (input.avatar || '').slice(0, 256),
+    location: input.location || '未知',
+    time: now,
+  }
+  run(
+    'INSERT INTO chat_messages (id, name, content, avatar, ip_hash, ip_location, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    message.id, message.name, message.content, message.avatar, input.ipHash, message.location, now,
+  )
+  // 只回收超出保留条数且已经离开限流窗口的记录，避免高峰期把限流依据删掉。
+  run(
+    `DELETE FROM chat_messages
+     WHERE created_at < ?
+       AND id NOT IN (SELECT id FROM chat_messages ORDER BY created_at DESC, rowid DESC LIMIT ?)`,
+    now - CHAT_RATE_WINDOW_MS, CHAT_RETAINED_ROWS,
+  )
+  return message
+}
+
+export function deleteChatMessage(id: string): boolean {
+  const result = run('DELETE FROM chat_messages WHERE id = ?', id)
+  return Number(result.changes ?? 0) > 0
+}
+
+export function clearChatMessages(): number {
+  const result = run('DELETE FROM chat_messages')
+  return Number(result.changes ?? 0)
+}
+
+export function getCachedIpLocation(ipHash: string): string | undefined {
+  const row = get('SELECT location, updated_at FROM ip_locations WHERE ip_hash = ?', ipHash)
+  if (!row) return undefined
+  const updatedAt = Number(row.updated_at)
+  if (!Number.isFinite(updatedAt) || updatedAt + IP_LOCATION_TTL_MS <= Date.now()) {
+    run('DELETE FROM ip_locations WHERE ip_hash = ?', ipHash)
+    return undefined
+  }
+  const location = String(row.location || '').trim()
+  return location || undefined
+}
+
+export function setCachedIpLocation(ipHash: string, location: string): void {
+  const value = location.trim().slice(0, 64)
+  if (!value) return
+  run(
+    `INSERT INTO ip_locations (ip_hash, location, updated_at) VALUES (?, ?, ?)
+     ON CONFLICT(ip_hash) DO UPDATE SET location = excluded.location, updated_at = excluded.updated_at`,
+    ipHash, value, Date.now(),
+  )
 }
 
 export function assertAdminLoginAllowed(ip: string): void {
@@ -1471,8 +1749,8 @@ export function initializeAdmin(
     run('DELETE FROM admin_users')
     const passwordHash = hashAdminPassword(rawPassword)
     run(
-      'INSERT INTO admin_users (username, password_hash, is_owner, is_active, created_at, updated_at) VALUES (?, ?, 1, 1, ?, ?)',
-      username, passwordHash, Date.now(), Date.now(),
+      'INSERT INTO admin_users (username, password_hash, avatar, is_owner, is_active, created_at, updated_at) VALUES (?, ?, ?, 1, 1, ?, ?)',
+      username, passwordHash, DEFAULT_ADMIN_AVATAR, Date.now(), Date.now(),
     )
     db.exec('COMMIT')
     return entry
@@ -1613,12 +1891,16 @@ export async function migrateFromJson() {
         && ADMIN_ENTRY_RE.test(configuredEntry) && !RESERVED_ADMIN_ENTRIES.has(configuredEntry.toLowerCase())) {
       const now = Date.now()
       run(
-        'INSERT INTO admin_users (username, password_hash, is_owner, is_active, created_at, updated_at) VALUES (?, ?, 1, 1, ?, ?)',
-        configuredUsername, passwordHash, now, now,
+        'INSERT INTO admin_users (username, password_hash, avatar, is_owner, is_active, created_at, updated_at) VALUES (?, ?, ?, 1, 1, ?, ?)',
+        configuredUsername, passwordHash, DEFAULT_ADMIN_AVATAR, now, now,
       )
       // 多用户认证已迁移到 admin_users，删除旧设置中的历史哈希，避免保留第二个认证源。
       deleteSetting(ADMIN_PASSWORD_SETTING)
     }
+  }
+  if (getSetting('security.owner_avatar_initialized') !== 'true') {
+    run("UPDATE admin_users SET avatar = ? WHERE is_owner = 1 AND (avatar IS NULL OR avatar = '')", DEFAULT_ADMIN_AVATAR)
+    setSetting('security.owner_avatar_initialized', 'true')
   }
   // admin_users 是唯一认证源；完成迁移后清除可能残留的旧哈希键。
   if (count('admin_users') > 0) deleteSetting(ADMIN_PASSWORD_SETTING)

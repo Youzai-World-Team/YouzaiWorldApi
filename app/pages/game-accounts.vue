@@ -529,16 +529,16 @@ onMounted(() => {
 
 .email-verification-row {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 10px;
   min-width: 0;
   cursor: pointer;
 }
 
 .email-verification-row > span {
+  min-width: 0;
   display: grid;
   gap: 3px;
-  padding-top: 6px;
 }
 
 .email-verification-row strong {

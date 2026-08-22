@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onBeforeUnmount, onMounted } from 'vue'
+import type { ThemeMode } from '../composables/useThemeTransition'
 
 definePageMeta({ layout: false })
 
@@ -10,6 +11,8 @@ const username = ref('')
 const turnstileToken = ref('')
 const loading = ref(false)
 const dark = ref(false)
+const themeMode = ref<ThemeMode>('system')
+const { toggleTheme, themeIcon, themeModeLabel, themeButtonLabel } = useThemeTransition(dark, themeMode)
 const turnstileContainer = ref<HTMLElement | null>(null)
 const turnstileWidgetId = ref<string | number | null>(null)
 const turnstileSiteKey = ref('')
@@ -61,19 +64,7 @@ function resetTurnstile() {
   if (turnstileWidgetId.value !== null) window.turnstile?.reset(turnstileWidgetId.value)
 }
 
-function applyTheme(isDark: boolean) {
-  document.documentElement.dataset.theme = isDark ? 'dark' : 'light'
-  localStorage.setItem('theme', isDark ? 'dark' : 'light')
-}
-
-function toggleTheme() {
-  dark.value = !dark.value
-  applyTheme(dark.value)
-}
-
 onMounted(async () => {
-  dark.value = localStorage.getItem('theme') === 'dark'
-  applyTheme(dark.value)
   try {
     const config = await $fetch<{ siteKey?: string }>('/api/auth/turnstile')
     turnstileSiteKey.value = config.siteKey || String(runtimeConfig.public.turnstileSiteKey || '')
@@ -118,8 +109,8 @@ onBeforeUnmount(() => {
 <template>
   <div class="login-page">
     <div class="theme-toggle">
-      <md-icon-button :aria-label="dark ? '切换浅色' : '切换深色'" @click="toggleTheme">
-        <md-icon>{{ dark ? 'light_mode' : 'dark_mode' }}</md-icon>
+      <md-icon-button :aria-label="themeButtonLabel" :title="themeModeLabel" @click="toggleTheme">
+        <md-icon>{{ themeIcon }}</md-icon>
       </md-icon-button>
     </div>
 
@@ -164,6 +155,9 @@ onBeforeUnmount(() => {
   position: fixed;
   top: 16px;
   right: 16px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .login-content {

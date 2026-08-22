@@ -2,7 +2,6 @@ import { createError } from 'h3'
 import { getTurnstileConfig } from './db'
 
 const TURNSTILE_VERIFY_URL = 'https://challenges.cloudflare.com/turnstile/v0/siteverify'
-const TURNSTILE_ACTION = 'login'
 const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1'])
 
 interface TurnstileVerifyResponse {
@@ -34,7 +33,15 @@ function expectedHostnames(): Set<string> {
   return hostnames
 }
 
-export async function verifyTurnstileLogin(tokenValue: unknown, clientIp: string): Promise<void> {
+/**
+ * 校验 Turnstile 令牌。action 必须与前端 widget 渲染时传入的一致，
+ * 避免把某个场景（如登录）拿到的令牌复用到另一个场景（如聊天发言）。
+ */
+export async function verifyTurnstileToken(
+  tokenValue: unknown,
+  clientIp: string,
+  action: string,
+): Promise<void> {
   const token = typeof tokenValue === 'string' ? tokenValue.trim() : ''
   const secret = getTurnstileConfig().secret
   const hostnames = expectedHostnames()
@@ -65,7 +72,11 @@ export async function verifyTurnstileLogin(tokenValue: unknown, clientIp: string
   }
 
   const hostname = String(result.hostname || '').trim().toLowerCase()
-  if (result.success !== true || result.action !== TURNSTILE_ACTION || !hostnames.has(hostname)) {
+  if (result.success !== true || result.action !== action || !hostnames.has(hostname)) {
     throw createError({ statusCode: 403, statusMessage: '人机验证失败，请重试' })
   }
+}
+
+export function verifyTurnstileLogin(tokenValue: unknown, clientIp: string): Promise<void> {
+  return verifyTurnstileToken(tokenValue, clientIp, 'login')
 }

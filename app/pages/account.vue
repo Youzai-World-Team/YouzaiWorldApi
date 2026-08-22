@@ -1,7 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
-
-useHead({ title: '账户' })
+import { computed, ref, onMounted } from 'vue'
 
 const oldPassword = ref('')
 const newPassword = ref('')
@@ -15,15 +13,29 @@ const savingEntry = ref(false)
 const gameApiKey = ref('')
 const showGameApiKey = ref(false)
 const savingGameApiKey = ref(false)
+const fileInput = ref<HTMLInputElement | null>(null)
+const uploadingAvatar = ref(false)
+const fullNameInput = ref('')
+const savingFullName = ref(false)
 
 const { showToast } = useToast()
 const { entry: entryState, load: loadEntry } = useEntry()
-const currentUser = ref<{ username: string; isOwner: boolean } | null>(null)
+interface CurrentUser {
+  username: string
+  avatar: string
+  fullName: string
+  isOwner: boolean
+}
+
+const currentUser = ref<CurrentUser | null>(null)
+const displayName = computed(() => currentUser.value?.fullName || currentUser.value?.username || '账户')
+useHead(() => ({ title: displayName.value }))
 
 onMounted(async () => {
   try {
-    const result = await $fetch<{ user: { username: string; isOwner: boolean } }>('/api/auth/me')
+    const result = await $fetch<{ user: CurrentUser }>('/api/auth/me')
     currentUser.value = result.user
+    fullNameInput.value = result.user.fullName || ''
   } catch {}
   try {
     const result = await $fetch<{ gameApiKey: string }>('/api/auth/game-api-key')
@@ -85,6 +97,103 @@ async function saveEntry() {
   }
 }
 
+function pickAvatar() {
+  fileInput.value?.click()
+}
+
+async function saveFullName() {
+  if (savingFullName.value) return
+  const fullName = fullNameInput.value.trim().replace(/\s+/g, ' ')
+  if (fullName.length > 64) {
+    showToast('全名不能超过 64 个字符', 'error')
+    return
+  }
+  savingFullName.value = true
+  try {
+    const result = await $fetch<{ user: CurrentUser }>('/api/auth/full-name', {
+      method: 'POST',
+      body: { fullName },
+    })
+    currentUser.value = result.user
+    fullNameInput.value = result.user.fullName
+    window.dispatchEvent(new CustomEvent('admin-profile-updated', { detail: result.user }))
+    showToast(fullName ? '全名已更新' : '已清除全名，将显示用户名')
+  } catch (e: any) {
+    showToast(e?.data?.statusMessage || '全名更新失败', 'error')
+  } finally {
+    savingFullName.value = false
+  }
+}
+
+async function onAvatarChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  if (!file.type.startsWith('image/')) {
+    showToast('请选择图片文件', 'error')
+    return
+  }
+  if (file.size > 2 * 1024 * 1024) {
+    showToast('头像图片不能超过 2 MiB', 'error')
+    return
+  }
+
+  uploadingAvatar.value = true
+  try {
+    const form = new FormData()
+    form.append('file', file)
+    const upload = await $fetch<{ url: string }>('/api/upload', { method: 'POST', body: form })
+    const result = await $fetch<{ user: CurrentUser }>('/api/auth/avatar', {
+      method: 'POST',
+      body: { avatar: upload.url },
+    })
+    currentUser.value = result.user
+    window.dispatchEvent(new CustomEvent('admin-profile-updated', { detail: result.user }))
+    showToast('头像已更新')
+  } catch (e: any) {
+    showToast(e?.data?.statusMessage || '头像更新失败', 'error')
+  } finally {
+    uploadingAvatar.value = false
+  }
+}
+
+async function clearAvatar() {
+  if (uploadingAvatar.value) return
+  uploadingAvatar.value = true
+  try {
+    const result = await $fetch<{ user: CurrentUser }>('/api/auth/avatar', {
+      method: 'POST',
+      body: { avatar: '' },
+    })
+    currentUser.value = result.user
+    window.dispatchEvent(new CustomEvent('admin-profile-updated', { detail: result.user }))
+    showToast('头像已移除')
+  } catch (e: any) {
+    showToast(e?.data?.statusMessage || '头像更新失败', 'error')
+  } finally {
+    uploadingAvatar.value = false
+  }
+}
+
+async function restoreOwnerAvatar() {
+  if (uploadingAvatar.value || !currentUser.value?.isOwner) return
+  uploadingAvatar.value = true
+  try {
+    const result = await $fetch<{ user: CurrentUser }>('/api/auth/avatar', {
+      method: 'POST',
+      body: { avatar: '/favicon.ico' },
+    })
+    currentUser.value = result.user
+    window.dispatchEvent(new CustomEvent('admin-profile-updated', { detail: result.user }))
+    showToast('已恢复默认头像')
+  } catch (e: any) {
+    showToast(e?.data?.statusMessage || '头像更新失败', 'error')
+  } finally {
+    uploadingAvatar.value = false
+  }
+}
+
 async function saveGameApiKey() {
   if (savingGameApiKey.value || !currentUser.value?.isOwner) return
   const value = gameApiKey.value.trim()
@@ -119,9 +228,51 @@ async function logout() {
 
 <template>
   <div class="page">
-    <h1 class="page-title">账户</h1>
+    <h1 class="page-title">{{ displayName }}</h1>
 
     <div class="account-stack">
+    <section class="card account-card profile-card">
+      <h2 class="card-title">个人资料</h2>
+      <div class="profile-row">
+        <div class="profile-avatar" role="img" :aria-label="`${currentUser?.username || '用户'}的头像`">
+          <img v-if="currentUser?.avatar" :src="currentUser.avatar" alt="" />
+          <md-icon v-else>account_circle</md-icon>
+          <span v-if="uploadingAvatar" class="profile-avatar-loading">上传中…</span>
+        </div>
+        <div class="profile-info">
+          <strong>{{ displayName }}</strong>
+          <span v-if="currentUser?.fullName" class="profile-username">用户名：{{ currentUser.username }}</span>
+          <div class="profile-actions">
+            <md-text-button :disabled="uploadingAvatar" @click="pickAvatar">
+              <md-icon slot="icon">upload</md-icon>
+              设置头像
+            </md-text-button>
+            <md-text-button v-if="currentUser?.avatar && currentUser.isOwner && currentUser.avatar !== '/favicon.ico'" :disabled="uploadingAvatar" @click="restoreOwnerAvatar">
+              <md-icon slot="icon">restore</md-icon>
+              恢复默认
+            </md-text-button>
+            <md-text-button v-else-if="currentUser?.avatar && !currentUser.isOwner" :disabled="uploadingAvatar" @click="clearAvatar">
+              <md-icon slot="icon">delete</md-icon>
+              移除头像
+            </md-text-button>
+          </div>
+        </div>
+      </div>
+      <div class="full-name-form">
+        <md-outlined-text-field
+          label="全名"
+          supporting-text="作为对外显示的名称；留空时显示用户名"
+          maxlength="64"
+          :value="fullNameInput"
+          @input="fullNameInput = ($event.target as HTMLInputElement).value"
+        ></md-outlined-text-field>
+        <md-filled-button :disabled="savingFullName" @click="saveFullName">
+          {{ savingFullName ? '保存中…' : '保存全名' }}
+        </md-filled-button>
+      </div>
+      <input ref="fileInput" class="hidden-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif" @change="onAvatarChange" />
+    </section>
+
     <section class="card account-card">
       <h2 class="card-title">更新密码</h2>
       <div class="form">
@@ -211,6 +362,84 @@ async function logout() {
   min-width: 0;
 }
 
+.profile-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.profile-avatar {
+  position: relative;
+  width: 88px;
+  height: 88px;
+  flex: 0 0 88px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 50%;
+  color: var(--md-sys-color-on-surface-variant);
+  background: var(--md-sys-color-surface-container-high);
+}
+
+.profile-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.profile-avatar md-icon {
+  --md-icon-size: 44px;
+}
+
+.profile-avatar-loading {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-size: 12px;
+  text-align: center;
+  background: rgb(0 0 0 / 55%);
+}
+
+.profile-info {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.profile-info strong {
+  overflow-wrap: anywhere;
+}
+
+.profile-username {
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.profile-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.hidden-input {
+  display: none;
+}
+
+.full-name-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.full-name-form md-outlined-text-field {
+  width: 100%;
+}
+
 .form {
   display: flex;
   flex-direction: column;
@@ -247,6 +476,23 @@ async function logout() {
   }
 
   .form md-filled-button {
+    width: 100%;
+  }
+
+  .profile-row {
+    align-items: flex-start;
+  }
+
+  .profile-actions {
+    display: grid;
+    justify-items: start;
+  }
+
+  .full-name-form {
+    grid-template-columns: 1fr;
+  }
+
+  .full-name-form md-filled-button {
     width: 100%;
   }
 }

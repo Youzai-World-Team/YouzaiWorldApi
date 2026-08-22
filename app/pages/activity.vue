@@ -399,7 +399,7 @@ async function confirmDelete() {
 }
 
 .date-input {
-  height: 56px;
+  height: var(--app-control-height);
   padding: 0 12px;
   border: 1px solid var(--md-sys-color-outline-variant);
   border-radius: 4px;

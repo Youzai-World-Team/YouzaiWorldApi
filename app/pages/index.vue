@@ -58,6 +58,7 @@ const { showToast } = useToast()
 
 const navLinks = [
   { label: '服务器动态', icon: 'monitoring', to: '/activity' },
+  { label: '管理聊天区', icon: 'forum', to: '/chat' },
   { label: '管理游戏账户', icon: 'manage_accounts', to: '/game-accounts' },
   { label: '查看捐赠列表', icon: 'redeem', to: '/donors' },
 ]

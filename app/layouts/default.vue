@@ -1,17 +1,27 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
+import type { ThemeMode } from '../composables/useThemeTransition'
 
 const route = useRoute()
 
 const baseNavItems = [
   { label: '仪表盘', icon: 'dashboard', to: '/' },
   { label: '服务器动态', icon: 'monitoring', to: '/activity' },
+  { label: '聊天区', icon: 'forum', to: '/chat' },
   { label: '捐赠列表', icon: 'redeem', to: '/donors' },
   { label: '封禁列表', icon: 'gavel', to: '/bans' },
   { label: '更新服务', icon: 'system_update', to: '/updates' },
   { label: '游戏账户', icon: 'manage_accounts', to: '/game-accounts' }
 ]
-const currentUser = ref<{ username: string; isOwner: boolean } | null>(null)
+interface CurrentUser {
+  username: string
+  avatar: string
+  fullName: string
+  isOwner: boolean
+}
+
+const currentUser = ref<CurrentUser | null>(null)
+const accountLabel = computed(() => currentUser.value?.fullName || currentUser.value?.username || '账户')
 const navItems = computed(() => [
   ...baseNavItems,
   { label: '操作记录', icon: 'history', to: '/audit-logs' },
@@ -21,6 +31,8 @@ const navItems = computed(() => [
 const drawerOpen = ref(true)
 const isDesktop = ref(true)
 const dark = ref(false)
+const themeMode = ref<ThemeMode>('system')
+const { toggleTheme, themeIcon, themeModeLabel, themeButtonLabel } = useThemeTransition(dark, themeMode)
 
 const { load: loadEntry } = useEntry()
 
@@ -29,16 +41,6 @@ const mq = typeof window !== 'undefined' ? window.matchMedia('(min-width: 900px)
 function syncDrawer() {
   isDesktop.value = mq ? mq.matches : true
   drawerOpen.value = isDesktop.value
-}
-
-function applyTheme(isDark: boolean) {
-  document.documentElement.dataset.theme = isDark ? 'dark' : 'light'
-  localStorage.setItem('theme', isDark ? 'dark' : 'light')
-}
-
-function toggleTheme() {
-  dark.value = !dark.value
-  applyTheme(dark.value)
 }
 
 function onNav(e: Event, to: string) {
@@ -55,15 +57,17 @@ function isActive(to: string) {
   return route.path === to
 }
 
+function onProfileUpdated(event: Event) {
+  const user = (event as CustomEvent<CurrentUser>).detail
+  if (user?.username) currentUser.value = user
+}
+
 onMounted(async () => {
   syncDrawer()
   mq?.addEventListener('change', syncDrawer)
-  const saved = localStorage.getItem('theme')
-  dark.value = saved === 'dark'
-  applyTheme(dark.value)
-
+  window.addEventListener('admin-profile-updated', onProfileUpdated)
   try {
-    const result = await $fetch<{ user: { username: string; isOwner: boolean } }>('/api/auth/me')
+    const result = await $fetch<{ user: CurrentUser }>('/api/auth/me')
     currentUser.value = result.user
   } catch {
     const entry = await loadEntry()
@@ -73,6 +77,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   mq?.removeEventListener('change', syncDrawer)
+  window.removeEventListener('admin-profile-updated', onProfileUpdated)
 })
 </script>
 
@@ -84,10 +89,9 @@ onBeforeUnmount(() => {
       </md-icon-button>
       <img class="app-logo" src="/images/uzw-tm.png" alt="悠哉世界" />
       <div class="app-bar-actions">
-        <span v-if="currentUser" class="current-user">{{ currentUser.username }}</span>
-        <md-icon-button :aria-label="dark ? '切换浅色' : '切换深色'" @click="toggleTheme">
+        <md-icon-button :aria-label="themeButtonLabel" :title="themeModeLabel" @click="toggleTheme">
           <Transition name="icon-swap" mode="out-in">
-            <md-icon :key="dark ? 'light' : 'dark'">{{ dark ? 'light_mode' : 'dark_mode' }}</md-icon>
+            <md-icon :key="themeIcon">{{ themeIcon }}</md-icon>
           </Transition>
         </md-icon-button>
       </div>
@@ -128,8 +132,9 @@ onBeforeUnmount(() => {
                 @click="onNav($event, '/account')"
                 class="logout-item"
               >
-                <md-icon slot="start" :class="{ 'icon--active': isActive('/account') }">account_circle</md-icon>
-                <span slot="headline" :class="{ 'label--active': isActive('/account') }">账户</span>
+                <img v-if="currentUser?.avatar" slot="start" class="nav-account-avatar" :src="currentUser.avatar" alt="" />
+                <md-icon v-else slot="start" :class="{ 'icon--active': isActive('/account') }">account_circle</md-icon>
+                <span slot="headline" :class="{ 'label--active': isActive('/account') }">{{ accountLabel }}</span>
               </md-list-item>
             </div>
           </md-navigation-drawer>
@@ -148,12 +153,13 @@ onBeforeUnmount(() => {
               </md-icon-button>
             </nav>
             <md-icon-button
-              aria-label="账户"
-              title="账户"
+              :aria-label="accountLabel"
+              :title="accountLabel"
               :class="{ 'collapsed-nav-item--active': isActive('/account') }"
               @click="onNav($event, '/account')"
             >
-              <md-icon>account_circle</md-icon>
+              <img v-if="currentUser?.avatar" class="collapsed-account-avatar" :src="currentUser.avatar" alt="" />
+              <md-icon v-else>account_circle</md-icon>
             </md-icon-button>
           </aside>
         </Transition>
@@ -187,8 +193,9 @@ onBeforeUnmount(() => {
             @click="onNav($event, '/account')"
             class="logout-item"
           >
-            <md-icon slot="start" :class="{ 'icon--active': isActive('/account') }">account_circle</md-icon>
-            <span slot="headline" :class="{ 'label--active': isActive('/account') }">账户</span>
+            <img v-if="currentUser?.avatar" slot="start" class="nav-account-avatar" :src="currentUser.avatar" alt="" />
+            <md-icon v-else slot="start" :class="{ 'icon--active': isActive('/account') }">account_circle</md-icon>
+            <span slot="headline" :class="{ 'label--active': isActive('/account') }">{{ accountLabel }}</span>
           </md-list-item>
         </div>
       </md-navigation-drawer-modal>
@@ -235,13 +242,15 @@ onBeforeUnmount(() => {
   object-position: left center;
 }
 
-.current-user {
-  color: var(--md-sys-color-on-surface-variant);
-  font-size: 13px;
-  max-width: 180px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.nav-account-avatar,
+.collapsed-account-avatar {
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.nav-account-avatar {
+  width: 24px;
+  height: 24px;
 }
 
 .icon-swap-enter-active,
@@ -337,6 +346,11 @@ onBeforeUnmount(() => {
 
 .collapsed-nav-item--active md-icon {
   font-variation-settings: 'FILL' 1;
+}
+
+.collapsed-account-avatar {
+  width: 24px;
+  height: 24px;
 }
 
 md-navigation-drawer-modal {

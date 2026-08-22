@@ -1,8 +1,8 @@
 <script setup lang="ts">
 const bootOverlay = ref<HTMLElement | null>(null)
 
-// 在首次渲染前（<head> 内联脚本）就根据本地存储还原深浅色主题，避免初始闪亮/闪暗
-const themeBootScript = `(function(){try{var t=localStorage.getItem('theme');document.documentElement.dataset.theme=t==='dark'?'dark':'light'}catch(e){document.documentElement.dataset.theme='light'}})()`
+// 在首次渲染前恢复主题；没有手动偏好时跟随浏览器声明的配色方案。
+const themeBootScript = `(function(){try{var t=localStorage.getItem('theme');var s=t==='system'||(t!=='light'&&t!=='dark');var d=t==='dark'||(s&&window.matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.dataset.theme=d?'dark':'light';document.documentElement.dataset.themeMode=s?'system':t}catch(e){document.documentElement.dataset.theme='light';document.documentElement.dataset.themeMode='system'}})()`
 
 useHead({
   script: [

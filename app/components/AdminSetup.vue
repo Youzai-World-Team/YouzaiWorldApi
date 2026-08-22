@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
+import type { ThemeMode } from '../composables/useThemeTransition'
 
 const entry = ref('')
 const username = ref('admin')
@@ -14,25 +15,15 @@ const showTurnstileSecret = ref(false)
 const showGameApiKey = ref(false)
 const loading = ref(false)
 const dark = ref(false)
+const themeMode = ref<ThemeMode>('system')
+const { toggleTheme, themeIcon, themeModeLabel, themeButtonLabel } = useThemeTransition(dark, themeMode)
 const { showToast } = useToast()
 const reservedEntries = new Set([
   'login', 'account', 'activity', 'donors', 'bans', 'updates', 'game-accounts', 'admin-users', 'audit-logs',
   'api', '_nuxt', '_ipx', 'favicon', '__nuxt_error',
 ])
 
-function applyTheme(isDark: boolean) {
-  document.documentElement.dataset.theme = isDark ? 'dark' : 'light'
-  localStorage.setItem('theme', isDark ? 'dark' : 'light')
-}
-
-function toggleTheme() {
-  dark.value = !dark.value
-  applyTheme(dark.value)
-}
-
 onMounted(async () => {
-  dark.value = localStorage.getItem('theme') === 'dark'
-  applyTheme(dark.value)
   try {
     const state = await $fetch<{ turnstile?: { siteKey?: string; hostnames?: string } }>('/api/auth/setup')
     if (state.turnstile?.siteKey) turnstileSiteKey.value = state.turnstile.siteKey
@@ -104,9 +95,11 @@ async function submit() {
 
 <template>
   <main class="setup-page">
-    <md-icon-button class="theme-toggle" :aria-label="dark ? '切换浅色' : '切换深色'" @click="toggleTheme">
-      <md-icon>{{ dark ? 'light_mode' : 'dark_mode' }}</md-icon>
-    </md-icon-button>
+    <div class="theme-toggle">
+      <md-icon-button :aria-label="themeButtonLabel" :title="themeModeLabel" @click="toggleTheme">
+        <md-icon>{{ themeIcon }}</md-icon>
+      </md-icon-button>
+    </div>
 
     <section class="setup-panel">
       <div class="setup-heading">
@@ -223,6 +216,9 @@ async function submit() {
   position: fixed;
   top: 16px;
   right: 16px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .setup-panel {

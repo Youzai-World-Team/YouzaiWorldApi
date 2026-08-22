@@ -45,7 +45,8 @@ export default defineEventHandler((event) => {
 
   const contentLengthHeader = getHeader(event, 'content-length')
   const contentLength = Number(contentLengthHeader || 0)
-  const maxBytes = event.path === '/api/upload' ? 2 * 1024 * 1024 : 256 * 1024
+  // multipart 还包含边界和字段头；实际图片仍由上传接口限制为 2 MiB。
+  const maxBytes = event.path === '/api/upload' ? 2 * 1024 * 1024 + 64 * 1024 : 256 * 1024
   if (!Number.isFinite(contentLength) || contentLength < 0 || contentLength > maxBytes) {
     throw createError({ statusCode: 413, statusMessage: '请求体过大' })
   }
