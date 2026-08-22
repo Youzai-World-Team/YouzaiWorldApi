@@ -25,6 +25,15 @@ Nuxt API 服务端与管理页面。生产环境建议通过 Cloudflare 以 `htt
 
 找回密码会话与验证码均在 10 分钟后失效，60 秒内不可重复发送；连续输入错误 5 次后会话失效。找回流程仅适用于已经通过邮箱验证并绑定邮箱的账户，且所有请求同样需要游戏 API HMAC 签名。
 
+已登录玩家可从模组暂停菜单进入账户管理页面。下列敏感接口除 HMAC 签名外，还必须携带登录接口返回的 `Authorization: Bearer <token>` 游戏会话；账户身份只取自该会话，不信任请求体中的玩家名：
+
+1. `POST /api/game/change-password` 提交 `{"oldPassword":"...","newPassword":"..."}`。成功后撤销该账户全部登录令牌、找回密码会话与换绑邮箱会话，玩家需要重新登录。
+2. `POST /api/game/account-email-change/send` 提交 `{"password":"当前密码","email":"new@example.com"}`。当前密码正确且目标邮箱未被其他账户占用时，向新邮箱发送六位验证码，并返回 `session_id`、`expires_in` 与 `resend_after`。
+3. `POST /api/game/account-email-change/verify` 提交 `{"session_id":"...","code":"123456"}`。验证码和当前游戏会话属于同一账户时，原子更新绑定邮箱并返回最新账户数据。
+4. `POST /api/game/deactivate` 提交 `{"password":"当前密码"}`。成功后删除账户、全部认证/邮箱会话及其外观数据。
+
+换绑邮箱会话与验证码均在 10 分钟后失效，60 秒内不可重复发送；连续输入错误 5 次后会话失效。数据库唯一索引与完成验证时的事务复检共同保证每个邮箱最多绑定一个游戏账户。
+
 首次启动后访问根目录 `/`，设置首个后台用户名（3 至 32 位）、密码（12 至 128 位）、登录入口（12 至 64 位），以及 Turnstile 站点密钥、服务端密钥和允许的前端 hostname。
 设置成功后初始化接口会永久关闭，后续只能通过该入口登录。也可在首次启动前同时配置
 `YZWC_ADMIN_USERNAME`、`YZWC_ADMIN_PASSWORD` 和 `YZWC_ADMIN_ENTRY` 进行无人值守初始化。

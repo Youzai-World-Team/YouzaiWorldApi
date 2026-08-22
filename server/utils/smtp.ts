@@ -214,6 +214,28 @@ export async function sendPasswordResetVerificationEmail(
   return sendMessage(settings, recipient, message)
 }
 
+export async function sendEmailChangeVerificationEmail(
+  settings: SmtpTransportSettings,
+  recipient: string,
+  username: string,
+  code: string,
+): Promise<void> {
+  const message = buildMessage(
+    settings,
+    recipient,
+    '悠哉世界游戏账户换绑邮箱验证码',
+    [
+      `你正在为游戏账户 ${username} 换绑邮箱。`,
+      '',
+      `验证码：${code}`,
+      '',
+      '验证码 10 分钟内有效。验证成功后，该邮箱将成为账户的新绑定邮箱。',
+      '若非本人操作，请忽略此邮件并立即修改账户密码。',
+    ],
+  )
+  return sendMessage(settings, recipient, message)
+}
+
 async function sendMessage(
   settings: SmtpTransportSettings,
   recipient: string,
