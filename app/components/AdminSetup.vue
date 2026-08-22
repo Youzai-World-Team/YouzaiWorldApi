@@ -150,7 +150,6 @@ async function submit() {
 .setup-panel {
   width: min(420px, 100%);
   padding: 28px;
-  border: 1px solid var(--md-sys-color-outline-variant);
   border-radius: 8px;
   background: var(--md-sys-color-surface-container);
 }

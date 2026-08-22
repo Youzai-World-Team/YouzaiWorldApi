@@ -330,14 +330,6 @@ onBeforeUnmount(() => {
   font-variation-settings: 'FILL' 1;
 }
 
-.drawer-content md-list-item {
-  transition: transform 180ms cubic-bezier(0.2, 0, 0, 1);
-}
-
-.drawer-content md-list-item:hover {
-  transform: translateX(3px);
-}
-
 md-navigation-drawer-modal {
   position: fixed;
   inset: 0;
