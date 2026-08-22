@@ -12,6 +12,10 @@ const entryInput = ref('')
 const currentEntry = ref('')
 const savingEntry = ref(false)
 
+const gameApiKey = ref('')
+const showGameApiKey = ref(false)
+const savingGameApiKey = ref(false)
+
 const { showToast } = useToast()
 const { entry: entryState, load: loadEntry } = useEntry()
 const currentUser = ref<{ username: string; isOwner: boolean } | null>(null)
@@ -20,6 +24,10 @@ onMounted(async () => {
   try {
     const result = await $fetch<{ user: { username: string; isOwner: boolean } }>('/api/auth/me')
     currentUser.value = result.user
+  } catch {}
+  try {
+    const result = await $fetch<{ gameApiKey: string }>('/api/auth/game-api-key')
+    gameApiKey.value = result.gameApiKey || ''
   } catch {}
   currentEntry.value = await loadEntry()
   entryInput.value = currentEntry.value
@@ -74,6 +82,28 @@ async function saveEntry() {
     showToast(e?.data?.statusMessage || '保存失败', 'error')
   } finally {
     savingEntry.value = false
+  }
+}
+
+async function saveGameApiKey() {
+  if (savingGameApiKey.value || !currentUser.value?.isOwner) return
+  const value = gameApiKey.value.trim()
+  if (value.length < 32 || value.length > 512 || /\s/.test(value)) {
+    showToast('游戏 API 密钥长度需要为 32 至 512 位且不能包含空白字符', 'error')
+    return
+  }
+  savingGameApiKey.value = true
+  try {
+    const result = await $fetch<{ gameApiKey: string }>('/api/auth/game-api-key', {
+      method: 'POST',
+      body: { gameApiKey: value },
+    })
+    gameApiKey.value = result.gameApiKey
+    showToast('游戏 API 密钥已更新，请同步修改 Minecraft 模组配置')
+  } catch (e: any) {
+    showToast(e?.data?.statusMessage || '保存失败', 'error')
+  } finally {
+    savingGameApiKey.value = false
   }
 }
 
@@ -135,6 +165,31 @@ async function logout() {
     </section>
 
     <section class="card account-card">
+      <h2 class="card-title">游戏 API 密钥</h2>
+      <p class="entry-hint">用于 Minecraft 模组与 API 服务端的签名通信。初始管理员可以修改，其他用户仅可查看。</p>
+      <div class="form">
+        <div class="password-field">
+          <md-outlined-text-field
+            :type="showGameApiKey ? 'text' : 'password'"
+            label="YZWC_GAME_API_KEY"
+            supporting-text="必须与服务器模组配置中的密钥完全一致"
+            autocomplete="off"
+            spellcheck="false"
+            :readonly="!currentUser?.isOwner"
+            :value="gameApiKey"
+            @input="gameApiKey = ($event.target as HTMLInputElement).value"
+          ></md-outlined-text-field>
+          <md-icon-button :aria-label="showGameApiKey ? '隐藏游戏 API 密钥' : '显示游戏 API 密钥'" @click="showGameApiKey = !showGameApiKey">
+            <md-icon>{{ showGameApiKey ? 'visibility_off' : 'visibility' }}</md-icon>
+          </md-icon-button>
+        </div>
+        <md-filled-button v-if="currentUser?.isOwner" :disabled="savingGameApiKey" @click="saveGameApiKey">
+          {{ savingGameApiKey ? '保存中…' : '保存游戏 API 密钥' }}
+        </md-filled-button>
+      </div>
+    </section>
+
+    <section class="card account-card">
       <h2 class="card-title">账户操作</h2>
       <md-text-button class="logout-btn" @click="logout">
         <md-icon slot="icon">logout</md-icon>
@@ -160,6 +215,13 @@ async function logout() {
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+.password-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 48px;
+  align-items: center;
+  gap: 4px;
 }
 
 .logout-btn {

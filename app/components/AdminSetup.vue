@@ -6,10 +6,12 @@ const username = ref('admin')
 const turnstileSiteKey = ref('')
 const turnstileSecret = ref('')
 const turnstileHostnames = ref('')
+const gameApiKey = ref('')
 const password = ref('')
 const confirmPassword = ref('')
 const showPassword = ref(false)
 const showTurnstileSecret = ref(false)
+const showGameApiKey = ref(false)
 const loading = ref(false)
 const dark = ref(false)
 const { showToast } = useToast()
@@ -70,6 +72,10 @@ async function submit() {
     showToast('请填写 Turnstile 允许的域名', 'error')
     return
   }
+  if (gameApiKey.value.trim().length < 32 || gameApiKey.value.trim().length > 512 || /\s/.test(gameApiKey.value.trim())) {
+    showToast('游戏 API 密钥长度需要为 32 至 512 位且不能包含空白字符', 'error')
+    return
+  }
 
   loading.value = true
   try {
@@ -83,6 +89,7 @@ async function submit() {
         turnstileSiteKey: turnstileSiteKey.value.trim(),
         turnstileSecret: turnstileSecret.value.trim(),
         turnstileHostnames: turnstileHostnames.value.trim(),
+        gameApiKey: gameApiKey.value.trim(),
       },
     })
     useEntry().remember(result.entry)
@@ -156,6 +163,21 @@ async function submit() {
           :value="turnstileHostnames"
           @input="turnstileHostnames = ($event.target as HTMLInputElement).value"
         ></md-outlined-text-field>
+
+        <div class="password-field">
+          <md-outlined-text-field
+            :type="showGameApiKey ? 'text' : 'password'"
+            label="YZWC_GAME_API_KEY"
+            supporting-text="需要与 Minecraft 模组配置中的密钥完全一致，至少 32 位"
+            autocomplete="new-password"
+            spellcheck="false"
+            :value="gameApiKey"
+            @input="gameApiKey = ($event.target as HTMLInputElement).value"
+          ></md-outlined-text-field>
+          <md-icon-button :aria-label="showGameApiKey ? '隐藏游戏 API 密钥' : '显示游戏 API 密钥'" @click="showGameApiKey = !showGameApiKey">
+            <md-icon>{{ showGameApiKey ? 'visibility_off' : 'visibility' }}</md-icon>
+          </md-icon-button>
+        </div>
 
         <div class="password-field">
           <md-outlined-text-field
