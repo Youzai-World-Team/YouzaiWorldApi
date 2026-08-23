@@ -1,5 +1,5 @@
 import { getAuthenticatedUser, requireOwner, requirePagePermission } from '../utils/db'
-import { isReadOperation, pageKeyForApi } from '../../shared/admin-api-permissions'
+import { isReadOperation, pageKeyForApi } from '#shared/admin-api-permissions'
 
 export default defineEventHandler((event) => {
   const path = getRequestURL(event).pathname

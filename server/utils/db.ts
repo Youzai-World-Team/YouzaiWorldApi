@@ -33,7 +33,7 @@ import {
   ownerAdminPagePermissions,
   permissionAllows,
   type AdminPagePermissionLevel,
-} from '../../shared/admin-page-permissions'
+} from '#shared/admin-page-permissions'
 
 const dataDir = path.resolve(process.cwd(), 'server/data')
 mkdirSync(dataDir, { recursive: true })

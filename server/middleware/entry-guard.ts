@@ -1,5 +1,5 @@
 import { getAdminEntry, getAuthenticatedUser, isAdminInitialized } from '../utils/db'
-import { adminPageKeyForPath, firstVisibleAdminRoute } from '../../shared/admin-page-permissions'
+import { adminPageKeyForPath, firstVisibleAdminRoute } from '#shared/admin-page-permissions'
 
 export default defineEventHandler(async (event) => {
   const path = getRequestURL(event).pathname

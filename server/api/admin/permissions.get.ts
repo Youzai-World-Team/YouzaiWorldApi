@@ -1,4 +1,4 @@
-import { ADMIN_PAGE_DEFINITIONS } from '../../../shared/admin-page-permissions'
+import { ADMIN_PAGE_DEFINITIONS } from '#shared/admin-page-permissions'
 import { listAdminUsers, requirePagePermission } from '../../utils/db'
 
 export default defineEventHandler((event) => {

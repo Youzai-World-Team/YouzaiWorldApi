@@ -4,7 +4,7 @@ import {
   adminPageKeyForPath,
   firstVisibleAdminRoute,
   type AdminPagePermissionLevel,
-} from '../../shared/admin-page-permissions'
+} from '#shared/admin-page-permissions'
 
 export interface AdminAccessUser {
   id: number

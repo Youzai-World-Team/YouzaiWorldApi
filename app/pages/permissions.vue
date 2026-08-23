@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import type {
   AdminPageDefinition,
   AdminPagePermissionLevel,
-} from '../../shared/admin-page-permissions'
+} from '#shared/admin-page-permissions'
 
 useHead({ title: '权限管理' })
 
