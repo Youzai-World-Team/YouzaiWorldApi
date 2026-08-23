@@ -2,7 +2,7 @@ import {
   buildVerificationEmailFromTemplate,
 } from '../../utils/smtp'
 import { getRequestURL } from 'h3'
-import { getVerificationEmailTemplates, requireAuth } from '../../utils/db'
+import { getVerificationEmailTemplates, requirePagePermission } from '../../utils/db'
 import type { VerificationEmailTemplateKind } from '../../utils/email-templates'
 
 const PREVIEW_KINDS: VerificationEmailTemplateKind[] = [
@@ -12,7 +12,7 @@ const PREVIEW_KINDS: VerificationEmailTemplateKind[] = [
 ]
 
 export default defineEventHandler((event) => {
-  const user = requireAuth(event)
+  const user = requirePagePermission(event, 'game-accounts', 'view')
   const requestedKind = String(getQuery(event).type || 'registration') as VerificationEmailTemplateKind
   if (!PREVIEW_KINDS.includes(requestedKind)) {
     throw createError({ statusCode: 400, statusMessage: '不支持的验证码邮件类型' })

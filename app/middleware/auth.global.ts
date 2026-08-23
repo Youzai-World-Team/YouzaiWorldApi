@@ -8,11 +8,13 @@ export default defineNuxtRouteMiddleware(async (to) => {
   }
 
   const isEntryRoute = to.name === 'entry'
+  const access = useAdminAccess()
   let authenticated = false
   try {
-    await $fetch('/api/auth/me')
+    await access.load(true)
     authenticated = true
   } catch {
+    access.clear()
     authenticated = false
   }
 
@@ -29,4 +31,7 @@ export default defineNuxtRouteMiddleware(async (to) => {
   }
 
   await useEntry().load()
+  if (access.levelForPath(to.path) === 'hidden') {
+    return navigateTo(access.firstVisibleRoute.value)
+  }
 })

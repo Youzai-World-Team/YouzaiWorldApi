@@ -19,7 +19,8 @@ const themeMode = ref<ThemeMode>('system')
 const { toggleTheme, themeIcon, themeModeLabel, themeButtonLabel } = useThemeTransition(dark, themeMode)
 const { showToast } = useToast()
 const reservedEntries = new Set([
-  'login', 'account', 'activity', 'donors', 'bans', 'updates', 'game-accounts', 'admin-users', 'audit-logs',
+  'login', 'account', 'activity', 'donors', 'bans', 'updates', 'game-accounts', 'game-cosmetics',
+  'game-account-email-templates', 'admin-users', 'audit-logs', 'chat', 'mail', 'settings', 'permissions',
   'api', '_nuxt', '_ipx', 'favicon', '__nuxt_error',
 ])
 

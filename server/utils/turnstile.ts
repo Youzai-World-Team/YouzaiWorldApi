@@ -1,5 +1,5 @@
 import { createError } from 'h3'
-import { getTurnstileConfig } from './db'
+import { getChatTurnstileConfig, getTurnstileConfig, type TurnstileConfig, type TurnstileScope } from './db'
 
 const TURNSTILE_VERIFY_URL = 'https://challenges.cloudflare.com/turnstile/v0/siteverify'
 const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1'])
@@ -8,11 +8,16 @@ interface TurnstileVerifyResponse {
   success?: boolean
   action?: string
   hostname?: string
+  'error-codes'?: string[]
 }
 
-function expectedHostnames(): Set<string> {
+function configFor(scope: TurnstileScope): TurnstileConfig {
+  return scope === 'chat' ? getChatTurnstileConfig() : getTurnstileConfig()
+}
+
+function expectedHostnames(config: TurnstileConfig): Set<string> {
   const hostnames = new Set(
-    getTurnstileConfig().hostnames
+    config.hostnames
       .split(',')
       .map((hostname) => hostname.trim().toLowerCase())
       .filter(Boolean),
@@ -37,16 +42,17 @@ function expectedHostnames(): Set<string> {
  * 校验 Turnstile 令牌。action 必须与前端 widget 渲染时传入的一致，
  * 避免把某个场景（如登录）拿到的令牌复用到另一个场景（如聊天发言）。
  */
-export async function verifyTurnstileToken(
+async function verifyTurnstile(
   tokenValue: unknown,
   clientIp: string,
   action: string,
+  scope: TurnstileScope,
 ): Promise<void> {
   const token = typeof tokenValue === 'string' ? tokenValue.trim() : ''
-  const secret = getTurnstileConfig().secret
-  const hostnames = expectedHostnames()
+  const config = configFor(scope)
+  const hostnames = expectedHostnames(config)
 
-  if (!secret) {
+  if (!config.secret) {
     throw createError({ statusCode: 503, statusMessage: 'Turnstile 服务端密钥未配置' })
   }
   if (!token || token.length > 2048) {
@@ -60,7 +66,7 @@ export async function verifyTurnstileToken(
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       signal: AbortSignal.timeout(10_000),
       body: new URLSearchParams({
-        secret,
+        secret: config.secret,
         response: token,
         remoteip: clientIp,
       }),
@@ -73,10 +79,26 @@ export async function verifyTurnstileToken(
 
   const hostname = String(result.hostname || '').trim().toLowerCase()
   if (result.success !== true || result.action !== action || !hostnames.has(hostname)) {
+    // 配置类错误（域名没登记、密钥配错）与用户真的没通过很难从前端区分，
+    // 这里把判定依据打到服务端日志，便于排查“明明通过了却被拒”的情况。
+    console.warn('[turnstile] 校验未通过', {
+      scope,
+      expectedAction: action,
+      actualAction: result.action,
+      hostname,
+      allowedHostnames: [...hostnames],
+      success: result.success,
+      errorCodes: result['error-codes'],
+    })
     throw createError({ statusCode: 403, statusMessage: '人机验证失败，请重试' })
   }
 }
 
 export function verifyTurnstileLogin(tokenValue: unknown, clientIp: string): Promise<void> {
-  return verifyTurnstileToken(tokenValue, clientIp, 'login')
+  return verifyTurnstile(tokenValue, clientIp, 'login', 'admin')
+}
+
+/** 聊天区发言（chat）与玩家登录（chat-login）共用聊天区那套凭据。 */
+export function verifyTurnstileChat(tokenValue: unknown, clientIp: string, action: string): Promise<void> {
+  return verifyTurnstile(tokenValue, clientIp, action, 'chat')
 }

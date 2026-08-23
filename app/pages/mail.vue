@@ -83,6 +83,8 @@ const accountsLoading = ref(false)
 const submitting = ref(false)
 
 const { showToast } = useToast()
+const access = useAdminAccess()
+const canEdit = computed(() => access.levelForKey('mail') === 'edit')
 const { apply: applyDialogAnimation } = useDialogAnimation()
 
 const filtered = computed(() => {
@@ -259,7 +261,7 @@ function attachmentDetail(attachment: MailAttachment) {
         <p class="page-subtitle">查看游戏内已发布的服务器邮件与每位收件人的阅读、领取状态。后台可发布公告与通知；奖励邮件、编辑与撤回仍在游戏内进行。</p>
       </div>
       <div class="heading-actions">
-        <md-filled-button @click="openCompose">
+        <md-filled-button v-if="canEdit" @click="openCompose">
           <md-icon slot="icon">edit_note</md-icon>
           发布公告 / 通知
         </md-filled-button>

@@ -1,33 +1,17 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
+import { computed, nextTick, ref, onMounted, onBeforeUnmount } from 'vue'
 import type { ThemeMode } from '../composables/useThemeTransition'
 
 const route = useRoute()
 
-const baseNavItems = [
-  { label: '仪表盘', icon: 'dashboard', to: '/' },
-  { label: '服务器动态', icon: 'monitoring', to: '/activity' },
-  { label: '聊天区', icon: 'forum', to: '/chat' },
-  { label: '捐赠列表', icon: 'redeem', to: '/donors' },
-  { label: '封禁列表', icon: 'gavel', to: '/bans' },
-  { label: '更新服务', icon: 'system_update', to: '/updates' },
-  { label: '游戏账户', icon: 'manage_accounts', to: '/game-accounts' },
-  { label: '服内邮件', icon: 'mail', to: '/mail' }
-]
-interface CurrentUser {
-  username: string
-  avatar: string
-  fullName: string
-  isOwner: boolean
-}
-
-const currentUser = ref<CurrentUser | null>(null)
+const access = useAdminAccess()
+const currentUser = access.user
 const accountLabel = computed(() => currentUser.value?.fullName || currentUser.value?.username || '账户')
-const navItems = computed(() => [
-  ...baseNavItems,
-  { label: '操作记录', icon: 'history', to: '/audit-logs' },
-  ...(currentUser.value?.isOwner ? [{ label: '后台用户', icon: 'manage_accounts', to: '/admin-users' }] : []),
-])
+const navItems = computed(() => access.pages
+  .filter((page) => access.levelForKey(page.key) !== 'hidden')
+  .map((page) => ({ ...page, to: page.route })))
+const currentPageLevel = computed(() => access.levelForPath(route.path))
+const pageReadOnly = computed(() => currentPageLevel.value === 'view')
 
 const drawerOpen = ref(true)
 const isDesktop = ref(true)
@@ -44,14 +28,20 @@ function syncDrawer() {
   drawerOpen.value = isDesktop.value
 }
 
-function onNav(e: Event, to: string) {
+async function onNav(e: Event, to: string) {
   e.preventDefault()
-  if (!isDesktop.value) drawerOpen.value = false
-  navigateTo(to)
+  if (!isDesktop.value) {
+    drawerOpen.value = false
+    await nextTick()
+  }
+  await navigateTo(to)
 }
 
 function onDrawerChanged(e: Event) {
-  drawerOpen.value = (e as CustomEvent<{ opened: boolean }>).detail.opened
+  const opened = (e as CustomEvent<{ opened: boolean }>).detail.opened
+  // Opening is controlled by the menu button. Ignore delayed "opened" events
+  // so they cannot reopen the mobile drawer after a navigation item was chosen.
+  if (!opened) drawerOpen.value = false
 }
 
 function isActive(to: string) {
@@ -59,8 +49,8 @@ function isActive(to: string) {
 }
 
 function onProfileUpdated(event: Event) {
-  const user = (event as CustomEvent<CurrentUser>).detail
-  if (user?.username) currentUser.value = user
+  const user = (event as CustomEvent<{ username: string }>).detail
+  if (user?.username) access.updateProfile(user)
 }
 
 onMounted(async () => {
@@ -68,8 +58,7 @@ onMounted(async () => {
   mq?.addEventListener('change', syncDrawer)
   window.addEventListener('admin-profile-updated', onProfileUpdated)
   try {
-    const result = await $fetch<{ user: CurrentUser }>('/api/auth/me')
-    currentUser.value = result.user
+    await access.load()
   } catch {
     const entry = await loadEntry()
     await navigateTo('/' + entry)
@@ -202,6 +191,10 @@ onBeforeUnmount(() => {
       </md-navigation-drawer-modal>
 
       <main class="content">
+        <div v-if="pageReadOnly" class="readonly-notice">
+          <md-icon>visibility</md-icon>
+          <span>当前账户对此页面仅有查看权限，修改操作已禁用。</span>
+        </div>
         <slot />
       </main>
     </div>
@@ -314,10 +307,12 @@ onBeforeUnmount(() => {
 .desktop-collapsed-nav {
   width: 100%;
   height: 100%;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
   padding: 8px 0;
   background: var(--md-sys-color-surface-container);
 }
@@ -334,10 +329,13 @@ onBeforeUnmount(() => {
 .collapsed-nav-list {
   width: 100%;
   flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 4px;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .collapsed-nav-item--active {
@@ -371,16 +369,22 @@ md-navigation-drawer-modal.drawer-modal--open {
 
 .drawer-content {
   height: 100%;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .nav-list {
   flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding-top: 8px;
 }
 
 .logout-item {
+  flex: 0 0 auto;
   margin-bottom: 8px;
 }
 
@@ -403,6 +407,25 @@ md-list {
   min-width: 0;
   overflow-x: hidden;
   background: var(--md-sys-color-surface);
+}
+
+.readonly-notice {
+  width: min(calc(100% - 32px), 1136px);
+  margin: 16px auto 0;
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: 8px;
+  color: var(--md-sys-color-on-surface-variant);
+  background: var(--md-sys-color-surface-container);
+  font-size: 13px;
+}
+
+.readonly-notice md-icon {
+  flex: 0 0 auto;
+  --md-icon-size: 20px;
 }
 
 @media (max-width: 899px) {

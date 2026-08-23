@@ -26,6 +26,14 @@ import {
   buildVerificationEmailTemplateSource,
   VERIFICATION_EMAIL_LOGO_URL,
 } from './email-template-renderer'
+import {
+  ADMIN_PAGE_DEFINITIONS,
+  ADMIN_PAGE_KEYS,
+  defaultAdminPagePermissions,
+  ownerAdminPagePermissions,
+  permissionAllows,
+  type AdminPagePermissionLevel,
+} from '../../shared/admin-page-permissions'
 
 const dataDir = path.resolve(process.cwd(), 'server/data')
 mkdirSync(dataDir, { recursive: true })
@@ -53,6 +61,13 @@ db.exec(`
     is_active INTEGER NOT NULL DEFAULT 1,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS admin_page_permissions (
+    user_id INTEGER NOT NULL,
+    page_key TEXT NOT NULL,
+    level TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, page_key)
   );
   CREATE TABLE IF NOT EXISTS audit_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -186,6 +201,17 @@ db.exec(`
     sha256 TEXT NOT NULL,
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (uuid, slot)
+  );
+  CREATE TABLE IF NOT EXISTS mojang_profiles (
+    username_lower TEXT PRIMARY KEY,
+    username TEXT NOT NULL DEFAULT '',
+    profile_uuid TEXT,
+    skin_hash TEXT NOT NULL DEFAULT '',
+    cape_hash TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL,
+    message TEXT NOT NULL DEFAULT '',
+    checked_at INTEGER NOT NULL
   );
   CREATE TABLE IF NOT EXISTS game_mails (
     id TEXT PRIMARY KEY,
@@ -397,6 +423,12 @@ const TURNSTILE_HOSTNAMES_SETTING = 'turnstile.hostnames'
 const TURNSTILE_SITE_KEY_ENV = 'NUXT_PUBLIC_TURNSTILE_SITE_KEY'
 const TURNSTILE_SECRET_ENV = 'TURNSTILE_SECRET'
 const TURNSTILE_HOSTNAMES_ENV = 'TURNSTILE_HOSTNAMES'
+const TURNSTILE_CHAT_SITE_KEY_SETTING = 'turnstile.chat_site_key'
+const TURNSTILE_CHAT_SECRET_SETTING = 'turnstile.chat_secret'
+const TURNSTILE_CHAT_HOSTNAMES_SETTING = 'turnstile.chat_hostnames'
+const TURNSTILE_CHAT_SITE_KEY_ENV = 'TURNSTILE_CHAT_SITE_KEY'
+const TURNSTILE_CHAT_SECRET_ENV = 'TURNSTILE_CHAT_SECRET'
+const TURNSTILE_CHAT_HOSTNAMES_ENV = 'TURNSTILE_CHAT_HOSTNAMES'
 const LOGIN_RATE_WINDOW_MS = 15 * 60 * 1000
 const LOGIN_RATE_MAX_ATTEMPTS = 5
 const CHAT_NAME_MAX = 16
@@ -410,11 +442,16 @@ const CHAT_PLAYER_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000
 const CHAT_LOGIN_RATE_WINDOW_MS = 15 * 60 * 1000
 const CHAT_LOGIN_RATE_MAX_ATTEMPTS = 5
 const IP_LOCATION_TTL_MS = 7 * 24 * 60 * 60 * 1000
+// 正版档案缓存：Mojang 名称查询有速率限制，命中缓存的账户不再外呼。
+const MOJANG_PROFILE_TTL_MS = 6 * 60 * 60 * 1000
+// 查询失败（超时、限流）只短暂缓存，否则一次网络抖动会把账户压住 6 小时。
+const MOJANG_ERROR_TTL_MS = 5 * 60 * 1000
 const ADMIN_ENTRY_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{11,63}$/
 const ADMIN_AVATAR_RE = /^\/(?:favicon\.ico|api\/uploads\/[A-Za-z0-9._-]+\.(?:png|jpe?g|webp|gif|avif))$/
 const RESERVED_ADMIN_ENTRIES = new Set([
   'login', 'account', 'activity', 'donors', 'bans', 'updates', 'game-accounts',
-  'admin-users', 'audit-logs', 'chat', 'mail', 'api', '_nuxt', '_ipx', 'favicon', '__nuxt_error',
+  'game-cosmetics', 'game-account-email-templates',
+  'admin-users', 'audit-logs', 'chat', 'mail', 'settings', 'permissions', 'api', '_nuxt', '_ipx', 'favicon', '__nuxt_error',
 ])
 
 export const ADMIN_COOKIE_NAME = '__Host-yzwc_admin'
@@ -490,6 +527,89 @@ export function getPublicTurnstileConfig() {
   return { siteKey: config.siteKey, hostnames: config.hostnames }
 }
 
+/**
+ * 聊天区使用独立的一套 Turnstile 凭据：它的 widget 跑在主站域名下，
+ * 而后台登录那套 widget 只允许 api 域名，两者不能混用
+ * （否则 siteverify 回传的 hostname 过不了允许域名校验）。
+ * 未单独配置时回退到后台那一套，方便渐进迁移。
+ */
+export function getChatTurnstileConfig(): TurnstileConfig {
+  const fallback = getTurnstileConfig()
+  return {
+    siteKey: getSetting(TURNSTILE_CHAT_SITE_KEY_SETTING)
+      || process.env[TURNSTILE_CHAT_SITE_KEY_ENV]?.trim() || fallback.siteKey,
+    secret: getSetting(TURNSTILE_CHAT_SECRET_SETTING)
+      || process.env[TURNSTILE_CHAT_SECRET_ENV]?.trim() || fallback.secret,
+    hostnames: getSetting(TURNSTILE_CHAT_HOSTNAMES_SETTING)
+      || process.env[TURNSTILE_CHAT_HOSTNAMES_ENV]?.trim() || fallback.hostnames,
+  }
+}
+
+/** 只下发站点密钥；站点密钥本身是公开信息，服务端密钥绝不出网。 */
+export function getPublicChatTurnstileConfig() {
+  return { siteKey: getChatTurnstileConfig().siteKey }
+}
+
+/** 聊天区自己显式配置的部分（不回退到后台那套），用于后台界面区分「独立配置」与「继承」。 */
+export function getChatTurnstileOverrides(): TurnstileConfig {
+  return {
+    siteKey: getSetting(TURNSTILE_CHAT_SITE_KEY_SETTING) || process.env[TURNSTILE_CHAT_SITE_KEY_ENV]?.trim() || '',
+    secret: getSetting(TURNSTILE_CHAT_SECRET_SETTING) || process.env[TURNSTILE_CHAT_SECRET_ENV]?.trim() || '',
+    hostnames: getSetting(TURNSTILE_CHAT_HOSTNAMES_SETTING) || process.env[TURNSTILE_CHAT_HOSTNAMES_ENV]?.trim() || '',
+  }
+}
+
+/** admin：后台登录 widget（只允许 api 域名）；chat：官网聊天区 widget（主站域名）。 */
+export type TurnstileScope = 'admin' | 'chat'
+
+const TURNSTILE_SETTING_KEYS: Record<TurnstileScope, { siteKey: string; secret: string; hostnames: string }> = {
+  admin: {
+    siteKey: TURNSTILE_SITE_KEY_SETTING,
+    secret: TURNSTILE_SECRET_SETTING,
+    hostnames: TURNSTILE_HOSTNAMES_SETTING,
+  },
+  chat: {
+    siteKey: TURNSTILE_CHAT_SITE_KEY_SETTING,
+    secret: TURNSTILE_CHAT_SECRET_SETTING,
+    hostnames: TURNSTILE_CHAT_HOSTNAMES_SETTING,
+  },
+}
+
+const TURNSTILE_SCOPE_LABELS: Record<TurnstileScope, string> = {
+  admin: '后台登录',
+  chat: '聊天区',
+}
+
+/**
+ * 更新某一套 Turnstile 凭据并持久化到数据库设置（优先于环境变量）。
+ * 服务端密钥留空表示沿用已有的那一份，方便只改域名而不必重新粘贴密钥。
+ */
+export function updateTurnstileConfig(
+  scope: TurnstileScope,
+  input: { siteKey?: unknown; secret?: unknown; hostnames?: unknown },
+): void {
+  const keys = TURNSTILE_SETTING_KEYS[scope]
+  const label = TURNSTILE_SCOPE_LABELS[scope]
+
+  const siteKey = requireTurnstileValue(input.siteKey, `${label} Turnstile 站点密钥`, 256)
+  const hostnames = requireTurnstileHostnames(input.hostnames)
+
+  // 取「本套自己的」已有密钥：聊天区必须用 overrides，否则留空提交会把
+  // 后台那套的密钥抄进聊天区设置里，和聊天区站点密钥对不上。
+  const existingSecret = scope === 'chat' ? getChatTurnstileOverrides().secret : getTurnstileConfig().secret
+  const providedSecret = String(input.secret ?? '').trim()
+  const secret = providedSecret
+    ? requireTurnstileValue(providedSecret, `${label} Turnstile 服务端密钥`, 512)
+    : existingSecret
+  if (!secret) {
+    throw createError({ statusCode: 400, statusMessage: `首次配置${label} Turnstile 时必须填写服务端密钥` })
+  }
+
+  setSetting(keys.siteKey, siteKey)
+  setSetting(keys.secret, secret)
+  setSetting(keys.hostnames, hostnames)
+}
+
 export function setTurnstileConfig(siteKeyValue: unknown, secretValue: unknown, hostnamesValue: unknown): void {
   const siteKey = requireTurnstileValue(siteKeyValue, 'Turnstile 站点密钥', 256)
   const secret = requireTurnstileValue(secretValue, 'Turnstile 服务端密钥', 512)
@@ -530,18 +650,77 @@ export interface AdminUser {
   isOwner: boolean
   isActive: boolean
   createdAt: number
+  permissions: Record<string, AdminPagePermissionLevel>
+}
+
+function getAdminPagePermissions(userId: number, isOwner: boolean): Record<string, AdminPagePermissionLevel> {
+  if (isOwner) return ownerAdminPagePermissions()
+  const permissions = defaultAdminPagePermissions()
+  for (const row of all('SELECT page_key, level FROM admin_page_permissions WHERE user_id = ?', userId)) {
+    const key = String(row.page_key ?? '')
+    const level = String(row.level ?? '') as AdminPagePermissionLevel
+    if (ADMIN_PAGE_KEYS.has(key) && ['hidden', 'view', 'edit'].includes(level)) permissions[key] = level
+  }
+  for (const page of ADMIN_PAGE_DEFINITIONS) {
+    if (page.maxNonOwnerLevel === 'hidden') permissions[page.key] = 'hidden'
+  }
+  permissions.permissions = permissions.permissions === 'hidden' ? 'hidden' : 'view'
+  return permissions
 }
 
 function mapAdminUser(row: Record<string, unknown>): AdminUser {
+  const id = Number(row.id)
+  const isOwner = Number(row.is_owner ?? 0) === 1
   return {
-    id: Number(row.id),
+    id,
     username: String(row.username ?? ''),
     avatar: String(row.avatar ?? ''),
     fullName: String(row.full_name ?? ''),
-    isOwner: Number(row.is_owner ?? 0) === 1,
+    isOwner,
     isActive: Number(row.is_active ?? 0) === 1,
     createdAt: Number(row.created_at ?? 0),
+    permissions: getAdminPagePermissions(id, isOwner),
   }
+}
+
+export function updateAdminPagePermissions(
+  userId: number,
+  input: Record<string, unknown>,
+): AdminUser {
+  const current = getAdminUserById(userId)
+  if (!current) throw createError({ statusCode: 404, statusMessage: '后台用户不存在' })
+  if (current.isOwner) throw createError({ statusCode: 400, statusMessage: '初始所有者始终拥有全部权限' })
+
+  const normalized = defaultAdminPagePermissions()
+  for (const page of ADMIN_PAGE_DEFINITIONS) {
+    const requested = String(input?.[page.key] ?? normalized[page.key]) as AdminPagePermissionLevel
+    if (!['hidden', 'view', 'edit'].includes(requested)) {
+      throw createError({ statusCode: 400, statusMessage: `${page.label}的权限值无效` })
+    }
+    normalized[page.key] = page.maxNonOwnerLevel === 'hidden'
+      ? 'hidden'
+      : page.maxNonOwnerLevel === 'view' && requested === 'edit'
+        ? 'view'
+        : requested
+  }
+
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    run('DELETE FROM admin_page_permissions WHERE user_id = ?', userId)
+    const now = Date.now()
+    for (const page of ADMIN_PAGE_DEFINITIONS) {
+      if (normalized[page.key] === page.defaultLevel) continue
+      run(
+        'INSERT INTO admin_page_permissions (user_id, page_key, level, updated_at) VALUES (?, ?, ?, ?)',
+        userId, page.key, normalized[page.key], now,
+      )
+    }
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+  return getAdminUserById(userId) as AdminUser
 }
 
 function getAdminUserById(id: number): AdminUser | undefined {
@@ -668,7 +847,23 @@ export function deleteAdminUser(userId: number): void {
     throw createError({ statusCode: 400, statusMessage: '至少需要保留一个启用的后台用户' })
   }
   run('DELETE FROM sessions WHERE user_id = ?', userId)
+  run('DELETE FROM admin_page_permissions WHERE user_id = ?', userId)
   run('DELETE FROM admin_users WHERE id = ?', userId)
+}
+
+export function requirePagePermission(
+  event: H3Event,
+  pageKey: string,
+  required: 'view' | 'edit',
+): AdminUser {
+  const user = requireAuth(event)
+  if (!permissionAllows(user.permissions[pageKey], required)) {
+    throw createError({
+      statusCode: 403,
+      statusMessage: required === 'edit' ? '当前账户没有此页面的编辑权限' : '当前账户没有此页面的查看权限',
+    })
+  }
+  return user
 }
 
 export function requireOwner(event: H3Event): AdminUser {
@@ -2496,6 +2691,39 @@ export function listGameCosmeticSlots(uuid: string): { slot: string; sha256: str
   }))
 }
 
+export interface GameCosmeticMeta {
+  uuid: string
+  slot: string
+  sha256: string
+  bytes: number
+  width: number
+  height: number
+  updatedAt: number
+}
+
+/**
+ * 后台外观总览用的元数据：只取 PNG 头部的宽高，不把图片数据读进内存。
+ * IHDR 固定位于签名之后，宽高分别是第 16、20 字节起的大端 32 位整数。
+ */
+export function listGameCosmeticMeta(): GameCosmeticMeta[] {
+  return all(`SELECT uuid, slot, sha256, updated_at, length(data) AS bytes,
+                     substr(data, 17, 4) AS width_bytes, substr(data, 21, 4) AS height_bytes
+              FROM game_cosmetics ORDER BY uuid, slot`).map((row) => ({
+    uuid: String(row.uuid ?? '').toLowerCase(),
+    slot: String(row.slot ?? ''),
+    sha256: String(row.sha256 ?? ''),
+    bytes: Number(row.bytes ?? 0),
+    width: bigEndianUint32(row.width_bytes),
+    height: bigEndianUint32(row.height_bytes),
+    updatedAt: Number(row.updated_at ?? 0),
+  }))
+}
+
+function bigEndianUint32(value: unknown): number {
+  if (!(value instanceof Uint8Array) || value.length < 4) return 0
+  return Buffer.from(value).readUInt32BE(0)
+}
+
 export function deleteGameCosmetics(uuid: string) {
   run('DELETE FROM game_cosmetics WHERE uuid = ?', uuid)
 }
@@ -2512,6 +2740,82 @@ export function replaceGameCosmetics(uuid: string, slots: Record<string, Uint8Ar
     db.exec('ROLLBACK')
     throw error
   }
+}
+
+// ============================================================================
+// 正版档案缓存（后台外观页在本地无上传时回退查询 Mojang）
+// ----------------------------------------------------------------------------
+// 服务器跑离线模式，账户表里的 UUID 是离线 UUID，判断是否正版只能按玩家代号
+// 去 Mojang 查同名档案。查询按玩家代号缓存，命中缓存不再外呼。
+// ============================================================================
+
+export type MojangProfileStatus = 'premium' | 'missing' | 'error'
+
+export interface MojangProfileCache {
+  usernameLower: string
+  username: string
+  profileUuid: string | null
+  skinHash: string
+  capeHash: string
+  model: string
+  status: MojangProfileStatus
+  message: string
+  checkedAt: number
+  /** 超过 TTL 的记录仍然返回，前端可据此提示信息已过期。 */
+  stale: boolean
+}
+
+function mapMojangProfile(row: Record<string, unknown>): MojangProfileCache {
+  const status = String(row.status ?? 'error')
+  const checkedAt = Number(row.checked_at ?? 0)
+  const normalized: MojangProfileStatus = status === 'premium' || status === 'missing' ? status : 'error'
+  const ttl = normalized === 'error' ? MOJANG_ERROR_TTL_MS : MOJANG_PROFILE_TTL_MS
+  return {
+    usernameLower: String(row.username_lower ?? ''),
+    username: String(row.username ?? ''),
+    profileUuid: row.profile_uuid == null || String(row.profile_uuid).trim() === ''
+      ? null
+      : String(row.profile_uuid),
+    skinHash: String(row.skin_hash ?? ''),
+    capeHash: String(row.cape_hash ?? ''),
+    model: String(row.model ?? ''),
+    status: normalized,
+    message: String(row.message ?? ''),
+    checkedAt,
+    stale: !Number.isFinite(checkedAt) || checkedAt + ttl <= Date.now(),
+  }
+}
+
+export function getMojangProfileCache(username: string): MojangProfileCache | undefined {
+  const key = username.trim().toLocaleLowerCase('en-US')
+  const row = get('SELECT * FROM mojang_profiles WHERE username_lower = ?', key)
+  return row ? mapMojangProfile(row) : undefined
+}
+
+export function listMojangProfileCache(): MojangProfileCache[] {
+  return all('SELECT * FROM mojang_profiles').map(mapMojangProfile)
+}
+
+export function upsertMojangProfileCache(profile: {
+  username: string
+  profileUuid: string | null
+  skinHash: string
+  capeHash: string
+  model: string
+  status: MojangProfileStatus
+  message: string
+}): MojangProfileCache {
+  const key = profile.username.trim().toLocaleLowerCase('en-US')
+  run(`INSERT INTO mojang_profiles
+         (username_lower, username, profile_uuid, skin_hash, cape_hash, model, status, message, checked_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(username_lower) DO UPDATE SET
+         username = excluded.username, profile_uuid = excluded.profile_uuid,
+         skin_hash = excluded.skin_hash, cape_hash = excluded.cape_hash, model = excluded.model,
+         status = excluded.status, message = excluded.message, checked_at = excluded.checked_at`,
+    key, profile.username.trim(), profile.profileUuid, profile.skinHash, profile.capeHash,
+    profile.model, profile.status, profile.message.slice(0, 200), Date.now())
+  return getMojangProfileCache(key)!
 }
 
 // ============================================================================

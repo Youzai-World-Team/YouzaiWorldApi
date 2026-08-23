@@ -1,7 +1,10 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 
 useHead({ title: '游戏账户' })
+
+const access = useAdminAccess()
+const canEdit = computed(() => access.levelForKey('game-accounts') === 'edit')
 
 interface GameAccount {
   username: string
@@ -9,8 +12,8 @@ interface GameAccount {
   email: string | null
   last_login_ip: string
   last_authenticated_date: string
+  last_kicked_date: string
   login_tries: number
-  registered: boolean
 }
 
 interface GameAccountSettings {
@@ -69,6 +72,8 @@ const smtpDialog = ref<HTMLElement | null>(null)
 const { showToast } = useToast()
 const { apply: applyDialogAnimation } = useDialogAnimation()
 let uuidRequestId = 0
+const lockClock = ref(Date.now())
+let lockClockTimer: ReturnType<typeof setInterval> | null = null
 
 watch(username, async (value) => {
   const name = value.trim()
@@ -144,6 +149,11 @@ async function resetAccountPassword() {
 
 function deleteAccount(account: GameAccount) {
   deleteTarget.value = account
+}
+
+/** 跳到「账户装扮」页并直接打开该账户的皮肤 / 披风详情。 */
+function openCosmetics(account: GameAccount) {
+  navigateTo({ path: '/game-cosmetics', query: { username: account.username } })
 }
 
 async function confirmDeleteAccount() {
@@ -300,11 +310,27 @@ function formatAuthenticationDate(value: string) {
   }).format(new Date(timestamp))
 }
 
+function isAccountLocked(account: GameAccount) {
+  const now = lockClock.value
+  if (settings.value.loginCooldown === -1 || account.login_tries < 5) return false
+  if (settings.value.loginCooldown === 0) return true
+  const kickedAt = Date.parse(account.last_kicked_date)
+  return Number.isFinite(kickedAt)
+    && now - kickedAt < settings.value.loginCooldown * 1000
+}
+
 onMounted(() => {
   loadAccounts()
+  lockClockTimer = window.setInterval(() => {
+    lockClock.value = Date.now()
+  }, 1000)
   applyDialogAnimation(createDialog.value)
   applyDialogAnimation(resetDialog.value)
   applyDialogAnimation(smtpDialog.value)
+})
+
+onUnmounted(() => {
+  if (lockClockTimer !== null) window.clearInterval(lockClockTimer)
 })
 </script>
 
@@ -316,16 +342,16 @@ onMounted(() => {
       </div>
       <div class="heading-actions">
         <md-icon-button aria-label="刷新" :disabled="loading" @click="loadAccounts"><md-icon :class="{ 'refresh-icon--loading': loading }">refresh</md-icon></md-icon-button>
-        <md-filled-button @click="showCreate = true"><md-icon slot="icon">person_add</md-icon>新建账户</md-filled-button>
+        <md-filled-button v-if="canEdit" @click="showCreate = true"><md-icon slot="icon">person_add</md-icon>新建账户</md-filled-button>
       </div>
     </div>
 
     <div class="settings-grid">
       <div class="card setting-card">
         <h2>登录失败冷却</h2>
-        <md-outlined-text-field type="number" min="-1" max="86400" step="1" label="冷却时间（秒）" :value="String(settings.loginCooldown)" @input="settings.loginCooldown = Math.min(86400, Math.max(-1, Math.trunc(Number(($event.target as HTMLInputElement).value) || 0)))"></md-outlined-text-field>
+        <md-outlined-text-field type="number" min="-1" max="86400" step="1" label="冷却时间（秒）" :readonly="!canEdit" :value="String(settings.loginCooldown)" @input="settings.loginCooldown = Math.min(86400, Math.max(-1, Math.trunc(Number(($event.target as HTMLInputElement).value) || 0)))"></md-outlined-text-field>
         <div class="setting-action">
-          <md-filled-button :disabled="savingSettings" @click="saveSettings">
+          <md-filled-button v-if="canEdit" :disabled="savingSettings" @click="saveSettings">
             {{ savingSettings ? '保存中…' : '保存冷却设置' }}
           </md-filled-button>
         </div>
@@ -336,7 +362,7 @@ onMounted(() => {
         <label class="email-verification-row">
           <md-checkbox
             :checked="settings.emailVerificationRequired"
-            :disabled="loading || savingEmailSettings"
+            :disabled="loading || savingEmailSettings || !canEdit"
             @change="onEmailVerificationChange"
           ></md-checkbox>
           <span>
@@ -345,13 +371,13 @@ onMounted(() => {
           </span>
         </label>
         <div class="setting-action">
-          <md-text-button :disabled="loading || savingEmailSettings" @click="openSmtpDialog(false)">
+          <md-text-button v-if="canEdit" :disabled="loading || savingEmailSettings" @click="openSmtpDialog(false)">
             <md-icon slot="icon">mail</md-icon>
             配置 SMTP
           </md-text-button>
           <md-text-button :disabled="loading || savingEmailSettings" @click="navigateTo('/game-account-email-templates')">
             <md-icon slot="icon">edit_note</md-icon>
-            编辑邮件模板
+            {{ canEdit ? '编辑邮件模板' : '查看邮件模板' }}
           </md-text-button>
         </div>
         <p class="smtp-status" :class="{ 'smtp-status--ready': settings.smtpConfigured }">
@@ -366,18 +392,26 @@ onMounted(() => {
       <div v-else class="table-wrap">
         <table>
           <thead>
-            <tr><th>玩家代号</th><th>UUID</th><th>绑定邮箱</th><th>状态</th><th>最后登录 IP</th><th>最后认证</th><th>失败次数</th><th></th></tr>
+            <tr><th>玩家代号</th><th class="uuid-column">UUID</th><th class="email-column">绑定邮箱</th><th>最后登录 IP</th><th>最后认证</th><th class="actions-column">操作</th></tr>
           </thead>
           <tbody>
             <tr v-for="account in accounts" :key="account.username">
-              <td class="name">{{ account.username }}</td>
-              <td class="mono">{{ account.uuid || '未绑定' }}</td>
+              <td class="name">
+                <span class="account-name">
+                  <span>{{ account.username }}</span>
+                  <md-icon
+                    v-if="isAccountLocked(account)"
+                    class="account-lock-icon"
+                    title="账户处于登录锁定状态"
+                    aria-label="账户处于登录锁定状态"
+                  >lock</md-icon>
+                </span>
+              </td>
+              <td class="mono uuid-cell">{{ account.uuid || '未绑定' }}</td>
               <td class="mono email-cell" :title="account.email || undefined">{{ account.email || '未绑定' }}</td>
-              <td><span class="status" :class="account.registered ? 'status--ok' : 'status--pending'">{{ account.registered ? '已注册' : '未注册' }}</span></td>
               <td class="mono">{{ account.last_login_ip || '暂无记录' }}</td>
               <td>{{ formatAuthenticationDate(account.last_authenticated_date) }}</td>
-              <td>{{ account.login_tries }}</td>
-              <td class="actions"><md-icon-button aria-label="解除登录锁定" :disabled="account.login_tries < 5" @click="unlockAccount(account)"><md-icon>lock_open</md-icon></md-icon-button><md-icon-button aria-label="重置密码" @click="resetTarget = account"><md-icon>key</md-icon></md-icon-button><md-icon-button aria-label="注销账户" @click="deleteAccount(account)"><md-icon>delete</md-icon></md-icon-button></td>
+              <td class="actions"><md-icon-button v-if="canEdit && isAccountLocked(account)" aria-label="解除登录锁定" title="解除登录锁定" @click="unlockAccount(account)"><md-icon>lock_open</md-icon></md-icon-button><md-icon-button aria-label="查看皮肤与披风" title="查看皮肤与披风" @click="openCosmetics(account)"><md-icon>checkroom</md-icon></md-icon-button><md-icon-button v-if="canEdit" aria-label="重置密码" @click="resetTarget = account"><md-icon>key</md-icon></md-icon-button><md-icon-button v-if="canEdit" aria-label="注销账户" @click="deleteAccount(account)"><md-icon>delete</md-icon></md-icon-button></td>
             </tr>
           </tbody>
         </table>
@@ -581,7 +615,7 @@ onMounted(() => {
 
 table {
   width: 100%;
-  min-width: 1160px;
+  min-width: 980px;
   border-collapse: collapse;
   font-size: 14px;
 }
@@ -608,9 +642,32 @@ tr:last-child td {
   font-weight: 600;
 }
 
+.account-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.account-lock-icon {
+  color: var(--act-error);
+  font-size: 18px;
+  font-variation-settings: 'FILL' 1;
+}
+
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
+}
+
+.uuid-column,
+.uuid-cell {
+  width: 1%;
+  padding-right: 8px;
+}
+
+.email-column,
+.email-cell {
+  padding-left: 8px;
 }
 
 .email-cell {
@@ -619,25 +676,15 @@ tr:last-child td {
   text-overflow: ellipsis;
 }
 
-.status {
-  display: inline-flex;
-  padding: 4px 8px;
-  border-radius: 8px;
-  font-size: 12px;
-}
-
-.status--ok {
-  background: var(--md-sys-color-primary-container);
-  color: var(--md-sys-color-on-primary-container);
-}
-
-.status--pending {
-  background: var(--md-sys-color-surface-container-high);
-  color: var(--md-sys-color-on-surface-variant);
+.actions-column,
+.actions {
+  width: 1%;
+  padding-right: 8px;
+  padding-left: 8px;
 }
 
 .actions {
-  text-align: right;
+  text-align: left;
 }
 
 .dialog-form {

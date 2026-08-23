@@ -8,7 +8,7 @@ import {
   type ChatRole,
 } from '../utils/db'
 import { resolveIpLocation } from '../utils/ip-location'
-import { verifyTurnstileToken } from '../utils/turnstile'
+import { verifyTurnstileChat } from '../utils/turnstile'
 
 export default defineEventHandler(async (event) => {
   const body = await readBody<{ name?: string; content?: string; turnstileToken?: string }>(event)
@@ -26,7 +26,7 @@ export default defineEventHandler(async (event) => {
   // 先挡一次，超频或重复内容就不必再消耗一次 siteverify 外呼。
   assertChatSendAllowed(ipHash, content)
 
-  await verifyTurnstileToken(body?.turnstileToken, ip, 'chat')
+  await verifyTurnstileChat(body?.turnstileToken, ip, 'chat')
   const location = await resolveIpLocation(ip, event)
 
   // 两次 await 期间可能有并发请求落库，落库前复查一次；

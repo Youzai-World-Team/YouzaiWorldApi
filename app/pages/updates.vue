@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 
 useHead({ title: '更新服务' })
 
@@ -20,6 +20,8 @@ const endpoint = '/api/updates'
 const TYPE_OPTIONS = ['release', 'snapshot', 'beta', 'alpha', 'indev', 'dev']
 
 const list = ref<UpdateEntry[]>([])
+const access = useAdminAccess()
+const canEdit = computed(() => access.levelForKey('updates') === 'edit')
 const loading = ref(true)
 
 const formOpen = ref(false)
@@ -248,7 +250,7 @@ async function confirmDelete() {
     <div class="card">
       <div class="card-head">
         <h2 class="card-title">程序列表</h2>
-        <md-filled-button @click="openAdd">
+        <md-filled-button v-if="canEdit" @click="openAdd">
           <md-icon slot="icon">add</md-icon>
           添加程序
         </md-filled-button>
@@ -281,11 +283,11 @@ async function confirmDelete() {
             </td>
             <td class="cell-release">{{ releaseLabel(u) }}</td>
             <td class="cell-actions">
-              <md-text-button @click="openEdit(u)">
+              <md-text-button v-if="canEdit" @click="openEdit(u)">
                 <md-icon slot="icon">edit</md-icon>
                 编辑
               </md-text-button>
-              <md-text-button class="delete-btn" @click="openDelete(u)">
+              <md-text-button v-if="canEdit" class="delete-btn" @click="openDelete(u)">
                 <md-icon slot="icon">delete</md-icon>
                 删除
               </md-text-button>

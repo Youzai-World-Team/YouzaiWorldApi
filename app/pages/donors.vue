@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 
 useHead({ title: '捐赠列表' })
 
@@ -12,6 +12,8 @@ interface Donor {
 }
 
 const endpoint = '/api/donors'
+const access = useAdminAccess()
+const canEdit = computed(() => access.levelForKey('donors') === 'edit')
 
 const donors = ref<Donor[]>([])
 const loading = ref(true)
@@ -205,7 +207,7 @@ async function confirmDelete() {
     <div class="card">
       <div class="card-head">
         <h2 class="card-title">捐赠者列表</h2>
-        <md-filled-button @click="openAdd">
+        <md-filled-button v-if="canEdit" @click="openAdd">
           <md-icon slot="icon">add</md-icon>
           添加捐赠者
         </md-filled-button>
@@ -234,11 +236,11 @@ async function confirmDelete() {
             <td class="cell-amount">{{ formatAmount(d.amount) }}</td>
             <td class="cell-intro">{{ d.intro || '—' }}</td>
             <td class="cell-actions">
-              <md-text-button @click="openEdit(d)">
+              <md-text-button v-if="canEdit" @click="openEdit(d)">
                 <md-icon slot="icon">edit</md-icon>
                 编辑
               </md-text-button>
-              <md-text-button class="delete-btn" @click="openDelete(d)">
+              <md-text-button v-if="canEdit" class="delete-btn" @click="openDelete(d)">
                 <md-icon slot="icon">delete</md-icon>
                 删除
               </md-text-button>

@@ -1,7 +1,7 @@
 import {
   buildVerificationEmailFromTemplate,
 } from '../../utils/smtp'
-import { requireAuth } from '../../utils/db'
+import { requirePagePermission } from '../../utils/db'
 import {
   DEFAULT_VERIFICATION_EMAIL_TEMPLATES,
   resolveVerificationEmailTemplate,
@@ -10,7 +10,7 @@ import {
 } from '../../utils/email-templates'
 import { getRequestURL } from 'h3'
 export default defineEventHandler(async (event) => {
-  const user = requireAuth(event)
+  const user = requirePagePermission(event, 'game-accounts', 'view')
   const body = await readBody<any>(event)
   const kind = String(body?.type || 'registration') as VerificationEmailTemplateKind
   if (!VERIFICATION_EMAIL_TEMPLATE_KINDS.includes(kind)) {

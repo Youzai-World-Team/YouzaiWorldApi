@@ -1,6 +1,6 @@
-import { getAdminGameAccountSettings, requireAuth } from '../../utils/db'
+import { getAdminGameAccountSettings, requirePagePermission } from '../../utils/db'
 
 export default defineEventHandler((event) => {
-  requireAuth(event)
+  requirePagePermission(event, 'game-accounts', 'view')
   return getAdminGameAccountSettings()
 })

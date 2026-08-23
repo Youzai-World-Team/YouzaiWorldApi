@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 
 useHead({ title: '服务器动态' })
 
@@ -20,6 +20,8 @@ const typeOptions: { value: ActivityType; label: string }[] = [
 ]
 
 const endpoint = '/api/activities'
+const access = useAdminAccess()
+const canEdit = computed(() => access.levelForKey('activity') === 'edit')
 
 const activities = ref<Activity[]>([])
 const loading = ref(true)
@@ -179,7 +181,7 @@ async function confirmDelete() {
     <div class="card">
       <div class="card-head">
         <h2 class="card-title">动态列表</h2>
-        <md-filled-button @click="openAdd">
+        <md-filled-button v-if="canEdit" @click="openAdd">
           <md-icon slot="icon">add</md-icon>
           添加项目
         </md-filled-button>
@@ -203,11 +205,11 @@ async function confirmDelete() {
             <td class="cell-date">{{ a.date }}</td>
             <td class="cell-content">{{ a.content }}</td>
             <td class="cell-actions">
-              <md-text-button @click="openEdit(a)">
+              <md-text-button v-if="canEdit" @click="openEdit(a)">
                 <md-icon slot="icon">edit</md-icon>
                 编辑
               </md-text-button>
-              <md-text-button class="delete-btn" @click="openDelete(a)">
+              <md-text-button v-if="canEdit" class="delete-btn" @click="openDelete(a)">
                 <md-icon slot="icon">delete</md-icon>
                 删除
               </md-text-button>

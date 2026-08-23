@@ -11,10 +11,27 @@ type ThemeTransitionDocument = Document & {
   startViewTransition?: (update: () => void) => ThemeViewTransition
 }
 
+const THEME_COLORS = {
+  light: '#fbfef6',
+  dark: '#101408',
+} as const
+
 let transitionRunning = false
 
 function validThemeMode(value: string | null): ThemeMode {
   return value === 'light' || value === 'dark' || value === 'system' ? value : 'system'
+}
+
+export function updateBrowserThemeColor(isDark: boolean) {
+  if (typeof document === 'undefined') return
+
+  let meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')
+  if (!meta) {
+    meta = document.createElement('meta')
+    meta.name = 'theme-color'
+    document.head.appendChild(meta)
+  }
+  meta.content = isDark ? THEME_COLORS.dark : THEME_COLORS.light
 }
 
 export function useThemeTransition(dark: Ref<boolean>, mode: Ref<ThemeMode>) {
@@ -32,6 +49,7 @@ export function useThemeTransition(dark: Ref<boolean>, mode: Ref<ThemeMode>) {
     if (typeof document === 'undefined') return
     document.documentElement.dataset.theme = dark.value ? 'dark' : 'light'
     document.documentElement.dataset.themeMode = nextMode
+    updateBrowserThemeColor(dark.value)
     if (persist) localStorage.setItem('theme', nextMode)
   }
 

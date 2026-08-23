@@ -1,9 +1,14 @@
-import { recordAudit, requireOwner, updateAdminUser } from '../../../utils/db'
+import { listAdminUsers, recordAudit, requireOwner, updateAdminUser } from '../../../utils/db'
 
 export default defineEventHandler(async (event) => {
   const actor = requireOwner(event)
   const userId = Number(getRouterParam(event, 'id'))
   if (!Number.isInteger(userId) || userId <= 0) throw createError({ statusCode: 400, statusMessage: '用户编号无效' })
+  const target = listAdminUsers().find((user) => user.id === userId)
+  if (!target) throw createError({ statusCode: 404, statusMessage: '后台用户不存在' })
+  if (target.isOwner && !actor.isOwner) {
+    throw createError({ statusCode: 403, statusMessage: '只有初始所有者可以修改初始所有者账户' })
+  }
   const body = await readBody<{ password?: string; active?: boolean }>(event)
   if (body?.password === undefined && body?.active === undefined) {
     throw createError({ statusCode: 400, statusMessage: '没有需要更新的内容' })

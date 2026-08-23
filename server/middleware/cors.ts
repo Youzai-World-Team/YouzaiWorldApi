@@ -1,15 +1,17 @@
 // 官网需要跨源调用的公开聊天接口：发言、玩家登录/登出。
 // 其余路径保持只读放行。
 const CHAT_WRITE_PATHS = new Set(['/api/chat', '/api/chat/login', '/api/chat/logout'])
+// 与 security.ts 的 TRUSTED_WEB_ORIGINS 保持一致：主站同时可能以 www 前缀访问。
+const ALLOWED_WEB_ORIGINS = ['https://mcyzw.top', 'https://www.mcyzw.top']
 
 export default defineEventHandler((event) => {
   const origin = getHeader(event, 'origin') || ''
-  if (origin !== 'https://mcyzw.top') return
+  if (!ALLOWED_WEB_ORIGINS.includes(origin)) return
 
   const allowWrite = CHAT_WRITE_PATHS.has(getRequestURL(event).pathname)
 
   if (handleCors(event, {
-    origin: ['https://mcyzw.top'],
+    origin: ALLOWED_WEB_ORIGINS,
     methods: allowWrite ? ['GET', 'HEAD', 'OPTIONS', 'POST'] : ['GET', 'HEAD', 'OPTIONS'],
     // Authorization 用于携带聊天区玩家会话令牌（发言、查询会话、登出）。
     allowHeaders: ['Accept', 'Authorization', 'Content-Type'],

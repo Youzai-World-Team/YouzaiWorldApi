@@ -1,7 +1,7 @@
-import { requireAuth, setAdminGameAccountSettings } from '../../utils/db'
+import { requirePagePermission, setAdminGameAccountSettings } from '../../utils/db'
 
 export default defineEventHandler(async (event) => {
-  requireAuth(event)
+  requirePagePermission(event, 'game-accounts', 'edit')
   const body = await readBody<any>(event)
   return setAdminGameAccountSettings(body || {})
 })

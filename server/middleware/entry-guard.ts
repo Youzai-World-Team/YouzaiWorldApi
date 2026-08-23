@@ -1,4 +1,5 @@
-import { ADMIN_COOKIE_NAME, getAdminEntry, hasSession, isAdminInitialized } from '../utils/db'
+import { getAdminEntry, getAuthenticatedUser, isAdminInitialized } from '../utils/db'
+import { adminPageKeyForPath, firstVisibleAdminRoute } from '../../shared/admin-page-permissions'
 
 export default defineEventHandler(async (event) => {
   const path = getRequestURL(event).pathname
@@ -19,12 +20,15 @@ export default defineEventHandler(async (event) => {
 
   const entry = getAdminEntry()
 
-  const token = getCookie(event, ADMIN_COOKIE_NAME)
-  const authed = !!token && hasSession(token)
+  const user = getAuthenticatedUser(event)
 
-  if (authed) {
+  if (user) {
     if (path === '/' + entry || path === '/login') {
       return sendRedirect(event, '/', 302)
+    }
+    const pageKey = adminPageKeyForPath(path)
+    if (pageKey && user.permissions[pageKey] === 'hidden') {
+      return sendRedirect(event, firstVisibleAdminRoute(user.permissions), 302)
     }
     return
   }

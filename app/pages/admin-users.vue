@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
 useHead({ title: '后台用户' })
 
@@ -30,6 +30,8 @@ const resetPassword = ref('')
 const deleteTarget = ref<AdminUser | null>(null)
 const { showToast } = useToast()
 const { apply: applyDialogAnimation } = useDialogAnimation()
+const access = useAdminAccess()
+const canEdit = computed(() => access.user.value?.isOwner === true)
 
 function closeResetDialog() {
   resetTarget.value = null
@@ -209,10 +211,10 @@ onBeforeUnmount(() => {
     <div class="page-heading">
       <div>
         <h1 class="page-title">后台用户</h1>
-        <p class="page-subtitle">所有者可以创建、停用和重置后台用户。</p>
+        <p class="page-subtitle">仅初始账户可以创建、停用和重置后台用户。</p>
       </div>
       <div class="page-heading-actions">
-        <md-icon-button aria-label="创建后台用户" title="创建后台用户" @click="openCreateDialog"><md-icon>add</md-icon></md-icon-button>
+        <md-icon-button v-if="canEdit" aria-label="创建后台用户" title="创建后台用户" @click="openCreateDialog"><md-icon>add</md-icon></md-icon-button>
         <md-icon-button aria-label="刷新" title="刷新" :disabled="loading" @click="loadUsers"><md-icon>refresh</md-icon></md-icon-button>
       </div>
     </div>
@@ -235,9 +237,9 @@ onBeforeUnmount(() => {
               <td>{{ user.isOwner ? '所有者' : '管理员' }}</td>
               <td>{{ formatDate(user.createdAt) }}</td>
               <td class="row-actions">
-                <md-icon-button v-if="!user.isOwner" aria-label="重置密码" title="重置密码" @click="resetTarget = user"><md-icon>lock_reset</md-icon></md-icon-button>
-                <md-icon-button v-if="!user.isOwner" :aria-label="user.isActive ? '停用' : '启用'" :title="user.isActive ? '停用' : '启用'" @click="toggleUser(user)"><md-icon>{{ user.isActive ? 'person_off' : 'person' }}</md-icon></md-icon-button>
-                <md-icon-button v-if="!user.isOwner" aria-label="删除用户" title="删除用户" @click="deleteTarget = user"><md-icon>delete</md-icon></md-icon-button>
+                <md-icon-button v-if="canEdit && !user.isOwner" aria-label="重置密码" title="重置密码" @click="resetTarget = user"><md-icon>lock_reset</md-icon></md-icon-button>
+                <md-icon-button v-if="canEdit && !user.isOwner" :aria-label="user.isActive ? '停用' : '启用'" :title="user.isActive ? '停用' : '启用'" @click="toggleUser(user)"><md-icon>{{ user.isActive ? 'person_off' : 'person' }}</md-icon></md-icon-button>
+                <md-icon-button v-if="canEdit && !user.isOwner" aria-label="删除用户" title="删除用户" @click="deleteTarget = user"><md-icon>delete</md-icon></md-icon-button>
               </td>
             </tr>
           </tbody>

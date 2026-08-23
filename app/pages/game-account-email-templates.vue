@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 
 useHead({ title: '验证码邮件模板' })
 
@@ -31,9 +31,21 @@ const previewHtml = ref('')
 const loading = ref(true)
 const saving = ref(false)
 const previewing = ref(false)
+const isDesktop = ref(false)
+const wordWrapEnabled = ref(true)
+const editorFullscreen = ref(false)
+const editorHost = ref<HTMLElement | null>(null)
+let editorInstance: any = null
+let monacoLoadPromise: Promise<any> | null = null
+let editorMediaQuery: MediaQueryList | null = null
+let syncingEditor = false
+let editorLoadErrorShown = false
+let previousBodyOverflow = ''
 let previewRequestId = 0
 let previewTimer: ReturnType<typeof setTimeout> | null = null
 const { showToast } = useToast()
+const access = useAdminAccess()
+const canEdit = computed(() => access.levelForKey('game-accounts') === 'edit')
 
 function cloneTemplates(value: Record<EmailTemplateKind, EmailTemplate>) {
   return Object.fromEntries(EMAIL_TEMPLATE_KINDS.map(({ key }) => [
@@ -51,9 +63,145 @@ function onSubjectInput(event: Event) {
   refreshPreview()
 }
 
-function onHtmlInput(event: Event) {
-  currentTemplate().html = (event.target as HTMLTextAreaElement).value
-  refreshPreview()
+async function loadMonacoEditor() {
+  if (!import.meta.client) return null
+  if (!monacoLoadPromise) {
+    monacoLoadPromise = (async () => {
+      const globalScope = globalThis as any
+      const previousDefine = globalScope.define
+      globalScope.define = (_dependencies: unknown[], factory: () => unknown) => factory()
+      try {
+        await import('monaco-editor/min/vs/nls.messages.zh-cn.js')
+      } finally {
+        if (previousDefine === undefined) delete globalScope.define
+        else globalScope.define = previousDefine
+      }
+      if (
+        !Array.isArray(globalScope._VSCODE_NLS_MESSAGES)
+        || globalScope._VSCODE_NLS_LANGUAGE !== 'zh-cn'
+      ) {
+        throw new Error('Monaco Editor 简体中文语言包加载失败')
+      }
+
+      // Monaco's ESM build needs explicit worker constructors in Vite/Nuxt.
+      const [{ default: EditorWorker }, { default: HtmlWorker }] = await Promise.all([
+        import('monaco-editor/esm/vs/editor/editor.worker.js?worker'),
+        import('monaco-editor/esm/vs/language/html/html.worker.js?worker'),
+      ])
+      const environment = globalScope.MonacoEnvironment || {}
+      globalScope.MonacoEnvironment = {
+        ...environment,
+        getWorker(_workerId: string, label: string) {
+          return ['html', 'handlebars', 'razor'].includes(label)
+            ? new HtmlWorker()
+            : new EditorWorker()
+        },
+      }
+      return import('monaco-editor/esm/vs/editor/editor.main.js')
+    })()
+  }
+
+  try {
+    const monaco = await monacoLoadPromise
+    if (!monaco) return
+    editorLoadErrorShown = false
+    return monaco
+  } catch (error) {
+    monacoLoadPromise = null
+    throw error
+  }
+}
+
+async function createMonacoEditor() {
+  const host = editorHost.value
+  if (!isDesktop.value || !canEdit.value || !host || editorInstance) return
+
+  let monaco: any
+  try {
+    monaco = await loadMonacoEditor()
+  } catch (error) {
+    console.error('Monaco Editor 加载失败', error)
+    if (!editorLoadErrorShown) {
+      editorLoadErrorShown = true
+      showToast('HTML 源码编辑器加载失败，请刷新页面重试', 'error')
+    }
+    return
+  }
+
+  if (!monaco) return
+  if (!isDesktop.value || !canEdit.value || editorHost.value !== host || !host.isConnected || editorInstance) return
+  editorInstance = monaco.editor.create(host, {
+    value: currentTemplate().html,
+    language: 'html',
+    theme: document.documentElement.dataset.theme === 'dark' ? 'vs-dark' : 'vs',
+    automaticLayout: true,
+    minimap: { enabled: true },
+    fontSize: 13,
+    lineHeight: 21,
+    tabSize: 2,
+    wordWrap: wordWrapEnabled.value ? 'on' : 'off',
+    scrollBeyondLastLine: false,
+    padding: { top: 14, bottom: 14 },
+  })
+  editorInstance.onDidChangeModelContent(() => {
+    if (syncingEditor) return
+    currentTemplate().html = editorInstance.getValue()
+    refreshPreview()
+  })
+}
+
+function onWordWrapChange(event: Event) {
+  wordWrapEnabled.value = (event.target as any).checked
+  editorInstance?.updateOptions({ wordWrap: wordWrapEnabled.value ? 'on' : 'off' })
+}
+
+function setEditorFullscreen(value: boolean) {
+  const nextValue = Boolean(value && isDesktop.value)
+  if (nextValue === editorFullscreen.value) return
+  if (nextValue) {
+    previousBodyOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+  } else {
+    document.body.style.overflow = previousBodyOverflow
+    previousBodyOverflow = ''
+  }
+  editorFullscreen.value = nextValue
+  void nextTick(() => editorInstance?.layout())
+}
+
+function toggleEditorFullscreen() {
+  setEditorFullscreen(!editorFullscreen.value)
+}
+
+function onEditorKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape' && editorFullscreen.value) {
+    event.preventDefault()
+    setEditorFullscreen(false)
+  }
+}
+
+function disposeMonacoEditor() {
+  const model = editorInstance?.getModel()
+  editorInstance?.dispose()
+  model?.dispose()
+  editorInstance = null
+}
+
+function syncMonacoEditor() {
+  if (!editorInstance) return
+  syncingEditor = true
+  editorInstance.setValue(currentTemplate().html)
+  syncingEditor = false
+}
+
+function updateDesktopMode() {
+  isDesktop.value = editorMediaQuery?.matches ?? false
+  if (!isDesktop.value || !canEdit.value) {
+    setEditorFullscreen(false)
+    disposeMonacoEditor()
+    return
+  }
+  void nextTick(createMonacoEditor)
 }
 
 async function loadSettings() {
@@ -67,6 +215,10 @@ async function loadSettings() {
     showToast(e?.data?.statusMessage || '邮件模板加载失败', 'error')
   } finally {
     loading.value = false
+    if (isDesktop.value && canEdit.value) {
+      await nextTick()
+      await createMonacoEditor()
+    }
   }
 }
 
@@ -109,6 +261,7 @@ async function requestPreview(requestId: number) {
 
 function selectTemplate(kind: EmailTemplateKind) {
   activeEmailTemplate.value = kind
+  syncMonacoEditor()
   refreshPreview()
 }
 
@@ -121,6 +274,7 @@ async function saveTemplates() {
     })
     settings.value = result
     drafts.value = cloneTemplates(result.emailTemplates)
+    syncMonacoEditor()
     showToast('验证码邮件模板已保存')
     refreshPreview()
   } catch (e: any) {
@@ -136,11 +290,24 @@ function resetCurrentTemplate() {
     subject: saved.subject,
     html: saved.html,
   }
-  void refreshPreview()
+  syncMonacoEditor()
+  refreshPreview()
 }
 
 onMounted(() => {
+  window.addEventListener('keydown', onEditorKeydown)
+  editorMediaQuery = window.matchMedia('(min-width: 901px)')
+  editorMediaQuery.addEventListener('change', updateDesktopMode)
+  updateDesktopMode()
   void loadSettings()
+})
+
+onBeforeUnmount(() => {
+  if (previewTimer) clearTimeout(previewTimer)
+  window.removeEventListener('keydown', onEditorKeydown)
+  setEditorFullscreen(false)
+  editorMediaQuery?.removeEventListener('change', updateDesktopMode)
+  disposeMonacoEditor()
 })
 </script>
 
@@ -155,8 +322,8 @@ onMounted(() => {
         </div>
       </div>
       <div class="heading-actions">
-        <md-text-button :disabled="loading || saving" @click="resetCurrentTemplate">撤销当前修改</md-text-button>
-        <md-filled-button :disabled="loading || saving" @click="saveTemplates">
+        <md-text-button v-if="canEdit" :disabled="loading || saving || !isDesktop" @click="resetCurrentTemplate">撤销当前修改</md-text-button>
+        <md-filled-button v-if="canEdit" :disabled="loading || saving || !isDesktop" @click="saveTemplates">
           <md-icon slot="icon">save</md-icon>
           {{ saving ? '保存中…' : '保存模板' }}
         </md-filled-button>
@@ -177,30 +344,54 @@ onMounted(() => {
       <div class="template-meta">
         <label>
           <span>邮件主题</span>
-          <input :value="currentTemplate().subject" maxlength="200" @input="onSubjectInput">
+          <input :value="currentTemplate().subject" maxlength="200" :disabled="!isDesktop || !canEdit" @input="onSubjectInput">
         </label>
           <p>源码占位符：<code v-pre>{{username}}</code>、<code v-pre>{{code}}</code>、<code v-pre>{{subject}}</code>、<code v-pre>{{logoUrl}}</code>。预览名称使用当前后台账户全名。</p>
       </div>
 
+      <div v-if="!isDesktop || !canEdit" class="mobile-preview-notice">
+        <md-icon>desktop_windows</md-icon>
+        <span>{{ !canEdit ? '当前账户只有查看权限，仅可预览邮件。' : '手机版仅支持预览，请使用电脑编辑邮件 HTML 源码。' }}</span>
+      </div>
+
       <div class="email-template-workspace">
-        <section class="template-source-panel">
+        <section
+          v-if="isDesktop && canEdit"
+          class="template-source-panel"
+          :class="{ 'template-source-panel--fullscreen': editorFullscreen }"
+        >
           <div class="panel-heading">
-            <div>
-              <h2>HTML 源码</h2>
-              <span>支持完整 HTML 文档和内联样式</span>
+            <div class="panel-heading-copy">
+              <h2>HTML 源码 · Monaco Editor</h2>
+              <span>支持完整 HTML 文档、语法高亮和代码折叠</span>
             </div>
-            <span class="source-status">{{ currentTemplate().html.length.toLocaleString() }} 字符</span>
+            <div class="editor-panel-actions">
+              <label class="word-wrap-option">
+                <md-checkbox :checked="wordWrapEnabled" @change="onWordWrapChange"></md-checkbox>
+                <span>自动换行</span>
+              </label>
+              <span class="source-status">{{ currentTemplate().html.length.toLocaleString() }} 字符</span>
+              <md-filled-button
+                v-if="editorFullscreen"
+                :disabled="saving"
+                @click="saveTemplates"
+              >
+                <md-icon slot="icon">save</md-icon>
+                {{ saving ? '保存中…' : '保存模板' }}
+              </md-filled-button>
+              <md-icon-button
+                :aria-label="editorFullscreen ? '退出全屏编辑' : '全屏编辑'"
+                :title="editorFullscreen ? '退出全屏编辑' : '全屏编辑'"
+                @click="toggleEditorFullscreen"
+              >
+                <md-icon>{{ editorFullscreen ? 'fullscreen_exit' : 'fullscreen' }}</md-icon>
+              </md-icon-button>
+            </div>
           </div>
-          <textarea
-            :value="currentTemplate().html"
-            class="html-source-editor"
-            spellcheck="false"
-            aria-label="邮件 HTML 源码"
-            @input="onHtmlInput"
-          ></textarea>
+          <div ref="editorHost" class="html-source-editor" aria-label="邮件 HTML 源码"></div>
         </section>
 
-        <section class="template-preview-panel">
+        <section class="template-preview-panel" :class="{ 'template-preview-panel--mobile': !isDesktop }">
           <div class="panel-heading">
             <div>
               <h2>实时预览</h2>
@@ -293,6 +484,18 @@ onMounted(() => {
   background: var(--md-sys-color-surface-container-high);
 }
 
+.mobile-preview-notice {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: 8px;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 13px;
+}
+
 .email-template-workspace {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -320,6 +523,30 @@ onMounted(() => {
   border-bottom: 1px solid var(--md-sys-color-outline-variant);
 }
 
+.panel-heading-copy {
+  min-width: 0;
+}
+
+.editor-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+.word-wrap-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.editor-panel-actions md-filled-button {
+  white-space: nowrap;
+}
+
 .panel-heading h2 {
   margin: 0 0 3px;
   font-size: 15px;
@@ -340,15 +567,22 @@ onMounted(() => {
   width: 100%;
   min-height: 580px;
   box-sizing: border-box;
+  background: #1e1e1e;
+}
+
+.template-source-panel--fullscreen {
+  position: fixed;
+  z-index: 50;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  min-height: 0;
   border: 0;
   border-radius: 0;
-  padding: 16px;
-  outline: 0;
-  resize: none;
-  background: #18221f;
-  color: #d8eee4;
-  font: 13px/1.65 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  tab-size: 2;
+}
+
+.template-source-panel--fullscreen .html-source-editor {
+  min-height: 0;
 }
 
 .template-preview-panel iframe {
@@ -375,9 +609,21 @@ onMounted(() => {
     flex: 1;
   }
 
+  .editor-panel-actions {
+    display: none;
+  }
+
   .email-template-workspace {
     grid-template-columns: minmax(0, 1fr);
     min-height: 0;
+  }
+
+  .mobile-preview-notice {
+    display: flex;
+  }
+
+  .template-preview-panel--mobile {
+    min-height: calc(100vh - 330px);
   }
 
   .html-source-editor,

@@ -5,14 +5,14 @@ import {
   recordChatLoginFailure,
   verifyChatPlayerLogin,
 } from '../../utils/db'
-import { verifyTurnstileToken } from '../../utils/turnstile'
+import { verifyTurnstileChat } from '../../utils/turnstile'
 
 export default defineEventHandler(async (event) => {
   const body = await readBody<{ username?: string; password?: string; turnstileToken?: string }>(event)
   const ip = (getHeader(event, 'cf-connecting-ip') || getRequestIP(event) || 'unknown').slice(0, 64)
 
   assertChatLoginAllowed(ip)
-  await verifyTurnstileToken(body?.turnstileToken, ip, 'chat-login')
+  await verifyTurnstileChat(body?.turnstileToken, ip, 'chat-login')
 
   let username: string
   try {

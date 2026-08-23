@@ -51,6 +51,8 @@ const clearDialog = ref<HTMLElement | null>(null)
 
 const { showToast } = useToast()
 const { apply: applyDialogAnimation } = useDialogAnimation()
+const access = useAdminAccess()
+const canEdit = computed(() => access.levelForKey('chat') === 'edit')
 
 const senderCount = computed(() => new Set(messages.value.map((m) => m.ipTag)).size)
 const displayName = computed(() => currentUser.value?.fullName || currentUser.value?.username || '账户')
@@ -211,11 +213,12 @@ async function confirmClear() {
           <md-icon-button aria-label="刷新留言记录" title="刷新留言记录" :disabled="refreshing" @click="load">
             <md-icon :class="{ 'refresh-icon--loading': refreshing }">refresh</md-icon>
           </md-icon-button>
-          <md-filled-button @click="openCompose">
+          <md-filled-button v-if="canEdit" @click="openCompose">
             <md-icon slot="icon">add</md-icon>
             新增消息
           </md-filled-button>
           <md-filled-button
+            v-if="canEdit"
             class="clear-btn"
             :disabled="messages.length === 0"
             @click="openClear"
@@ -254,7 +257,7 @@ async function confirmClear() {
               <td class="cell-location">{{ m.location }}</td>
               <td class="cell-ip"><code>{{ m.ipTag }}</code></td>
               <td class="cell-actions">
-                <md-text-button class="delete-btn" @click="openDelete(m)">
+                <md-text-button v-if="canEdit" class="delete-btn" @click="openDelete(m)">
                   <md-icon slot="icon">delete</md-icon>
                   删除
                 </md-text-button>
