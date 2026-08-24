@@ -1,8 +1,8 @@
 import { deleteCookie } from 'h3'
-import { ADMIN_COOKIE_NAME, recordAudit, updateAdminPassword } from '../../utils/db'
+import { ADMIN_COOKIE_NAME, recordAudit, requireFeaturePermission, updateAdminPassword } from '../../utils/db'
 
 export default defineEventHandler(async (event) => {
-  const user = requireAuth(event)
+  const user = requireFeaturePermission(event, 'account-password', 'edit')
 
   const body = await readBody<{ oldPassword?: string; newPassword?: string }>(event)
   if (!body.oldPassword || !body.newPassword) {

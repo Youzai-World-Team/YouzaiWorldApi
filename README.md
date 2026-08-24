@@ -2,7 +2,7 @@
 
 Nuxt API 服务端与管理页面。生产环境建议通过 Cloudflare 以 `https://api.mcyzw.top` 提供访问。
 
-账户系统由本服务端权威保存与认证：游戏账户和当前连接会话存入 SQLite 的 `game_accounts` / `game_sessions`，皮肤与披风存入 `game_cosmetics`，服务器邮件存入 `game_mails` / `game_mail_refs`。管理页面 `/game-accounts` 可创建、注销、重置密码、解除登录锁定并配置登录冷却。玩家每次加入 Minecraft 服务器都必须重新认证。
+账户系统由本服务端权威保存与认证：游戏账户和当前连接会话存入 SQLite 的 `game_accounts` / `game_sessions`，皮肤与披风存入 `game_cosmetics`，服务器邮件存入 `game_mails` / `game_mail_refs`，域名收件存入 `domain_mails` / `domain_mail_attachments`。管理页面 `/game-accounts` 可创建、注销、重置密码、解除登录锁定并配置登录冷却。玩家每次加入 Minecraft 服务器都必须重新认证。
 
 服务器模组通过 HMAC-SHA256 签名调用 `/api/game/*`。每个请求都必须携带
 `X-Yzwc-Timestamp`、`X-Yzwc-Nonce` 和 `X-Yzwc-Signature`，签名密钥由环境变量
@@ -94,6 +94,49 @@ Nuxt API 服务端与管理页面。生产环境建议通过 Cloudflare 以 `htt
 发布提交 `{type, title, body, expireOption, scope, players}`。`type` 只接受 `ANNOUNCEMENT` / `NOTICE`；`expireOption` 与游戏内一致（0=1 天、1=7 天、2=30 天、3=永久）；`scope` 为 `all`（全体账户）或 `players`（配 `players` 玩家代号数组，一次最多 500 个，重复与大小写差异会归一，写库时回填账户表里的规范大小写以便游戏内编辑界面回查）。发件人取当前后台账户的全名或用户名，**不接受请求体指定**，避免冒用他人身份；每次发布都会记入 `/audit-logs`。
 
 奖励邮件、编辑与撤回仍然只在游戏内进行：物品附件的 NBT 只能从管理员物品栏里的物品序列化，网页无法构造。后台发布的邮件没有 S2C 触发点，玩家打开信箱即可看到；未读徽标由模组按 `mail_module.unread_refresh_interval_ticks`（默认约 2.5 分钟）批量刷新后点亮，不是即时的。
+
+## 域名邮件
+
+发往 `@mcyzw.top` 的来信由 `YouzaiWorldDonaimEmail`（Cloudflare Email Worker，挂在 Email Routing 的 catch-all 规则上）收下，解析 MIME 后投递到本服务端保存：邮件本体存入 SQLite 的 `domain_mails`，附件存入 `domain_mail_attachments`。后台 `/domain-mail`（导航里叫「域名邮件」）可以查看和删除，**转发与发信按需求暂未实现**。
+
+Worker 用 HMAC-SHA256 签名调用 `POST /api/inbound-mail`，请求头与规范串和游戏接口同一套（`X-Yzwc-Timestamp`、`X-Yzwc-Nonce`、`X-Yzwc-Signature`，规范串为 `timestamp.nonce.METHOD.path.sha256(body)`，±300 秒时间窗，nonce 10 分钟防重放），但**密钥是独立的**：Worker 被攻破也只能写入收件，碰不到 `/api/game/*`。
+
+密钥在后台 `/settings`（站点设置）的「域名邮件投递密钥」区域填写，也可以点「随机生成」现场生成一个 32 字节随机值。与游戏 API 密钥同一套优先级：数据库设置（`inbound_mail.key`）优先，未配置时回退到环境变量 `YZWC_INBOUND_MAIL_KEY`；生产环境推荐用后台保存，因为 Nitro 运行时不会读项目根目录的 `.env`。两处都没有有效值时投递接口返回 503，设置页会给出提示。密钥长度 32 至 512 位且不能含空白字符，保存后需要把同一个值写进 Worker 的 `INBOUND_MAIL_KEY` Secret。
+
+该区域受功能权限 `settings-inbound-mail-key` 控制，默认 `hidden`：所有者始终可见，其他后台账户需要在 `/permissions` 里单独授权，且不会超过其「站点设置」页面权限。修改会记入 `/audit-logs`，只记「改过」不记密钥内容。
+
+投递接口不受后台页面权限中间件管辖（由签名把关），也不受 `security.ts` 那 256 KiB 的请求体上限约束——一封带附件的邮件 base64 后可达十几 MiB，改由 `server/middleware/inbound-mail-auth.ts` 按 20 MiB 单独限制，并要求声明 `Content-Length`。
+
+同一个 `Message-ID` 重复投递是幂等的：命中已有记录时直接返回原 id 并置 `duplicate`，不会插入第二条。Worker 在网络抖动后会重试，这个幂等分支保证后台不会看到重复邮件。没有 `Message-ID` 的邮件不参与去重（唯一索引是 `WHERE message_id <> ''` 的部分索引）。
+
+后台读取接口走后台会话鉴权（`requireAuth`），与签名投递的入口是两套：
+
+| 方法与路径 | 用途 |
+|-----------|------|
+| `POST /api/inbound-mail` | Worker 投递收件（HMAC 签名，非后台会话） |
+| `GET /api/admin/domain-mails` | 邮件列表；不含正文与附件二进制 |
+| `GET /api/admin/domain-mails/:id` | 单封详情：正文、收件人/抄送、附件元信息 |
+| `DELETE /api/admin/domain-mails/:id` | 删除邮件，附件级联删除，记入 `/audit-logs` |
+| `GET /api/admin/domain-mails/attachment?mail=&id=` | 下载附件原文 |
+| `GET /api/auth/inbound-mail-key` | 读取当前投递密钥与其来源（数据库 / 环境变量 / 未配置） |
+| `POST /api/auth/inbound-mail-key` | 保存投递密钥到数据库设置 |
+
+列表给出主题、发件人、收件地址、发送时间（邮件头 `Date`，缺失或畸形时回退接收时间并标注）、接收时间、附件数、原信大小与 SPF / DKIM / DMARC 结论；详情另给信封发件人、回复地址、收件人与抄送、`Message-ID`，以及正文和附件清单。删除需要该页的 `edit` 权限，只有 `view` 时删除入口不显示。
+
+### 两条安全约束
+
+catch-all 收的是互联网上任何人发来的信，因此：
+
+- **HTML 正文不在后台渲染，只以源码展示。** 渲染陌生来信的 HTML 等于把它的脚本和远程图片放进 `api.mcyzw.top` 这个源，一封信就能读走后台会话。详情页默认显示纯文本正文，HTML 需要手动展开且始终是转义后的源码。
+- **附件一律按 `application/octet-stream` + `Content-Disposition: attachment` 下发，不使用邮件声明的 MIME 类型。** 否则一个 HTML 或 SVG 附件照原类型内联返回就能在后台域名下执行脚本。文件名做过清洗，非 ASCII 走 RFC 5987 的 `filename*`。
+
+对应地，解析与校验一律**宽进严出**：畸形的 `From` / `Reply-To`、没见过的 SPF/DKIM/DMARC 结论都不会让整封信被拒（前者原样保留供排查，后者归零），只有收件地址本身非法才拒收——把一封信丢掉比存下一条脏数据更糟。
+
+### 体积与保留上限
+
+Cloudflare 入站单封上限 25 MiB。Worker 与服务端的预算必须一致（`YouzaiWorldDonaimEmail/src/config.js` ↔ `server/utils/inbound-mail.ts`）：纯文本正文 256 KiB、HTML 正文 1 MiB、单个附件 6 MiB、附件合计 12 MiB、附件条数 32。超出的正文被截断，超出的附件只保留元信息（文件名、类型、原始大小）而不存内容——后台显示「未保存」，不提供下载。任何裁剪都会置 `truncated`，列表上显示「已截断」。
+
+收件表保留最近 2000 封（`DOMAIN_MAIL_RETENTION_ROWS`），超出后按接收时间淘汰最旧的，附件一并删除。附件是二进制入库，没有上限会把磁盘吃满。
 
 首次启动后访问根目录 `/`，设置首个后台用户名（3 至 32 位）、密码（12 至 128 位）、登录入口（12 至 64 位），以及 Turnstile 站点密钥、服务端密钥和允许的前端 hostname。
 设置成功后初始化接口会永久关闭，后续只能通过该入口登录。也可在首次启动前同时配置

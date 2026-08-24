@@ -17,6 +17,7 @@ const savingFullName = ref(false)
 
 const { showToast } = useToast()
 const { entry: entryState, load: loadEntry } = useEntry()
+const access = useAdminAccess()
 interface CurrentUser {
   username: string
   avatar: string
@@ -26,12 +27,16 @@ interface CurrentUser {
 
 const currentUser = ref<CurrentUser | null>(null)
 const displayName = computed(() => currentUser.value?.fullName || currentUser.value?.username || '账户')
+const canChangePassword = computed(() => access.featureLevelForKey('account-password') === 'edit')
+const canChangeFullName = computed(() => access.featureLevelForKey('account-full-name') === 'edit')
+const canChangeAvatar = computed(() => access.featureLevelForKey('account-avatar') === 'edit')
 useHead({ title: '此账户' })
 
 onMounted(async () => {
   try {
     const result = await $fetch<{ user: CurrentUser }>('/api/auth/me')
     currentUser.value = result.user
+    access.updateProfile(result.user)
     fullNameInput.value = result.user.fullName || ''
   } catch {}
   currentEntry.value = await loadEntry()
@@ -46,7 +51,7 @@ function onInput(field: 'old' | 'new' | 'confirm', e: Event) {
 }
 
 async function updatePassword() {
-  if (updating.value) return
+  if (updating.value || !canChangePassword.value) return
   if (!newPassword.value || newPassword.value !== confirmPassword.value) {
     showToast('两次输入的新密码不一致', 'error')
     return
@@ -91,11 +96,12 @@ async function saveEntry() {
 }
 
 function pickAvatar() {
+  if (!canChangeAvatar.value) return
   fileInput.value?.click()
 }
 
 async function saveFullName() {
-  if (savingFullName.value) return
+  if (savingFullName.value || !canChangeFullName.value) return
   const fullName = fullNameInput.value.trim().replace(/\s+/g, ' ')
   if (fullName.length > 64) {
     showToast('全名不能超过 64 个字符', 'error')
@@ -119,6 +125,7 @@ async function saveFullName() {
 }
 
 async function onAvatarChange(event: Event) {
+  if (!canChangeAvatar.value) return
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
   input.value = ''
@@ -136,6 +143,7 @@ async function onAvatarChange(event: Event) {
   try {
     const form = new FormData()
     form.append('file', file)
+    form.append('purpose', 'account-avatar')
     const upload = await $fetch<{ url: string }>('/api/upload', { method: 'POST', body: form })
     const result = await $fetch<{ user: CurrentUser }>('/api/auth/avatar', {
       method: 'POST',
@@ -152,7 +160,7 @@ async function onAvatarChange(event: Event) {
 }
 
 async function clearAvatar() {
-  if (uploadingAvatar.value) return
+  if (uploadingAvatar.value || !canChangeAvatar.value) return
   uploadingAvatar.value = true
   try {
     const result = await $fetch<{ user: CurrentUser }>('/api/auth/avatar', {
@@ -170,7 +178,7 @@ async function clearAvatar() {
 }
 
 async function restoreOwnerAvatar() {
-  if (uploadingAvatar.value || !currentUser.value?.isOwner) return
+  if (uploadingAvatar.value || !canChangeAvatar.value || !currentUser.value?.isOwner) return
   uploadingAvatar.value = true
   try {
     const result = await $fetch<{ user: CurrentUser }>('/api/auth/avatar', {
@@ -214,22 +222,22 @@ async function logout() {
           <strong>{{ displayName }}</strong>
           <span v-if="currentUser?.fullName" class="profile-username">用户名：{{ currentUser.username }}</span>
           <div class="profile-actions">
-            <md-text-button :disabled="uploadingAvatar" @click="pickAvatar">
+            <md-text-button v-if="canChangeAvatar" :disabled="uploadingAvatar" @click="pickAvatar">
               <md-icon slot="icon">upload</md-icon>
               设置头像
             </md-text-button>
-            <md-text-button v-if="currentUser?.avatar && currentUser.isOwner && currentUser.avatar !== '/favicon.ico'" :disabled="uploadingAvatar" @click="restoreOwnerAvatar">
+            <md-text-button v-if="canChangeAvatar && currentUser?.avatar && currentUser.isOwner && currentUser.avatar !== '/favicon.ico'" :disabled="uploadingAvatar" @click="restoreOwnerAvatar">
               <md-icon slot="icon">restore</md-icon>
               恢复默认
             </md-text-button>
-            <md-text-button v-else-if="currentUser?.avatar && !currentUser.isOwner" :disabled="uploadingAvatar" @click="clearAvatar">
+            <md-text-button v-else-if="canChangeAvatar && currentUser?.avatar && !currentUser.isOwner" :disabled="uploadingAvatar" @click="clearAvatar">
               <md-icon slot="icon">delete</md-icon>
               移除头像
             </md-text-button>
           </div>
         </div>
       </div>
-      <div class="full-name-form">
+      <div v-if="canChangeFullName" class="full-name-form">
         <md-outlined-text-field
           label="全名"
           supporting-text="作为对外显示的名称；留空时显示用户名"
@@ -244,7 +252,7 @@ async function logout() {
       <input ref="fileInput" class="hidden-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif" @change="onAvatarChange" />
     </section>
 
-    <section class="card account-card">
+    <section v-if="canChangePassword" class="card account-card">
       <h2 class="card-title">更新密码</h2>
       <div class="form">
         <md-outlined-text-field

@@ -13,8 +13,8 @@ interface ScopeState {
 }
 
 interface TurnstileResponse {
-  admin: ScopeState
-  chat: ScopeState
+  admin: ScopeState | null
+  chat: ScopeState | null
 }
 
 const endpoint = '/api/admin/turnstile'
@@ -26,8 +26,25 @@ const gameApiKey = ref('')
 const showGameApiKey = ref(false)
 const gameApiKeyLoading = ref(true)
 const savingGameApiKey = ref(false)
+const inboundMailKey = ref('')
+const showInboundMailKey = ref(false)
+const inboundMailKeyLoading = ref(true)
+const savingInboundMailKey = ref(false)
+const inboundMailKeySource = ref<'database' | 'env' | 'none'>('none')
 const access = useAdminAccess()
-const canEdit = computed(() => access.levelForKey('settings') === 'edit')
+const canEditPage = computed(() => access.levelForKey('settings') === 'edit')
+const gameApiKeyLevel = computed(() => access.featureLevelForKey('settings-game-api-key'))
+const canViewGameApiKey = computed(() => gameApiKeyLevel.value !== 'hidden')
+const canEditGameApiKey = computed(() => canEditPage.value && gameApiKeyLevel.value === 'edit')
+const inboundMailKeyLevel = computed(() => access.featureLevelForKey('settings-inbound-mail-key'))
+const canViewInboundMailKey = computed(() => inboundMailKeyLevel.value !== 'hidden')
+const canEditInboundMailKey = computed(() => canEditPage.value && inboundMailKeyLevel.value === 'edit')
+const adminTurnstileLevel = computed(() => access.featureLevelForKey('settings-turnstile-admin'))
+const chatTurnstileLevel = computed(() => access.featureLevelForKey('settings-turnstile-chat'))
+const canViewAdminTurnstile = computed(() => adminTurnstileLevel.value !== 'hidden')
+const canViewChatTurnstile = computed(() => chatTurnstileLevel.value !== 'hidden')
+const canEditAdminTurnstile = computed(() => canEditPage.value && adminTurnstileLevel.value === 'edit')
+const canEditChatTurnstile = computed(() => canEditPage.value && chatTurnstileLevel.value === 'edit')
 
 // 服务端不回显密钥，密钥框留空即表示「沿用已有密钥」。
 const forms = reactive<Record<TurnstileScope, { siteKey: string; secret: string; hostnames: string }>>({
@@ -43,17 +60,29 @@ const { showToast } = useToast()
 
 onMounted(() => {
   void load()
-  void loadGameApiKey()
+  void loadSecrets()
 })
 
-async function loadGameApiKey() {
+// 两个密钥都要先拿到最新的功能权限才知道能不能读，所以共用一次 /api/auth/me。
+async function loadSecrets() {
   gameApiKeyLoading.value = true
+  inboundMailKeyLoading.value = true
   try {
-    const [auth, settings] = await Promise.all([
-      $fetch<{ user: { isOwner: boolean } }>('/api/auth/me'),
-      $fetch<{ gameApiKey: string }>('/api/auth/game-api-key'),
-    ])
+    const auth = await $fetch<{ user: { isOwner: boolean; featurePermissions?: Record<string, 'hidden' | 'view' | 'edit'> } }>('/api/auth/me')
     access.updateProfile(auth.user)
+  } catch (e: any) {
+    gameApiKeyLoading.value = false
+    inboundMailKeyLoading.value = false
+    showToast(e?.data?.statusMessage || '权限加载失败', 'error')
+    return
+  }
+  await Promise.all([loadGameApiKey(), loadInboundMailKey()])
+}
+
+async function loadGameApiKey() {
+  try {
+    if (!canViewGameApiKey.value) return
+    const settings = await $fetch<{ gameApiKey: string }>('/api/auth/game-api-key')
     gameApiKey.value = settings.gameApiKey || ''
   } catch (e: any) {
     showToast(e?.data?.statusMessage || '游戏 API 密钥加载失败', 'error')
@@ -62,14 +91,34 @@ async function loadGameApiKey() {
   }
 }
 
+async function loadInboundMailKey() {
+  try {
+    if (!canViewInboundMailKey.value) return
+    const settings = await $fetch<{ inboundMailKey: string; source: 'database' | 'env' | 'none' }>('/api/auth/inbound-mail-key')
+    inboundMailKey.value = settings.inboundMailKey || ''
+    inboundMailKeySource.value = settings.source
+  } catch (e: any) {
+    showToast(e?.data?.statusMessage || '域名邮件投递密钥加载失败', 'error')
+  } finally {
+    inboundMailKeyLoading.value = false
+  }
+}
+
 async function load() {
   loading.value = true
   try {
     const result = await $fetch<TurnstileResponse>(endpoint)
     for (const scope of ['admin', 'chat'] as TurnstileScope[]) {
-      Object.assign(state[scope], result[scope])
-      forms[scope].siteKey = result[scope].siteKey
-      forms[scope].hostnames = result[scope].hostnames
+      const config = result[scope]
+      if (!config) {
+        forms[scope].siteKey = ''
+        forms[scope].hostnames = ''
+        forms[scope].secret = ''
+        continue
+      }
+      Object.assign(state[scope], config)
+      forms[scope].siteKey = config.siteKey
+      forms[scope].hostnames = config.hostnames
       forms[scope].secret = ''
     }
   } catch (e: any) {
@@ -80,7 +129,8 @@ async function load() {
 }
 
 async function save(scope: TurnstileScope) {
-  if (saving.value || !canEdit.value) return
+  const canEditScope = scope === 'admin' ? canEditAdminTurnstile.value : canEditChatTurnstile.value
+  if (saving.value || !canEditScope) return
   const form = forms[scope]
   if (!form.siteKey.trim()) {
     showToast('请填写站点密钥', 'error')
@@ -111,7 +161,7 @@ async function save(scope: TurnstileScope) {
 }
 
 async function saveGameApiKey() {
-  if (savingGameApiKey.value || !canEdit.value) return
+  if (savingGameApiKey.value || !canEditGameApiKey.value) return
   const value = gameApiKey.value.trim()
   if (value.length < 32 || value.length > 512 || /\s/.test(value)) {
     showToast('游戏 API 密钥长度需要为 32 至 512 位且不能包含空白字符', 'error')
@@ -131,6 +181,39 @@ async function saveGameApiKey() {
     savingGameApiKey.value = false
   }
 }
+
+async function saveInboundMailKey() {
+  if (savingInboundMailKey.value || !canEditInboundMailKey.value) return
+  const value = inboundMailKey.value.trim()
+  if (value.length < 32 || value.length > 512 || /\s/.test(value)) {
+    showToast('域名邮件投递密钥长度需要为 32 至 512 位且不能包含空白字符', 'error')
+    return
+  }
+  savingInboundMailKey.value = true
+  try {
+    const result = await $fetch<{ inboundMailKey: string; source: 'database' | 'env' | 'none' }>('/api/auth/inbound-mail-key', {
+      method: 'POST',
+      body: { inboundMailKey: value },
+    })
+    inboundMailKey.value = result.inboundMailKey
+    inboundMailKeySource.value = result.source
+    showToast('域名邮件投递密钥已更新，请同步修改 Worker 的 INBOUND_MAIL_KEY')
+  } catch (e: any) {
+    showToast(e?.data?.statusMessage || '保存失败', 'error')
+  } finally {
+    savingInboundMailKey.value = false
+  }
+}
+
+/** 浏览器里生成 32 字节随机值，避免管理员自己想一串不够随机的密钥。 */
+function generateInboundMailKey() {
+  if (!canEditInboundMailKey.value) return
+  const bytes = new Uint8Array(32)
+  crypto.getRandomValues(bytes)
+  inboundMailKey.value = [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+  showInboundMailKey.value = true
+  showToast('已生成新密钥，记得保存并同步到 Worker')
+}
 </script>
 
 <template>
@@ -141,9 +224,9 @@ async function saveGameApiKey() {
       官网聊天区的 widget 跑在主站域名下，混用会导致校验域名不匹配。
     </p>
 
-    <div class="card">
+    <div v-if="canViewGameApiKey" class="card">
       <h2 class="card-title">游戏 API 密钥</h2>
-      <p class="card-note">用于 Minecraft 模组与 API 服务端的签名通信。拥有站点设置编辑权限的账户可以修改。</p>
+      <p class="card-note">用于 Minecraft 模组与 API 服务端的签名通信。拥有该区域修改权限的账户可以修改。</p>
 
       <div class="setting-form">
         <div class="password-field">
@@ -154,7 +237,7 @@ async function saveGameApiKey() {
             autocomplete="off"
             spellcheck="false"
             :disabled="gameApiKeyLoading"
-            :readonly="!canEdit"
+            :readonly="!canEditGameApiKey"
             :value="gameApiKey"
             @input="gameApiKey = ($event.target as HTMLInputElement).value"
           ></md-outlined-text-field>
@@ -166,7 +249,7 @@ async function saveGameApiKey() {
             <md-icon>{{ showGameApiKey ? 'visibility_off' : 'visibility' }}</md-icon>
           </md-icon-button>
         </div>
-        <div v-if="canEdit" class="form-actions">
+        <div v-if="canEditGameApiKey" class="form-actions">
           <md-filled-button :disabled="gameApiKeyLoading || savingGameApiKey" @click="saveGameApiKey">
             {{ savingGameApiKey ? '保存中…' : '保存游戏 API 密钥' }}
           </md-filled-button>
@@ -174,7 +257,64 @@ async function saveGameApiKey() {
       </div>
     </div>
 
-    <div class="card">
+    <div v-if="canViewInboundMailKey" class="card">
+      <h2 class="card-title">域名邮件投递密钥</h2>
+      <p class="card-note">
+        Cloudflare Email Worker 把 <code>@mcyzw.top</code> 的来信投递到本服务端时用它签名，
+        服务端用同一个值校验。与上面的游戏 API 密钥是两把独立的钥匙，不要复用。
+      </p>
+
+      <p v-if="!inboundMailKeyLoading && inboundMailKeySource === 'none'" class="inherit-warning">
+        <md-icon>warning</md-icon>
+        <span>尚未配置，收件投递接口会返回 503，「域名邮件」页会一直是空的。</span>
+      </p>
+      <p v-else-if="!inboundMailKeyLoading && inboundMailKeySource === 'env'" class="source-note">
+        <md-icon>info</md-icon>
+        <span>
+          当前生效的是环境变量 <code>YZWC_INBOUND_MAIL_KEY</code>。在此保存后将改用数据库里的值，
+          生产环境推荐这样做——Nitro 运行时不会读项目根目录的 <code>.env</code>。
+        </span>
+      </p>
+
+      <div class="setting-form">
+        <div class="password-field">
+          <md-outlined-text-field
+            :type="showInboundMailKey ? 'text' : 'password'"
+            label="INBOUND_MAIL_KEY"
+            supporting-text="32 至 512 位、不含空白字符；必须与 Worker 的 INBOUND_MAIL_KEY Secret 完全一致"
+            autocomplete="off"
+            spellcheck="false"
+            :disabled="inboundMailKeyLoading"
+            :readonly="!canEditInboundMailKey"
+            :value="inboundMailKey"
+            @input="inboundMailKey = ($event.target as HTMLInputElement).value"
+          ></md-outlined-text-field>
+          <md-icon-button
+            :aria-label="showInboundMailKey ? '隐藏域名邮件投递密钥' : '显示域名邮件投递密钥'"
+            :disabled="inboundMailKeyLoading"
+            @click="showInboundMailKey = !showInboundMailKey"
+          >
+            <md-icon>{{ showInboundMailKey ? 'visibility_off' : 'visibility' }}</md-icon>
+          </md-icon-button>
+        </div>
+        <div v-if="canEditInboundMailKey" class="form-actions">
+          <md-filled-button :disabled="inboundMailKeyLoading || savingInboundMailKey" @click="saveInboundMailKey">
+            {{ savingInboundMailKey ? '保存中…' : '保存投递密钥' }}
+          </md-filled-button>
+          <md-outlined-button :disabled="inboundMailKeyLoading || savingInboundMailKey" @click="generateInboundMailKey">
+            <md-icon slot="icon">casino</md-icon>
+            随机生成
+          </md-outlined-button>
+        </div>
+        <p v-if="canEditInboundMailKey" class="card-note">
+          改完记得在 Worker 侧执行
+          <code>npx wrangler secret put INBOUND_MAIL_KEY</code>
+          填入同一个值。两边不一致时所有收件都会被拒收（401），但 Worker 会让发信方稍后重试，信一般不会丢。
+        </p>
+      </div>
+    </div>
+
+    <div v-if="canViewAdminTurnstile" class="card">
       <h2 class="card-title">后台登录人机验证</h2>
       <p class="card-note">保护本后台的登录页，允许域名应填写 API 站点域名。</p>
 
@@ -185,7 +325,7 @@ async function saveGameApiKey() {
           autocomplete="off"
           spellcheck="false"
           :value="forms.admin.siteKey"
-          :readonly="!canEdit"
+          :readonly="!canEditAdminTurnstile"
           @input="forms.admin.siteKey = ($event.target as HTMLInputElement).value"
         ></md-outlined-text-field>
 
@@ -197,7 +337,7 @@ async function saveGameApiKey() {
             autocomplete="new-password"
             spellcheck="false"
             :value="forms.admin.secret"
-            :readonly="!canEdit"
+            :readonly="!canEditAdminTurnstile"
             @input="forms.admin.secret = ($event.target as HTMLInputElement).value"
           ></md-outlined-text-field>
           <md-icon-button
@@ -214,11 +354,11 @@ async function saveGameApiKey() {
           autocomplete="off"
           spellcheck="false"
           :value="forms.admin.hostnames"
-          :readonly="!canEdit"
+          :readonly="!canEditAdminTurnstile"
           @input="forms.admin.hostnames = ($event.target as HTMLInputElement).value"
         ></md-outlined-text-field>
 
-        <div v-if="canEdit" class="form-actions">
+        <div v-if="canEditAdminTurnstile" class="form-actions">
           <md-filled-button :disabled="loading || saving === 'admin'" @click="save('admin')">
             {{ saving === 'admin' ? '保存中…' : '保存' }}
           </md-filled-button>
@@ -226,7 +366,7 @@ async function saveGameApiKey() {
       </div>
     </div>
 
-    <div class="card">
+    <div v-if="canViewChatTurnstile" class="card">
       <h2 class="card-title">聊天区人机验证</h2>
       <p class="card-note">
         保护官网首页聊天区的发言与玩家登录，允许域名应填写主站域名。
@@ -247,7 +387,7 @@ async function saveGameApiKey() {
           autocomplete="off"
           spellcheck="false"
           :value="forms.chat.siteKey"
-          :readonly="!canEdit"
+          :readonly="!canEditChatTurnstile"
           @input="forms.chat.siteKey = ($event.target as HTMLInputElement).value"
         ></md-outlined-text-field>
 
@@ -259,7 +399,7 @@ async function saveGameApiKey() {
             autocomplete="new-password"
             spellcheck="false"
             :value="forms.chat.secret"
-            :readonly="!canEdit"
+            :readonly="!canEditChatTurnstile"
             @input="forms.chat.secret = ($event.target as HTMLInputElement).value"
           ></md-outlined-text-field>
           <md-icon-button
@@ -276,11 +416,11 @@ async function saveGameApiKey() {
           autocomplete="off"
           spellcheck="false"
           :value="forms.chat.hostnames"
-          :readonly="!canEdit"
+          :readonly="!canEditChatTurnstile"
           @input="forms.chat.hostnames = ($event.target as HTMLInputElement).value"
         ></md-outlined-text-field>
 
-        <div v-if="canEdit" class="form-actions">
+        <div v-if="canEditChatTurnstile" class="form-actions">
           <md-filled-button :disabled="loading || saving === 'chat'" @click="save('chat')">
             {{ saving === 'chat' ? '保存中…' : '保存' }}
           </md-filled-button>
@@ -292,7 +432,7 @@ async function saveGameApiKey() {
       <h2 class="card-title">配置来源优先级</h2>
       <ol class="priority-list">
         <li>本页保存的数据库设置（最高，生产环境推荐）</li>
-        <li>进程环境变量（<code>TURNSTILE_*</code> / <code>TURNSTILE_CHAT_*</code>）</li>
+        <li>进程环境变量（<code>TURNSTILE_*</code> / <code>TURNSTILE_CHAT_*</code> / <code>YZWC_GAME_API_KEY</code> / <code>YZWC_INBOUND_MAIL_KEY</code>）</li>
         <li>聊天区未配置时回退到后台登录那一套</li>
       </ol>
       <p class="card-note">
@@ -349,6 +489,32 @@ async function saveGameApiKey() {
   --md-icon-size: 20px;
 }
 
+.source-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 16px 0 0;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: var(--md-sys-color-surface-container-high, var(--md-sys-color-surface-variant));
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.source-note md-icon {
+  flex-shrink: 0;
+  --md-icon-size: 20px;
+}
+
+.source-note code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--md-sys-color-surface);
+  font-family: 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
 .setting-form {
   display: flex;
   flex-direction: column;
@@ -375,6 +541,8 @@ async function saveGameApiKey() {
 .form-actions {
   display: flex;
   justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 12px;
 }
 
 .priority-list {

@@ -31,7 +31,11 @@ export default defineEventHandler((event) => {
   })
 
   const method = event.method.toUpperCase()
-  if (!MUTATING_METHODS.has(method) || event.path.startsWith('/api/game/')) return
+  // /api/game/ 与 /api/inbound-mail 由各自的 HMAC 中间件把关：调用方是服务器模组和
+  // Cloudflare Email Worker，不带 Origin，也不受这里的 256 KiB 体积上限约束。
+  if (!MUTATING_METHODS.has(method)
+    || event.path.startsWith('/api/game/')
+    || event.path === '/api/inbound-mail') return
 
   const origin = getHeader(event, 'origin')
   if (origin && !isTrustedWebOrigin(origin)) {

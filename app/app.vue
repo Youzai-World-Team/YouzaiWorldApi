@@ -35,6 +35,7 @@ onNuxtReady(() => {
       <NuxtPage />
     </NuxtLayout>
     <AppToast />
+    <AppScrollbar page label="页面滚动条" />
     <div ref="bootOverlay" class="boot-overlay" aria-hidden="true"></div>
   </div>
 </template>

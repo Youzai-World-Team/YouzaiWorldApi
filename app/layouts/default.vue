@@ -19,6 +19,10 @@ const dark = ref(false)
 const themeMode = ref<ThemeMode>('system')
 const { toggleTheme, themeIcon, themeModeLabel, themeButtonLabel } = useThemeTransition(dark, themeMode)
 
+const desktopNavList = ref<HTMLElement | null>(null)
+const collapsedNavList = ref<HTMLElement | null>(null)
+const mobileNavList = ref<HTMLElement | null>(null)
+
 const { load: loadEntry } = useEntry()
 
 const mq = typeof window !== 'undefined' ? window.matchMedia('(min-width: 900px)') : null
@@ -102,7 +106,7 @@ onBeforeUnmount(() => {
             @navigation-drawer-changed="onDrawerChanged"
           >
             <div class="drawer-content">
-              <md-list class="nav-list">
+              <md-list ref="desktopNavList" class="nav-list">
                 <md-list-item
                   v-for="item in navItems"
                   :key="item.to"
@@ -127,10 +131,11 @@ onBeforeUnmount(() => {
                 <span slot="headline" :class="{ 'label--active': isActive('/account') }">{{ accountLabel }}</span>
               </md-list-item>
             </div>
+            <AppScrollbar :target="desktopNavList" label="侧边栏滚动条" />
           </md-navigation-drawer>
 
           <aside v-else key="collapsed" class="desktop-collapsed-nav">
-            <nav class="collapsed-nav-list" aria-label="主导航">
+            <nav ref="collapsedNavList" class="collapsed-nav-list" aria-label="主导航">
               <md-icon-button
                 v-for="item in navItems"
                 :key="item.to"
@@ -142,6 +147,7 @@ onBeforeUnmount(() => {
                 <md-icon>{{ item.icon }}</md-icon>
               </md-icon-button>
             </nav>
+            <AppScrollbar :target="collapsedNavList" label="侧边栏滚动条" />
             <md-icon-button
               :aria-label="accountLabel"
               :title="accountLabel"
@@ -163,7 +169,7 @@ onBeforeUnmount(() => {
         @navigation-drawer-changed="onDrawerChanged"
       >
         <div class="drawer-content">
-          <md-list class="nav-list">
+          <md-list ref="mobileNavList" class="nav-list">
             <md-list-item
               v-for="item in navItems"
               :key="item.to"
@@ -188,6 +194,7 @@ onBeforeUnmount(() => {
             <span slot="headline" :class="{ 'label--active': isActive('/account') }">{{ accountLabel }}</span>
           </md-list-item>
         </div>
+        <AppScrollbar :target="mobileNavList" label="侧边栏滚动条" />
       </md-navigation-drawer-modal>
 
       <main class="content">
@@ -444,6 +451,7 @@ md-list {
   }
 
   md-navigation-drawer-modal {
+    inset: 56px 0 0;
     --md-navigation-drawer-modal-container-width: min(320px, calc(100vw - 40px));
   }
 }

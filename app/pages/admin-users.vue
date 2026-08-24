@@ -25,6 +25,7 @@ const createAvatarFile = ref<File | null>(null)
 const createAvatarPreview = ref('')
 const createAvatarInput = ref<HTMLInputElement | null>(null)
 const createDialog = ref<HTMLElement | null>(null)
+const resetDialog = ref<HTMLElement | null>(null)
 const resetTarget = ref<AdminUser | null>(null)
 const resetPassword = ref('')
 const deleteTarget = ref<AdminUser | null>(null)
@@ -200,6 +201,7 @@ function formatDate(value: number) {
 onMounted(() => {
   loadUsers()
   applyDialogAnimation(createDialog.value)
+  applyDialogAnimation(resetDialog.value)
 })
 onBeforeUnmount(() => {
   if (createAvatarPreview.value) URL.revokeObjectURL(createAvatarPreview.value)
@@ -296,7 +298,7 @@ onBeforeUnmount(() => {
       </div>
     </md-dialog>
 
-    <md-dialog :open="!!resetTarget" @closed="closeResetDialog">
+    <md-dialog ref="resetDialog" :open="!!resetTarget" @closed="closeResetDialog">
       <md-icon slot="icon">lock_reset</md-icon>
       <div slot="headline">重置用户密码</div>
       <div slot="content" class="dialog-form">

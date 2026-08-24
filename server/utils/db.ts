@@ -15,6 +15,7 @@ import path from 'node:path'
 import { getCookie, getHeader, createError, type H3Event } from 'h3'
 import { offlinePlayerUuid, requireEmailAddress, requireGameUsername } from './game-input'
 import type { MailAction, MailAttachment, MailTargetSpec, MailType } from './game-input'
+import type { InboundMailPayload } from './inbound-mail'
 import {
   cloneVerificationEmailTemplates,
   DEFAULT_VERIFICATION_EMAIL_TEMPLATES,
@@ -27,11 +28,14 @@ import {
   VERIFICATION_EMAIL_LOGO_URL,
 } from './email-template-renderer'
 import {
+  ADMIN_FEATURE_DEFINITIONS,
   ADMIN_PAGE_DEFINITIONS,
-  ADMIN_PAGE_KEYS,
+  defaultAdminFeaturePermissions,
   defaultAdminPagePermissions,
+  ownerAdminFeaturePermissions,
   ownerAdminPagePermissions,
   permissionAllows,
+  type AdminFeaturePermissionLevel,
   type AdminPagePermissionLevel,
 } from '#shared/admin-page-permissions'
 
@@ -68,6 +72,13 @@ db.exec(`
     level TEXT NOT NULL,
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (user_id, page_key)
+  );
+  CREATE TABLE IF NOT EXISTS admin_feature_permissions (
+    user_id INTEGER NOT NULL,
+    feature_key TEXT NOT NULL,
+    level TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, feature_key)
   );
   CREATE TABLE IF NOT EXISTS audit_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -277,6 +288,48 @@ db.exec(`
     location TEXT NOT NULL,
     updated_at INTEGER NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS domain_mails (
+    id TEXT PRIMARY KEY,
+    message_id TEXT NOT NULL DEFAULT '',
+    envelope_from TEXT NOT NULL DEFAULT '',
+    envelope_to TEXT NOT NULL DEFAULT '',
+    mailbox TEXT NOT NULL DEFAULT '',
+    from_address TEXT NOT NULL DEFAULT '',
+    from_name TEXT NOT NULL DEFAULT '',
+    to_addresses TEXT NOT NULL DEFAULT '[]',
+    cc_addresses TEXT NOT NULL DEFAULT '[]',
+    reply_to TEXT NOT NULL DEFAULT '',
+    subject TEXT NOT NULL DEFAULT '',
+    sent_time INTEGER,
+    received_time INTEGER NOT NULL,
+    text_body TEXT NOT NULL DEFAULT '',
+    html_body TEXT NOT NULL DEFAULT '',
+    raw_size INTEGER NOT NULL DEFAULT 0,
+    spf TEXT NOT NULL DEFAULT '',
+    dkim TEXT NOT NULL DEFAULT '',
+    dmarc TEXT NOT NULL DEFAULT '',
+    truncated INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS domain_mails_received_idx ON domain_mails (received_time DESC, id);
+  CREATE INDEX IF NOT EXISTS domain_mails_mailbox_idx ON domain_mails (mailbox);
+  CREATE UNIQUE INDEX IF NOT EXISTS domain_mails_message_id_idx
+    ON domain_mails (message_id) WHERE message_id <> '';
+  CREATE TABLE IF NOT EXISTS domain_mail_attachments (
+    id TEXT PRIMARY KEY,
+    mail_id TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    filename TEXT NOT NULL DEFAULT '',
+    mime_type TEXT NOT NULL DEFAULT '',
+    disposition TEXT NOT NULL DEFAULT '',
+    content_id TEXT NOT NULL DEFAULT '',
+    size INTEGER NOT NULL DEFAULT 0,
+    sha256 TEXT NOT NULL DEFAULT '',
+    content BLOB,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS domain_mail_attachments_mail_idx
+    ON domain_mail_attachments (mail_id, position);
 `)
 
 const adminUserColumns = db.prepare('PRAGMA table_info(admin_users)').all() as { name?: string }[]
@@ -451,8 +504,16 @@ const ADMIN_AVATAR_RE = /^\/(?:favicon\.ico|api\/uploads\/[A-Za-z0-9._-]+\.(?:pn
 const RESERVED_ADMIN_ENTRIES = new Set([
   'login', 'account', 'activity', 'donors', 'bans', 'updates', 'game-accounts',
   'game-cosmetics', 'game-account-email-templates',
-  'admin-users', 'audit-logs', 'chat', 'mail', 'settings', 'permissions', 'api', '_nuxt', '_ipx', 'favicon', '__nuxt_error',
+  'admin-users', 'audit-logs', 'chat', 'mail', 'domain-mail', 'settings', 'permissions', 'api', '_nuxt', '_ipx', 'favicon', '__nuxt_error',
 ])
+
+// ===== 域名邮件（Cloudflare Email Worker 投递的 @mcyzw.top 收件） =====
+// Worker 用独立密钥签名，与游戏 Api 密钥分开：Worker 被攻破也只能写入收件，
+// 碰不到游戏账户接口。
+const INBOUND_MAIL_KEY_ENV = 'YZWC_INBOUND_MAIL_KEY'
+const INBOUND_MAIL_KEY_SETTING = 'inbound_mail.key'
+// 收件保留上限：邮件带附件二进制，无上限会把磁盘吃满。超出后按接收时间淘汰最旧的。
+const DOMAIN_MAIL_RETENTION_ROWS = 2000
 
 export const ADMIN_COOKIE_NAME = '__Host-yzwc_admin'
 const ADMIN_USER_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{2,31}$/
@@ -651,6 +712,7 @@ export interface AdminUser {
   isActive: boolean
   createdAt: number
   permissions: Record<string, AdminPagePermissionLevel>
+  featurePermissions: Record<string, AdminFeaturePermissionLevel>
 }
 
 function getAdminPagePermissions(userId: number, isOwner: boolean): Record<string, AdminPagePermissionLevel> {
@@ -659,7 +721,13 @@ function getAdminPagePermissions(userId: number, isOwner: boolean): Record<strin
   for (const row of all('SELECT page_key, level FROM admin_page_permissions WHERE user_id = ?', userId)) {
     const key = String(row.page_key ?? '')
     const level = String(row.level ?? '') as AdminPagePermissionLevel
-    if (ADMIN_PAGE_KEYS.has(key) && ['hidden', 'view', 'edit'].includes(level)) permissions[key] = level
+    const page = ADMIN_PAGE_DEFINITIONS.find((item) => item.key === key)
+    if (!page || !['hidden', 'view', 'edit'].includes(level)) continue
+    permissions[key] = page.maxNonOwnerLevel === 'hidden'
+      ? 'hidden'
+      : page.maxNonOwnerLevel === 'view' && level === 'edit'
+        ? 'view'
+        : level
   }
   for (const page of ADMIN_PAGE_DEFINITIONS) {
     if (page.maxNonOwnerLevel === 'hidden') permissions[page.key] = 'hidden'
@@ -668,9 +736,38 @@ function getAdminPagePermissions(userId: number, isOwner: boolean): Record<strin
   return permissions
 }
 
+function getAdminFeaturePermissions(
+  userId: number,
+  isOwner: boolean,
+  pagePermissions: Record<string, AdminPagePermissionLevel>,
+): Record<string, AdminFeaturePermissionLevel> {
+  if (isOwner) return ownerAdminFeaturePermissions()
+  const permissions = defaultAdminFeaturePermissions()
+  for (const row of all('SELECT feature_key, level FROM admin_feature_permissions WHERE user_id = ?', userId)) {
+    const key = String(row.feature_key ?? '')
+    const level = String(row.level ?? '') as AdminFeaturePermissionLevel
+    const feature = ADMIN_FEATURE_DEFINITIONS.find((item) => item.key === key)
+    const availableLevels = feature?.availableLevels || ['hidden', 'view', 'edit']
+    if (!feature || !availableLevels.includes(level)) continue
+    permissions[key] = feature.maxNonOwnerLevel === 'hidden'
+      ? 'hidden'
+      : feature.maxNonOwnerLevel === 'view' && level === 'edit'
+        ? 'view'
+        : level
+  }
+  for (const feature of ADMIN_FEATURE_DEFINITIONS) {
+    if (!feature.pageKey) continue
+    const pageLevel = pagePermissions[feature.pageKey] || 'hidden'
+    if (pageLevel === 'hidden') permissions[feature.key] = 'hidden'
+    else if (pageLevel === 'view' && permissions[feature.key] === 'edit') permissions[feature.key] = 'view'
+  }
+  return permissions
+}
+
 function mapAdminUser(row: Record<string, unknown>): AdminUser {
   const id = Number(row.id)
   const isOwner = Number(row.is_owner ?? 0) === 1
+  const permissions = getAdminPagePermissions(id, isOwner)
   return {
     id,
     username: String(row.username ?? ''),
@@ -679,13 +776,15 @@ function mapAdminUser(row: Record<string, unknown>): AdminUser {
     isOwner,
     isActive: Number(row.is_active ?? 0) === 1,
     createdAt: Number(row.created_at ?? 0),
-    permissions: getAdminPagePermissions(id, isOwner),
+    permissions,
+    featurePermissions: getAdminFeaturePermissions(id, isOwner, permissions),
   }
 }
 
-export function updateAdminPagePermissions(
+export function updateAdminPermissions(
   userId: number,
-  input: Record<string, unknown>,
+  pageInput: Record<string, unknown>,
+  featureInput: Record<string, unknown>,
 ): AdminUser {
   const current = getAdminUserById(userId)
   if (!current) throw createError({ statusCode: 404, statusMessage: '后台用户不存在' })
@@ -693,7 +792,7 @@ export function updateAdminPagePermissions(
 
   const normalized = defaultAdminPagePermissions()
   for (const page of ADMIN_PAGE_DEFINITIONS) {
-    const requested = String(input?.[page.key] ?? normalized[page.key]) as AdminPagePermissionLevel
+    const requested = String(pageInput?.[page.key] ?? normalized[page.key]) as AdminPagePermissionLevel
     if (!['hidden', 'view', 'edit'].includes(requested)) {
       throw createError({ statusCode: 400, statusMessage: `${page.label}的权限值无效` })
     }
@@ -704,15 +803,43 @@ export function updateAdminPagePermissions(
         : requested
   }
 
+  const normalizedFeatures = defaultAdminFeaturePermissions()
+  for (const feature of ADMIN_FEATURE_DEFINITIONS) {
+    const requested = String(featureInput?.[feature.key] ?? normalizedFeatures[feature.key]) as AdminFeaturePermissionLevel
+    const availableLevels = feature.availableLevels || ['hidden', 'view', 'edit']
+    if (!availableLevels.includes(requested)) {
+      throw createError({ statusCode: 400, statusMessage: `${feature.label}的权限值无效` })
+    }
+    let level: AdminFeaturePermissionLevel = feature.maxNonOwnerLevel === 'hidden'
+      ? 'hidden'
+      : feature.maxNonOwnerLevel === 'view' && requested === 'edit'
+        ? 'view'
+        : requested
+    if (feature.pageKey) {
+      const pageLevel = normalized[feature.pageKey] || 'hidden'
+      if (pageLevel === 'hidden') level = 'hidden'
+      else if (pageLevel === 'view' && level === 'edit') level = 'view'
+    }
+    normalizedFeatures[feature.key] = level
+  }
+
   db.exec('BEGIN IMMEDIATE')
   try {
     run('DELETE FROM admin_page_permissions WHERE user_id = ?', userId)
+    run('DELETE FROM admin_feature_permissions WHERE user_id = ?', userId)
     const now = Date.now()
     for (const page of ADMIN_PAGE_DEFINITIONS) {
       if (normalized[page.key] === page.defaultLevel) continue
       run(
         'INSERT INTO admin_page_permissions (user_id, page_key, level, updated_at) VALUES (?, ?, ?, ?)',
         userId, page.key, normalized[page.key], now,
+      )
+    }
+    for (const feature of ADMIN_FEATURE_DEFINITIONS) {
+      if (normalizedFeatures[feature.key] === feature.defaultLevel) continue
+      run(
+        'INSERT INTO admin_feature_permissions (user_id, feature_key, level, updated_at) VALUES (?, ?, ?, ?)',
+        userId, feature.key, normalizedFeatures[feature.key], now,
       )
     }
     db.exec('COMMIT')
@@ -848,6 +975,7 @@ export function deleteAdminUser(userId: number): void {
   }
   run('DELETE FROM sessions WHERE user_id = ?', userId)
   run('DELETE FROM admin_page_permissions WHERE user_id = ?', userId)
+  run('DELETE FROM admin_feature_permissions WHERE user_id = ?', userId)
   run('DELETE FROM admin_users WHERE id = ?', userId)
 }
 
@@ -861,6 +989,32 @@ export function requirePagePermission(
     throw createError({
       statusCode: 403,
       statusMessage: required === 'edit' ? '当前账户没有此页面的编辑权限' : '当前账户没有此页面的查看权限',
+    })
+  }
+  return user
+}
+
+export function adminFeatureAllows(
+  user: AdminUser,
+  featureKey: string,
+  required: 'view' | 'edit',
+): boolean {
+  const feature = ADMIN_FEATURE_DEFINITIONS.find((item) => item.key === featureKey)
+  if (!feature) return false
+  if (feature.pageKey && !permissionAllows(user.permissions[feature.pageKey], required)) return false
+  return permissionAllows(user.featurePermissions[featureKey], required)
+}
+
+export function requireFeaturePermission(
+  event: H3Event,
+  featureKey: string,
+  required: 'view' | 'edit',
+): AdminUser {
+  const user = requireAuth(event)
+  if (!adminFeatureAllows(user, featureKey, required)) {
+    throw createError({
+      statusCode: 403,
+      statusMessage: required === 'edit' ? '当前账户没有此区域的修改权限' : '当前账户没有此区域的查看权限',
     })
   }
   return user
@@ -1437,7 +1591,81 @@ export function requireGameApiKey(event: H3Event): void {
 }
 
 export function authenticateGameApiRequest(event: H3Event, body: Buffer): void {
-  const expected = requireConfiguredGameApiKey()
+  verifySignedRequest(event, body, requireConfiguredGameApiKey(), '服务器 Api 请求签名无效')
+  event.context.yzwcGameRequestAuthenticated = true
+}
+
+/**
+ * 校验 Cloudflare Email Worker 投递收件的签名。
+ * <p>
+ * 与游戏 Api 用同一套规范串和防重放表，但密钥独立：站点设置里保存的
+ * {@code inbound_mail.key} 优先，未配置时回退到环境变量
+ * {@code YZWC_INBOUND_MAIL_KEY}。两边互不通用。
+ * </p>
+ */
+export function authenticateInboundMailRequest(event: H3Event, body: Buffer): void {
+  verifySignedRequest(event, body, requireInboundMailKey(), '收件投递请求签名无效')
+  event.context.yzwcInboundMailAuthenticated = true
+}
+
+export function requireInboundMailAuth(event: H3Event): void {
+  if (event.context.yzwcInboundMailAuthenticated === true) return
+  throw createError({ statusCode: 401, statusMessage: '收件投递请求签名无效' })
+}
+
+function requireInboundMailKey(): string {
+  const key = getInboundMailKey()
+  if (!inboundMailKeyUsable(key)) {
+    throw createError({
+      statusCode: 503,
+      statusMessage: '域名邮件投递密钥未配置或长度无效，请在站点设置中填写',
+    })
+  }
+  return key
+}
+
+function requireInboundMailKeyValue(value: unknown): string {
+  const key = String(value ?? '').trim()
+  if (!inboundMailKeyUsable(key)) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: '域名邮件投递密钥长度需要为 32 至 512 位且不能包含空白字符',
+    })
+  }
+  return key
+}
+
+function inboundMailKeyUsable(key: string): boolean {
+  return key.length >= 32 && key.length <= 512 && !/\s/.test(key)
+}
+
+/** 返回数据库中配置的密钥；未配置时兼容使用环境变量。与 getGameApiKey 同一套优先级。 */
+export function getInboundMailKey(): string {
+  return getSetting(INBOUND_MAIL_KEY_SETTING)?.trim() || process.env[INBOUND_MAIL_KEY_ENV]?.trim() || ''
+}
+
+export function setInboundMailKey(value: unknown): string {
+  const key = requireInboundMailKeyValue(value)
+  setSetting(INBOUND_MAIL_KEY_SETTING, key)
+  return key
+}
+
+/** 密钥来源：settings 表优先，其次环境变量。用于在设置页说明当前生效的是哪一份。 */
+export function inboundMailKeySource(): 'database' | 'env' | 'none' {
+  if (inboundMailKeyUsable(getSetting(INBOUND_MAIL_KEY_SETTING)?.trim() || '')) return 'database'
+  if (inboundMailKeyUsable(process.env[INBOUND_MAIL_KEY_ENV]?.trim() || '')) return 'env'
+  return 'none'
+}
+
+export function inboundMailConfigured(): boolean {
+  return inboundMailKeyUsable(getInboundMailKey())
+}
+
+/**
+ * HMAC-SHA256 请求签名校验：时间窗 + nonce 防重放 + 规范串
+ * {@code timestamp.nonce.METHOD.path.sha256(body)}。
+ */
+function verifySignedRequest(event: H3Event, body: Buffer, secret: string, failureMessage: string): void {
   const timestamp = getHeader(event, 'x-yzwc-timestamp') || ''
   const nonce = getHeader(event, 'x-yzwc-nonce') || ''
   const provided = getHeader(event, 'x-yzwc-signature') || ''
@@ -1446,23 +1674,22 @@ export function authenticateGameApiRequest(event: H3Event, body: Buffer): void {
       || Math.abs(Math.floor(Date.now() / 1000) - timestampSeconds) > GAME_REQUEST_MAX_SKEW_SECONDS
       || !/^[A-Za-z0-9_-]{16,128}$/.test(nonce)
       || !/^[a-f0-9]{64}$/i.test(provided)) {
-    throw createError({ statusCode: 401, statusMessage: '服务器 Api 请求签名无效' })
+    throw createError({ statusCode: 401, statusMessage: failureMessage })
   }
   const method = event.method.toUpperCase()
   const bodyHash = createHash('sha256').update(body).digest('hex')
   const canonical = `${timestamp}.${nonce}.${method}.${event.path}.${bodyHash}`
-  const expectedSignature = createHmac('sha256', expected).update(canonical).digest('hex')
+  const expectedSignature = createHmac('sha256', secret).update(canonical).digest('hex')
   if (!safeEqualHex(provided, expectedSignature)) {
-    throw createError({ statusCode: 401, statusMessage: '服务器 Api 请求签名无效' })
+    throw createError({ statusCode: 401, statusMessage: failureMessage })
   }
   const now = Date.now()
   run('DELETE FROM api_request_nonces WHERE expires_at <= ?', now)
   try {
     run('INSERT INTO api_request_nonces (nonce, expires_at) VALUES (?, ?)', nonce, now + GAME_REQUEST_NONCE_TTL_MS)
   } catch {
-    throw createError({ statusCode: 409, statusMessage: '服务器 Api 请求重复提交' })
+    throw createError({ statusCode: 409, statusMessage: '请求重复提交' })
   }
-  event.context.yzwcGameRequestAuthenticated = true
 }
 
 function requireConfiguredGameApiKey(): string {
@@ -3378,6 +3605,234 @@ export function getAdminGameMailDetail(id: string): AdminGameMailDetail | undefi
     targets: mail.targets,
     attachments: mail.attachments,
     recipients,
+  }
+}
+
+// ===== 域名邮件（@mcyzw.top 收件） =====
+
+export interface DomainMailAddress {
+  name: string
+  address: string
+}
+
+export interface DomainMailAttachmentMeta {
+  id: string
+  position: number
+  filename: string
+  mimeType: string
+  disposition: string
+  contentId: string
+  size: number
+  sha256: string
+  /** false 表示 Worker 因体积预算只记录了元信息，没有保存二进制，后台不能下载。 */
+  stored: boolean
+}
+
+export interface DomainMailSummary {
+  id: string
+  messageId: string
+  mailbox: string
+  envelopeTo: string
+  envelopeFrom: string
+  fromAddress: string
+  fromName: string
+  subject: string
+  /** 邮件头 Date；缺失或畸形时为 null，由前端回退显示接收时间。 */
+  sentTime: number | null
+  receivedTime: number
+  rawSize: number
+  spf: string
+  dkim: string
+  dmarc: string
+  truncated: boolean
+  hasText: boolean
+  hasHtml: boolean
+  attachmentCount: number
+  attachmentBytes: number
+}
+
+export interface DomainMailDetail extends DomainMailSummary {
+  toAddresses: DomainMailAddress[]
+  ccAddresses: DomainMailAddress[]
+  replyTo: string
+  textBody: string
+  htmlBody: string
+  attachments: DomainMailAttachmentMeta[]
+}
+
+// 列表不取正文：单封 HTML 可达 1 MiB，全表拼回去会把响应撑爆。
+// 只用 length() 判断有无正文，正文留给详情接口。
+const DOMAIN_MAIL_SUMMARY_SQL = `
+  SELECT m.id, m.message_id, m.envelope_from, m.envelope_to, m.mailbox,
+         m.from_address, m.from_name, m.subject, m.sent_time, m.received_time,
+         m.raw_size, m.spf, m.dkim, m.dmarc, m.truncated,
+         length(m.text_body) AS text_len, length(m.html_body) AS html_len,
+         COUNT(a.id) AS attachment_count,
+         COALESCE(SUM(a.size), 0) AS attachment_bytes
+  FROM domain_mails m
+  LEFT JOIN domain_mail_attachments a ON a.mail_id = m.id
+`
+
+function mapDomainMailSummary(row: Record<string, unknown>): DomainMailSummary {
+  return {
+    id: String(row.id),
+    messageId: String(row.message_id ?? ''),
+    mailbox: String(row.mailbox ?? ''),
+    envelopeTo: String(row.envelope_to ?? ''),
+    envelopeFrom: String(row.envelope_from ?? ''),
+    fromAddress: String(row.from_address ?? ''),
+    fromName: String(row.from_name ?? ''),
+    subject: String(row.subject ?? ''),
+    sentTime: row.sent_time == null ? null : Number(row.sent_time),
+    receivedTime: Number(row.received_time ?? 0),
+    rawSize: Number(row.raw_size ?? 0),
+    spf: String(row.spf ?? ''),
+    dkim: String(row.dkim ?? ''),
+    dmarc: String(row.dmarc ?? ''),
+    truncated: Number(row.truncated ?? 0) === 1,
+    hasText: Number(row.text_len ?? 0) > 0,
+    hasHtml: Number(row.html_len ?? 0) > 0,
+    attachmentCount: Number(row.attachment_count ?? 0),
+    attachmentBytes: Number(row.attachment_bytes ?? 0),
+  }
+}
+
+export function listDomainMails(): DomainMailSummary[] {
+  return all(`${DOMAIN_MAIL_SUMMARY_SQL} GROUP BY m.id ORDER BY m.received_time DESC, m.id`)
+    .map(mapDomainMailSummary)
+}
+
+export function getDomainMailDetail(id: string): DomainMailDetail | undefined {
+  const row = get(`${DOMAIN_MAIL_SUMMARY_SQL} WHERE m.id = ? GROUP BY m.id`, id)
+  if (!row) return undefined
+  const bodies = get('SELECT to_addresses, cc_addresses, reply_to, text_body, html_body FROM domain_mails WHERE id = ?', id)
+  const attachments = all(`SELECT id, position, filename, mime_type, disposition, content_id, size, sha256,
+                                  content IS NOT NULL AS stored
+                           FROM domain_mail_attachments WHERE mail_id = ? ORDER BY position`, id)
+    .map((item) => ({
+      id: String(item.id),
+      position: Number(item.position ?? 0),
+      filename: String(item.filename ?? ''),
+      mimeType: String(item.mime_type ?? ''),
+      disposition: String(item.disposition ?? ''),
+      contentId: String(item.content_id ?? ''),
+      size: Number(item.size ?? 0),
+      sha256: String(item.sha256 ?? ''),
+      stored: Number(item.stored ?? 0) === 1,
+    }))
+  return {
+    ...mapDomainMailSummary(row),
+    toAddresses: parseJsonArray<DomainMailAddress>(bodies?.to_addresses),
+    ccAddresses: parseJsonArray<DomainMailAddress>(bodies?.cc_addresses),
+    replyTo: String(bodies?.reply_to ?? ''),
+    textBody: String(bodies?.text_body ?? ''),
+    htmlBody: String(bodies?.html_body ?? ''),
+    attachments,
+  }
+}
+
+export function getDomainMailAttachment(mailId: string, attachmentId: string): {
+  filename: string
+  mimeType: string
+  size: number
+  sha256: string
+  content: Buffer
+} | undefined {
+  const row = get(`SELECT filename, mime_type, size, sha256, content
+                   FROM domain_mail_attachments WHERE mail_id = ? AND id = ?`, mailId, attachmentId)
+  if (!row || row.content == null) return undefined
+  return {
+    filename: String(row.filename ?? ''),
+    mimeType: String(row.mime_type ?? ''),
+    size: Number(row.size ?? 0),
+    sha256: String(row.sha256 ?? ''),
+    content: Buffer.from(row.content as Uint8Array),
+  }
+}
+
+/**
+ * 落库一封 Worker 投递的收件。
+ * <p>
+ * Message-ID 命中已有记录时不再写入，直接返回原有 id 并置 {@code duplicate}：
+ * Worker 在网络抖动后会重试同一封信，这里必须幂等，否则后台会看到重复邮件。
+ * </p>
+ */
+export function insertDomainMail(payload: InboundMailPayload): { id: string; duplicate: boolean } {
+  if (payload.messageId) {
+    const existing = get('SELECT id FROM domain_mails WHERE message_id = ?', payload.messageId)
+    if (existing) return { id: String(existing.id), duplicate: true }
+  }
+
+  const id = randomUUID()
+  const now = Date.now()
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    // 事务内复检：并发重试可能在上面的查询之后插入同一封信。
+    if (payload.messageId) {
+      const existing = get('SELECT id FROM domain_mails WHERE message_id = ?', payload.messageId)
+      if (existing) {
+        db.exec('COMMIT')
+        return { id: String(existing.id), duplicate: true }
+      }
+    }
+    run(`INSERT INTO domain_mails (
+           id, message_id, envelope_from, envelope_to, mailbox,
+           from_address, from_name, to_addresses, cc_addresses, reply_to,
+           subject, sent_time, received_time, text_body, html_body,
+           raw_size, spf, dkim, dmarc, truncated, created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      id, payload.messageId, payload.envelopeFrom, payload.envelopeTo, payload.mailbox,
+      payload.fromAddress, payload.fromName, JSON.stringify(payload.toAddresses),
+      JSON.stringify(payload.ccAddresses), payload.replyTo,
+      payload.subject, payload.sentTime, payload.receivedTime, payload.textBody, payload.htmlBody,
+      payload.rawSize, payload.spf, payload.dkim, payload.dmarc, payload.truncated ? 1 : 0, now)
+
+    payload.attachments.forEach((attachment, position) => {
+      run(`INSERT INTO domain_mail_attachments (
+             id, mail_id, position, filename, mime_type, disposition,
+             content_id, size, sha256, content, created_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        randomUUID(), id, position, attachment.filename, attachment.mimeType, attachment.disposition,
+        attachment.contentId, attachment.size,
+        attachment.content ? createHash('sha256').update(attachment.content).digest('hex') : '',
+        attachment.content, now)
+    })
+
+    pruneDomainMails()
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+  return { id, duplicate: false }
+}
+
+/** 超出保留上限时淘汰最旧的收件，附件随之删除。 */
+function pruneDomainMails(): void {
+  // 先用 COUNT(*) 挡住常态：没超上限就不必为每封新信都做一次全表排序。
+  const total = Number(get('SELECT COUNT(*) AS c FROM domain_mails')?.c ?? 0)
+  if (total <= DOMAIN_MAIL_RETENTION_ROWS) return
+
+  const stale = all(`SELECT id FROM domain_mails
+                     ORDER BY received_time DESC, id
+                     LIMIT -1 OFFSET ${DOMAIN_MAIL_RETENTION_ROWS}`)
+  for (const row of stale) {
+    const staleId = String(row.id)
+    run('DELETE FROM domain_mail_attachments WHERE mail_id = ?', staleId)
+    run('DELETE FROM domain_mails WHERE id = ?', staleId)
+  }
+}
+
+export function deleteDomainMail(id: string): boolean {
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    run('DELETE FROM domain_mail_attachments WHERE mail_id = ?', id)
+    const result = run('DELETE FROM domain_mails WHERE id = ?', id)
+    db.exec('COMMIT')
+    return Number(result.changes) > 0
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
   }
 }
 

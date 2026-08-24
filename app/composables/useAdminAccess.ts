@@ -3,6 +3,7 @@ import {
   ADMIN_PAGE_DEFINITIONS,
   adminPageKeyForPath,
   firstVisibleAdminRoute,
+  type AdminFeaturePermissionLevel,
   type AdminPagePermissionLevel,
 } from '#shared/admin-page-permissions'
 
@@ -15,6 +16,7 @@ export interface AdminAccessUser {
   isActive: boolean
   createdAt: number
   permissions: Record<string, AdminPagePermissionLevel>
+  featurePermissions: Record<string, AdminFeaturePermissionLevel>
 }
 
 let accessLoadPromise: Promise<AdminAccessUser> | null = null
@@ -55,6 +57,10 @@ export function useAdminAccess() {
     return levelForKey(adminPageKeyForPath(path))
   }
 
+  function featureLevelForKey(key: string): AdminFeaturePermissionLevel {
+    return user.value?.featurePermissions?.[key] || 'hidden'
+  }
+
   return {
     user,
     pages: ADMIN_PAGE_DEFINITIONS,
@@ -63,6 +69,7 @@ export function useAdminAccess() {
     updateProfile,
     levelForKey,
     levelForPath,
+    featureLevelForKey,
     firstVisibleRoute: computed(() => firstVisibleAdminRoute(user.value?.permissions || {})),
   }
 }

@@ -66,20 +66,25 @@ export function applyDialogAnimation(el: HTMLElement | null) {
 export function installDialogAnimation() {
   if (typeof customElements === 'undefined' || typeof document === 'undefined') return
 
-  const constructor = customElements.get('md-dialog')
-  if (!constructor) return
+  const install = () => {
+    const constructor = customElements.get('md-dialog')
+    if (!constructor) return
 
-  const prototype = constructor.prototype as AnimatedDialogPrototype
-  if (!prototype[DIALOG_ANIMATION_PATCHED]) {
-    const connectedCallback = prototype.connectedCallback
-    prototype.connectedCallback = function (this: HTMLElement) {
-      applyDialogAnimation(this)
-      connectedCallback?.call(this)
+    const prototype = constructor.prototype as AnimatedDialogPrototype
+    if (!prototype[DIALOG_ANIMATION_PATCHED]) {
+      const connectedCallback = prototype.connectedCallback
+      prototype.connectedCallback = function (this: HTMLElement) {
+        applyDialogAnimation(this)
+        connectedCallback?.call(this)
+      }
+      Object.defineProperty(prototype, DIALOG_ANIMATION_PATCHED, { value: true })
     }
-    Object.defineProperty(prototype, DIALOG_ANIMATION_PATCHED, { value: true })
+
+    document.querySelectorAll<HTMLElement>('md-dialog').forEach(applyDialogAnimation)
   }
 
-  document.querySelectorAll<HTMLElement>('md-dialog').forEach(applyDialogAnimation)
+  if (customElements.get('md-dialog')) install()
+  else void customElements.whenDefined('md-dialog').then(install)
 }
 
 export function useDialogAnimation() {
