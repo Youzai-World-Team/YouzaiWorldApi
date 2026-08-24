@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
 useHead({ title: '域名邮件' })
 
@@ -45,8 +45,16 @@ interface MailDetail extends MailSummary {
   replyTo: string
   textBody: string
   htmlBody: string
+  /** 服务端按允许列表净化后的 HTML，只在沙箱 iframe 里渲染。 */
+  htmlSafe: string
+  /** 从 <style> 里净化出来的 CSS，放进沙箱文档的 head。 */
+  htmlSafeCss: string
+  htmlBlockedImages: number
+  htmlSafeTruncated: boolean
   attachments: MailAttachment[]
 }
+
+type BodyView = 'html' | 'text' | 'source'
 
 const VERDICT_LABELS: Record<string, string> = {
   pass: '通过',
@@ -58,8 +66,89 @@ const VERDICT_LABELS: Record<string, string> = {
   permerror: '永久错误',
   policy: '策略拒绝',
 }
-// HTML 正文只以源码形式展示，超过这个长度就截断，避免一封营销邮件把页面卡住。
+// 源码视图超过这个长度就截断，避免一封营销邮件把页面卡住。
 const HTML_PREVIEW_MAX = 200_000
+
+/**
+ * 沙箱预览容器的基础样式，排在邮件自己的 CSS 之前，让邮件能覆盖它。
+ * 固定白底深字：邮件都是按白底设计的，跟随后台深色主题反而会让大量邮件不可读。
+ * 只做「兜底」——不设 border-collapse、不给 td 加 padding，以免覆盖邮件自己的表格排版。
+ */
+const FRAME_BASE_CSS = `
+:root { color-scheme: light; }
+html, body { margin: 0; padding: 0; background: #ffffff; }
+body {
+  padding: 14px 16px;
+  color: #191d14;
+  font: 14px/1.65 system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+img { max-width: 100%; height: auto; }
+blockquote {
+  margin: 8px 0; padding: 4px 0 4px 12px;
+  border-left: 3px solid #c2c9b4; color: #44483b;
+}
+`.trim()
+
+/**
+ * 我们自己的标记样式，排在邮件 CSS **之后**并带 !important，
+ * 避免邮件的 <style> 把链接标记或图片占位改得看不出来。
+ */
+const FRAME_MARKER_CSS = `
+.yzw-link {
+  color: #1a56c4 !important;
+  text-decoration: underline !important;
+  text-decoration-style: dotted !important;
+  cursor: pointer !important;
+}
+.yzw-link:hover { background: #e8f0fe !important; }
+.yzw-link:focus { outline: 2px solid #1a56c4 !important; outline-offset: 1px; }
+.yzw-link::after {
+  content: " \\1F517";
+  font-size: 11px;
+}
+.yzw-link--blocked {
+  color: #8a1c14 !important;
+  text-decoration-line: line-through !important;
+  cursor: not-allowed !important;
+}
+.yzw-link--blocked::after { content: " (已移除)"; font-size: 11px; }
+.yzw-blocked-img {
+  display: inline-block !important; margin: 2px !important; padding: 3px 8px !important;
+  border: 1px dashed #a8b096 !important; border-radius: 6px !important;
+  background: #f4f6ee !important; color: #5d6350 !important; font-size: 12px !important;
+}
+`.trim()
+
+/**
+ * 沙箱里注入的唯一一段脚本：把链接点击回传给父页面。
+ * <p>
+ * 只读 data-yzw-href 并 postMessage，不碰别的。它靠 CSP nonce 才被允许执行，
+ * 邮件里万一漏过来的脚本没有 nonce，一律被 CSP 拦死。
+ * </p>
+ */
+const FRAME_SCRIPT = `
+(function () {
+  function send(el) {
+    var url = el.getAttribute('data-yzw-href');
+    parent.postMessage({ source: 'yzw-mail-frame', kind: url ? 'link' : 'blocked', url: url || '' }, '*');
+  }
+  document.addEventListener('click', function (event) {
+    var el = event.target && event.target.closest ? event.target.closest('.yzw-link') : null;
+    if (!el) return;
+    event.preventDefault();
+    send(el);
+  }, true);
+  document.addEventListener('keydown', function (event) {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    var el = event.target && event.target.closest ? event.target.closest('.yzw-link') : null;
+    if (!el) return;
+    event.preventDefault();
+    send(el);
+  }, true);
+})();
+`.trim()
 
 const mails = ref<MailSummary[]>([])
 const loading = ref(true)
@@ -70,10 +159,17 @@ const detailOpen = ref(false)
 const detail = ref<MailDetail | null>(null)
 const detailLoading = ref(false)
 const detailDialog = ref<HTMLElement | null>(null)
-const showHtmlSource = ref(false)
+const bodyView = ref<BodyView>('html')
 
 const deleteTarget = ref<MailSummary | null>(null)
 const deleting = ref(false)
+
+// 链接弹窗：沙箱里点了链接，父页面在这里显示完整地址供手动复制
+const linkDialog = ref<HTMLElement | null>(null)
+const linkOpen = ref(false)
+const linkUrl = ref('')
+const linkBlocked = ref(false)
+const bodyFrame = ref<HTMLIFrameElement | null>(null)
 
 const { showToast } = useToast()
 const access = useAdminAccess()
@@ -102,9 +198,97 @@ const htmlPreview = computed(() => {
 })
 const htmlTruncated = computed(() => (detail.value?.htmlBody.length || 0) > HTML_PREVIEW_MAX)
 
+/**
+ * 沙箱预览文档。
+ * <p>
+ * 三层防御，互不依赖：
+ * 1. 服务端允许列表净化（HTML 与 CSS 都过一遍）；
+ * 2. iframe 用 {@code sandbox="allow-scripts"}——**不给** allow-same-origin，
+ *    文档处于不透明源，读不到父页面 DOM / Cookie / localStorage；也没有
+ *    allow-popups / allow-top-navigation，点击跳不出去；
+ * 3. 文档自带 CSP：{@code default-src 'none'} 挡掉一切外呼，脚本只允许带本次
+ *    随机 nonce 的那一段（即下面的 FRAME_SCRIPT）。邮件里万一漏过来的脚本
+ *    没有 nonce，执行不了。
+ * </p>
+ */
+function buildFrameDocument(item: MailDetail): string {
+  if (!item.htmlSafe) return ''
+  // 每次打开都换一个 nonce，邮件正文里即便猜到上一次的值也没用。
+  const nonce = crypto.randomUUID().replace(/-/g, '')
+  const csp = "default-src 'none'; img-src data:; style-src 'unsafe-inline'; "
+    + `font-src data:; script-src 'nonce-${nonce}'; form-action 'none'; base-uri 'none'`
+  return '<!doctype html><html><head><meta charset="utf-8">'
+    + `<meta http-equiv="Content-Security-Policy" content="${csp}">`
+    + `<style>${FRAME_BASE_CSS}</style>`
+    // 邮件自己的 CSS 夹在中间：能覆盖基础兜底，但覆盖不了后面带 !important 的标记样式
+    + (item.htmlSafeCss ? `<style>${item.htmlSafeCss}</style>` : '')
+    + `<style>${FRAME_MARKER_CSS}</style>`
+    + `</head><body>${item.htmlSafe}`
+    + `<script nonce="${nonce}">${FRAME_SCRIPT}<\/script>`
+    + '</body></html>'
+}
+
+const frameDocument = computed(() => (detail.value ? buildFrameDocument(detail.value) : ''))
+
+/**
+ * 接收沙箱里的链接点击。
+ * <p>
+ * 消息一律当不可信数据：先确认来自我们那个 iframe 的 window，再重新校验协议，
+ * 最后只以纯文本渲染（Vue 插值自动转义），绝不当 HTML 用、也不做成可点链接。
+ * </p>
+ */
+function onFrameMessage(event: MessageEvent) {
+  const frame = bodyFrame.value
+  if (!frame || event.source !== frame.contentWindow) return
+  const data = event.data
+  if (!data || typeof data !== 'object' || (data as any).source !== 'yzw-mail-frame') return
+
+  const kind = String((data as any).kind || '')
+  if (kind === 'blocked') {
+    linkUrl.value = ''
+    linkBlocked.value = true
+    linkOpen.value = true
+    return
+  }
+  if (kind !== 'link') return
+
+  const raw = String((data as any).url || '')
+  // 父页面独立复核一次协议，不因为服务端净化过就放松
+  if (raw.length > 2048 || !/^(?:https?:|mailto:)/i.test(raw)) return
+  linkUrl.value = raw
+  linkBlocked.value = false
+  linkOpen.value = true
+}
+
+async function copyLink() {
+  if (!linkUrl.value) return
+  try {
+    await navigator.clipboard.writeText(linkUrl.value)
+    showToast('链接已复制，请在浏览器新标签页手动打开')
+  } catch {
+    showToast('浏览器拒绝了复制，请手动选中上面的地址复制', 'error')
+  }
+}
+
+function closeLinkDialog() {
+  linkOpen.value = false
+}
+
+function onLinkDialogClosed() {
+  linkOpen.value = false
+  linkUrl.value = ''
+  linkBlocked.value = false
+}
+
 onMounted(() => {
   load()
   applyDialogAnimation(detailDialog.value)
+  applyDialogAnimation(linkDialog.value)
+  window.addEventListener('message', onFrameMessage)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('message', onFrameMessage)
 })
 
 async function load() {
@@ -120,11 +304,13 @@ async function load() {
 
 async function openDetail(mail: MailSummary) {
   detail.value = null
-  showHtmlSource.value = false
+  bodyView.value = 'html'
   detailOpen.value = true
   detailLoading.value = true
   try {
     detail.value = await $fetch<MailDetail>(`/api/admin/domain-mails/${mail.id}`)
+    // 只有纯文本的邮件直接落到文本视图，省一次点击。
+    if (!detail.value.hasHtml) bodyView.value = 'text'
   } catch (error: any) {
     showToast(error?.data?.statusMessage || '邮件详情加载失败', 'error')
     detailOpen.value = false
@@ -140,7 +326,7 @@ function closeDetail() {
 function onDetailClosed() {
   detailOpen.value = false
   detail.value = null
-  showHtmlSource.value = false
+  bodyView.value = 'html'
 }
 
 /** 详情里点删除：先收起详情弹窗，避免两个 md-dialog 叠在一起抢焦点。 */
@@ -222,7 +408,7 @@ function attachmentHref(mailId: string, attachmentId: string) {
         <p class="page-subtitle">
           Cloudflare Email Worker 以 catch-all 收下的 @mcyzw.top 来信，投递到本服务端保存。
           可以查看发送时间、发件人与正文并删除；转发与发信暂未开放。
-          HTML 正文只以源码展示、附件一律作二进制下载，避免陌生来信在后台域名下执行脚本。
+          HTML 正文经服务端净化后在无权限沙箱中预览，附件一律作二进制下载，避免陌生来信在后台域名下执行脚本或外呼。
         </p>
       </div>
       <div class="heading-actions">
@@ -343,23 +529,55 @@ function attachmentHref(mailId: string, attachmentId: string) {
             这封信超出了保存上限，正文或附件在投递时被截断，内容不完整。
           </p>
 
-          <h3 class="section-title">正文</h3>
-          <p class="body-text">{{ detail.textBody || (detail.hasHtml ? '（这封信只有 HTML 正文，见下方源码）' : '（无正文）') }}</p>
+          <div class="body-heading">
+            <h3 class="section-title">正文</h3>
+            <div class="view-switch">
+              <button
+                v-if="detail.hasHtml"
+                type="button"
+                class="view-tab"
+                :class="{ 'view-tab--active': bodyView === 'html' }"
+                @click="bodyView = 'html'"
+              >沙箱预览</button>
+              <button
+                type="button"
+                class="view-tab"
+                :class="{ 'view-tab--active': bodyView === 'text' }"
+                @click="bodyView = 'text'"
+              >纯文本</button>
+              <button
+                v-if="detail.hasHtml"
+                type="button"
+                class="view-tab"
+                :class="{ 'view-tab--active': bodyView === 'source' }"
+                @click="bodyView = 'source'"
+              >HTML 源码</button>
+            </div>
+          </div>
 
-          <template v-if="detail.hasHtml">
-            <h3 class="section-title">HTML 正文源码</h3>
+          <template v-if="bodyView === 'html' && detail.hasHtml">
             <p class="form-hint">
-              出于安全考虑只展示源码，不在后台渲染：陌生来信里的脚本或远程图片一旦渲染，
-              就能在 api.mcyzw.top 下执行并回传后台会话。
+              正文在沙箱里渲染：脚本、远程图片与表单都被拦掉。点击邮件里的链接不会跳转，
+              而是弹窗显示完整地址，供你确认后手动复制打开。
+              <span v-if="detail.htmlBlockedImages">已拦截 {{ detail.htmlBlockedImages }} 张图片（远程图片或内联附件），内联图片可在下方附件里下载查看。</span>
+              <span v-if="detail.htmlSafeTruncated">正文过长，预览已截断。</span>
             </p>
-            <md-text-button v-if="!showHtmlSource" @click="showHtmlSource = true">
-              <md-icon slot="icon">code</md-icon>
-              展开源码（{{ detail.htmlBody.length }} 个字符）
-            </md-text-button>
-            <template v-else>
-              <pre class="html-source">{{ htmlPreview }}</pre>
-              <p v-if="htmlTruncated" class="form-hint">源码过长，仅显示前 {{ HTML_PREVIEW_MAX }} 个字符。</p>
-            </template>
+            <iframe
+              ref="bodyFrame"
+              class="html-frame"
+              sandbox="allow-scripts"
+              referrerpolicy="no-referrer"
+              title="邮件正文沙箱预览"
+              :srcdoc="frameDocument"
+            ></iframe>
+          </template>
+
+          <p v-else-if="bodyView === 'text'" class="body-text">{{ detail.textBody || (detail.hasHtml ? '（这封信只有 HTML 正文，请切换到沙箱预览或源码）' : '（无正文）') }}</p>
+
+          <template v-else-if="bodyView === 'source'">
+            <p class="form-hint">原始 HTML，未经净化，仅作排查用途——此处只是转义后的文本，不会被解析执行。</p>
+            <pre class="html-source">{{ htmlPreview }}</pre>
+            <p v-if="htmlTruncated" class="form-hint">源码过长，仅显示前 {{ HTML_PREVIEW_MAX }} 个字符。</p>
           </template>
 
           <h3 class="section-title">附件（{{ detail.attachments.length }}）</h3>
@@ -394,6 +612,37 @@ function attachmentHref(mailId: string, attachmentId: string) {
           @click="requestDeleteFromDetail"
         >删除</md-text-button>
         <md-text-button @click="closeDetail">关闭</md-text-button>
+      </div>
+    </md-dialog>
+
+    <md-dialog ref="linkDialog" :open="linkOpen" @closed="onLinkDialogClosed">
+      <md-icon slot="icon" class="link-dialog-icon">{{ linkBlocked ? 'link_off' : 'link' }}</md-icon>
+      <div slot="headline">{{ linkBlocked ? '该链接已被移除' : '邮件里的链接' }}</div>
+      <div slot="content" class="link-dialog">
+        <template v-if="linkBlocked">
+          <p class="link-warning">
+            这个链接使用了不安全的协议（例如 <code>javascript:</code> 或 <code>data:</code>），
+            已在净化时移除，无法查看目标地址。这类链接几乎只出现在恶意邮件里。
+          </p>
+        </template>
+        <template v-else>
+          <p class="link-note">
+            出于安全考虑，后台不会替你打开这个地址。请确认无误后复制，
+            <strong>在浏览器新标签页手动打开</strong>。
+          </p>
+          <div class="link-url">{{ linkUrl }}</div>
+          <p class="link-warning">
+            <md-icon>warning</md-icon>
+            <span>陌生来信的链接可能是钓鱼页面。注意核对域名，不要在上面填写任何账号或密码。</span>
+          </p>
+        </template>
+      </div>
+      <div slot="actions">
+        <md-text-button @click="closeLinkDialog">关闭</md-text-button>
+        <md-filled-button v-if="!linkBlocked" @click="copyLink">
+          <md-icon slot="icon">content_copy</md-icon>
+          复制链接
+        </md-filled-button>
       </div>
     </md-dialog>
 
@@ -446,6 +695,43 @@ function attachmentHref(mailId: string, attachmentId: string) {
 .meta dt { color: var(--md-sys-color-on-surface-variant); font-size: 12px; }
 .meta dd { margin: 2px 0 0; font-size: 14px; word-break: break-all; }
 .section-title { margin: 18px 0 8px; font-size: 13px; font-weight: 600; color: var(--md-sys-color-on-surface-variant); }
+.body-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.view-switch { display: flex; gap: 2px; padding: 2px; border-radius: 999px; background: var(--md-sys-color-surface-variant); }
+.view-tab {
+  padding: 4px 12px; border: none; border-radius: 999px; cursor: pointer;
+  background: transparent; color: var(--md-sys-color-on-surface-variant);
+  font: inherit; font-size: 12px; line-height: 20px;
+  transition: background 140ms ease, color 140ms ease;
+}
+.view-tab:hover { background: color-mix(in srgb, var(--md-sys-color-primary) 12%, transparent); }
+.view-tab--active {
+  background: var(--md-sys-color-primary-container);
+  color: var(--md-sys-color-on-primary-container);
+  font-weight: 600;
+}
+.html-frame {
+  display: block; width: 100%; height: min(52vh, 460px);
+  margin: 8px 0 0; border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: 8px; background: #ffffff;
+}
+.link-dialog-icon { color: var(--md-sys-color-primary); }
+.link-dialog { min-width: min(440px, 76vw); display: flex; flex-direction: column; gap: 12px; }
+.link-note { margin: 0; font-size: 14px; line-height: 1.6; color: var(--md-sys-color-on-surface-variant); }
+.link-url {
+  padding: 10px 12px; border-radius: 8px;
+  background: var(--md-sys-color-surface-variant); color: var(--md-sys-color-on-surface);
+  font-family: 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px;
+  word-break: break-all; user-select: all;
+}
+.link-warning {
+  display: flex; align-items: flex-start; gap: 8px; margin: 0;
+  font-size: 13px; line-height: 1.6; color: var(--md-sys-color-on-surface-variant);
+}
+.link-warning md-icon { flex-shrink: 0; --md-icon-size: 20px; color: var(--md-sys-color-error); }
+.link-warning code {
+  padding: 1px 5px; border-radius: 4px; background: var(--md-sys-color-surface-variant);
+  font-family: 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+}
 .body-text { margin: 0; padding: 12px; border-radius: 8px; background: var(--md-sys-color-surface-variant); white-space: pre-wrap; word-break: break-word; font-size: 14px; }
 .html-source { margin: 8px 0 0; padding: 12px; border-radius: 8px; background: var(--md-sys-color-surface-variant); max-height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-all; font-family: 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 .notice { margin: 8px 0 0; padding: 10px 12px; border-radius: 8px; background: var(--md-sys-color-error-container); color: var(--md-sys-color-on-error-container); font-size: 13px; }

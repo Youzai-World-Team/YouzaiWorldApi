@@ -125,10 +125,20 @@ Worker 用 HMAC-SHA256 签名调用 `POST /api/inbound-mail`，请求头与规�
 
 ### 两条安全约束
 
-catch-all 收的是互联网上任何人发来的信，因此：
+catch-all 收的是互联网上任何人发来的信，因此正文与附件一律当敌对数据处理：
 
-- **HTML 正文不在后台渲染，只以源码展示。** 渲染陌生来信的 HTML 等于把它的脚本和远程图片放进 `api.mcyzw.top` 这个源，一封信就能读走后台会话。详情页默认显示纯文本正文，HTML 需要手动展开且始终是转义后的源码。
-- **附件一律按 `application/octet-stream` + `Content-Disposition: attachment` 下发，不使用邮件声明的 MIME 类型。** 否则一个 HTML 或 SVG 附件照原类型内联返回就能在后台域名下执行脚本。文件名做过清洗，非 ASCII 走 RFC 5987 的 `filename*`。
+- **HTML 正文经净化后只在沙箱里渲染。** 详情页的正文分「沙箱预览 / 纯文本 / HTML 源码」三个视图，默认沙箱预览。渲染走三层互不依赖的防御：
+  1. 服务端 `server/utils/html-sanitize.ts` 按**允许列表**净化 HTML 与 CSS。只保留排版必需的标签、属性、CSS 属性；`<script>` / `<iframe>` / `<svg>` / `<form>` / `<object>` 等连内容一起丢；没被列出的属性（含全部 `on*`、`srcset`、`formaction`）一律丢弃。`<img>` 只放行内联 `data:` 图片，远程与 `cid:` 引用换成「图片已拦截」占位（远程图片会泄露管理员 IP 并向发信方确认地址有效）。CSS 里含 `url()` / `expression()` 的声明整条丢弃，`@import` / `@font-face` / `@charset` 一律丢（无法引入远程样式表），只放行 `@media` / `@supports`；选择器与 at-rule 条件走白名单字符集，因此净化产物里不可能出现 `<`，不会提前闭合宿主的 `</style>`。`position` / `opacity` / `visibility` 不在允许列表里，`display` 放行但单独丢掉 `display:none`——既保住多栏与响应式排版，又让垃圾邮件藏起来的文字现形。
+  2. 前端把结果塞进 `<iframe sandbox="allow-scripts" srcdoc>`。**不给** `allow-same-origin`，文档处于不透明源，读不到后台页面的 DOM / Cookie / localStorage；也没有 `allow-popups` / `allow-top-navigation`，点击跳不出去。
+  3. 该文档自带 CSP：`default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'nonce-<每次随机>'`。外呼全被挡住，脚本只允许带本次 nonce 的那一段（即我们注入的链接点击转发脚本）；邮件里万一漏过来的脚本没有 nonce，照样执行不了。
+
+  **链接不会跳转。** `<a>` 被降级成带 `data-yzw-href` 的 `<span>`；沙箱里那段脚本捕获点击后 `postMessage` 给后台页面，由后台弹窗显示完整地址，提示管理员确认后**手动复制到别处打开**，并给出钓鱼提醒。后台收到消息时会校验 `event.source` 是该 iframe、重新核对协议只接受 `http(s)` / `mailto`，再以纯文本渲染。`javascript:` / `data:` 之类的协议连 `data-yzw-href` 都不写入，只标注「已移除不安全链接」。
+
+  净化器遇到引号不配对这类无法确定标签边界的输入时**失败关闭**（停止输出剩余内容），与浏览器的实际渲染结果一致，不去猜测。`<meta>` / `<link>` / `<base>` 等 void 标签按单标签丢弃而非「找结束标签」，否则会一路吞到文末把正文整体丢掉。`<body>` 降级成 `<div>` 输出以保住它身上的 `class` / `bgcolor`（邮件常在 body 上设整页背景）。原始 HTML 一并返回，供「HTML 源码」视图做钓鱼排查——那里只是转义后的文本，不会被解析执行。
+
+  净化器遇到引号不配对这类无法确定标签边界的输入时**失败关闭**（停止输出剩余内容），与浏览器的实际渲染结果一致，不去猜测。原始 HTML 一并返回，供「HTML 源码」视图做钓鱼排查——那里只是转义后的文本，不会被解析执行。
+
+- **附件一律按 `application/octet-stream` + `Content-Disposition: attachment` 下发，不使用邮件声明的 MIME 类型。** 否则一个 HTML 或 SVG 附件照原类型内联返回就能在后台域名下执行脚本。文件名做过清洗，非 ASCII 走 RFC 5987 的 `filename*`。邮件里被拦掉的内联图片，可以在附件表里找到对应条目下载查看。
 
 对应地，解析与校验一律**宽进严出**：畸形的 `From` / `Reply-To`、没见过的 SPF/DKIM/DMARC 结论都不会让整封信被拒（前者原样保留供排查，后者归零），只有收件地址本身非法才拒收——把一封信丢掉比存下一条脏数据更糟。
 
@@ -137,6 +147,74 @@ catch-all 收的是互联网上任何人发来的信，因此：
 Cloudflare 入站单封上限 25 MiB。Worker 与服务端的预算必须一致（`YouzaiWorldDonaimEmail/src/config.js` ↔ `server/utils/inbound-mail.ts`）：纯文本正文 256 KiB、HTML 正文 1 MiB、单个附件 6 MiB、附件合计 12 MiB、附件条数 32。超出的正文被截断，超出的附件只保留元信息（文件名、类型、原始大小）而不存内容——后台显示「未保存」，不提供下载。任何裁剪都会置 `truncated`，列表上显示「已截断」。
 
 收件表保留最近 2000 封（`DOMAIN_MAIL_RETENTION_ROWS`），超出后按接收时间淘汰最旧的，附件一并删除。附件是二进制入库，没有上限会把磁盘吃满。
+
+## 服务器管理
+
+后台 `/server-manage`（导航里叫「服务器管理」）通过 [MCSManager](https://docs.mcsmanager.com/zh_cn/apis/get_apikey.html) 面板管理 Minecraft 服务器实例：看运行状态与控制台输出、发送命令、启动 / 停止 / 重启 / 强制结束，以及把世界存档打包成备份。
+
+面板凭据在 `/settings`（站点设置）的「MCSManager 面板」区域填写：面板地址、ApiKey、备份目录。**ApiKey 与该面板账户同权限**（可发命令、改文件、停服），因此和 Turnstile 服务端密钥同一套处理方式——写进 `settings` 表后接口只回报「是否已配置」，永不回显明文，留空提交表示沿用旧值。优先级同样是数据库设置（`mcsm.base_url` / `mcsm.api_key` / `mcsm.backup_dir`）优先，未配置时回退到 `YZWC_MCSM_BASE_URL` / `YZWC_MCSM_API_KEY`。保存时会立刻拿新配置去面板换一次账户信息作连通性测试，地址写错会当场报出来（配置仍会存下，方便改一处再试）。
+
+浏览器从不直接连面板，所有调用都由本服务端代发（`server/utils/mcsm.ts`），ApiKey 只出现在服务端拼出的 URL 里。
+
+### 实例范围
+
+实例列表来自面板的 `GET /api/auth`（当前账户信息）而不是 `GET /api/service/remote_service_instances`：后者要求面板管理员权限，普通账户的 ApiKey 会被 403，而账户信息里的 `instances` 恰好就是「这把钥匙能碰的实例」。该响应里还夹着 `apiKey` / `secret` / `token`，服务端只挑实例元信息映射出去。
+
+每个写操作（电源、命令、备份）执行前都会用 `assertInstanceAllowed` 复核 uuid / daemonId 确实在这份列表里。少了这一步，本服务端就成了「拿面板 ApiKey 打任意实例」的跳板——后台用户是能自由构造请求体的。
+
+### 控制台
+
+控制台默认是**实时推流**，不是定时轮询：新日志会即时推到页面。
+
+链路是「浏览器 ←SSE← 本服务端 ←WebSocket← 守护进程」。MCSManager 的 stdout 推流走守护进程（节点）的 socket.io：先 `POST /api/protected_instance/stream_channel` 换一次性票据（`{password, addr, prefix}`，和备份下载同一个套路），再连 `ws://<addr>/socket.io/?EIO=4&transport=websocket`，握手后 emit `stream/auth` 带上密码，随后收 `instance/stdout` 事件（载荷是 `{data:{instanceUuid, text}}`，会核对 `instanceUuid` 防止串流）。
+
+**为什么不让浏览器直连守护进程**：票据里的节点地址是明文 `ws://` 的第三方主机，HTTPS 后台页面会因混合内容被浏览器拦下，页面 CSP 的 `connect-src 'self'` 也不放行，而且节点地址随面板调度变动。改由服务端中继后，ApiKey 和节点地址都不出服务端，浏览器只跟 `api.mcyzw.top` 说话，CSP 一行都不用放宽。
+
+服务端这一侧没有引入 `socket.io-client`：engine.io v4 是纯文本裸帧协议，用 Node 22 内置的全局 `WebSocket` 实现「连接 → `40` CONNECT → `stream/auth` → 收 `42["instance/stdout",…]`」这一条链路只要几十行，见 `server/utils/mcsm-console-stream.ts`。客户端按握手包给的 `pingInterval` 主动发 `2` 心跳，服务端发来 `2` 时回 `3`。
+
+浏览器侧用 `EventSource`（`GET /api/admin/mcsm/stream`），自带断线重连。SSE 事件：`history` 先补一段历史铺满屏幕，`log` 是增量输出，`status` 报通道状态（`open` / `closed` / `error` / `warn`），`ping` 是 25 秒心跳（防中间代理按空闲掐断）。三道保护：同时挂着的流最多 8 条（每条占一个到守护进程的 WebSocket），单条流每 10 秒最多推 256 KiB（崩服刷屏时超预算就丢并提示），页面侧留存上限 40 万字符、增量按 60ms 合帧后再并入，避免每个片段都触发重渲染。
+
+关掉页面上的「实时输出」开关会断开 SSE、停在当前快照上，改用手动刷新——那条路走的是 `GET /api/admin/mcsm/log`，即面板的 `outputlog` 接口。它返回整份终端历史（可达数十万字符），按 `size` 只取末尾 2 万 / 6 万 / 20 万字符。**注意 `size` 的单位是字符数**，不是官方文档写的「1KB ~ 2048KB」：传 1200 精确返回 1200 个字符，不带 `size` 才返回全部，按 KB 理解会让控制台只剩几百个字符。
+
+不论走哪条路，面板都开着伪终端，输出里混着 ANSI 清行、光标移动、颜色和窗口标题序列，服务端 `stripAnsi` 会逐类剥掉再下发纯文本。pty 按终端宽度硬折的行没法复原，这一点和面板自带的控制台一致。
+
+实例状态（玩家数、CPU、内存）没有推流通道，仍然每 10 秒轮询一次；标签页不可见时跳过，上一轮没回来也不叠加下一轮。命令走 `POST /api/admin/mcsm/command`，长度上限 512 字符，换行和控制字符一律拒绝（命令是拼进查询串的，换行会被 pty 当成多条命令），命令原文写入 `/audit-logs`。实时模式下命令回显会自己推过来，不需要手动补拉。
+
+### 备份
+
+MCSManager 没有备份接口，这里用它的文件接口实现：`POST /api/files/compress`（`type: 1`）把实例根目录下选中的几个一级目录压缩成备份目录里的一个 zip，文件名为 `标签-时间戳.zip`。打包目标必须是面板真实列出来的一级目录，不接受调用方自己拼的路径，备份目录自身也排除在外（否则历史备份会一层层套进新备份）。恢复用同一个接口的 `type: 2` 解压回实例根目录，**只允许在实例已停止时执行**——运行中的服务器持有世界文件句柄，边跑边覆盖存档要么写不进去、要么退出时用内存里的旧状态把恢复结果再盖一遍。
+
+大世界压缩耗时可能超过 15 秒的请求超时，此时面板侧的压缩任务仍在继续，刷新备份列表就能看到结果。下载走面板的 `POST /api/files/download` 换一次性密码，地址直连守护进程（节点）而不经过本服务端——备份动辄几百 MB，代理一遍只是白占内存；节点是内网域名或浏览器拦下不安全下载时，改用面板自带的文件管理下载。
+
+### 权限
+
+页面权限键 `server-manage`，**新账户默认只有 `view`**（能看状态和控制台，动不了任何东西）。三个破坏性区域另有独立功能权限，默认全部 `hidden`，只有 `hidden` / `edit` 两档：
+
+| 功能权限键 | 覆盖操作 |
+|-----------|---------|
+| `server-manage-power` | 启动 / 停止 / 重启 / 强制结束进程 |
+| `server-manage-command` | 向控制台发送命令 |
+| `server-manage-backup` | 创建 / 下载 / 恢复 / 删除备份 |
+
+所有者始终是 `edit`，其他账户要在 `/permissions` 里单独授权，且不会超过其「服务器管理」页面权限。所有写操作都记入 `/audit-logs`。
+
+| 方法与路径 | 用途 | 需要的权限 |
+|-----------|------|-----------|
+| `GET /api/admin/mcsm/instances` | 面板是否已配置、ApiKey 身份、可管理实例列表 | 页面 `view` |
+| `GET /api/admin/mcsm/instance?uuid=&daemonId=` | 单实例运行详情 | 页面 `view` |
+| `GET /api/admin/mcsm/stream?uuid=&daemonId=&history=` | 实时控制台（SSE，服务端中继守护进程推流） | 页面 `view` |
+| `GET /api/admin/mcsm/log?uuid=&daemonId=&size=` | 控制台输出快照（已剥 ANSI），暂停实时时用 | 页面 `view` |
+| `GET /api/admin/mcsm/backups?uuid=&daemonId=` | 备份列表 + 可备份的一级目录 | 页面 `view` |
+| `POST /api/admin/mcsm/power` | 电源操作 | `server-manage-power` |
+| `POST /api/admin/mcsm/command` | 发送命令 | `server-manage-command` |
+| `POST /api/admin/mcsm/backups` | 创建备份 | `server-manage-backup` |
+| `DELETE /api/admin/mcsm/backups` | 删除备份 | `server-manage-backup` |
+| `POST /api/admin/mcsm/backups/restore` | 恢复备份（要求实例已停止） | `server-manage-backup` |
+| `POST /api/admin/mcsm/backups/download` | 换取一次性下载地址 | `server-manage-backup` |
+| `GET /api/admin/mcsm-settings` | 读取面板地址、备份目录与「ApiKey 是否已配置」 | `settings-mcsm` `view` |
+| `PATCH /api/admin/mcsm-settings` | 保存面板配置并测试连通性 | `settings-mcsm` `edit` |
+
+下载虽然只是换个地址，但拿到它等于能把整个世界拷走，因此也按「备份管理」把关并记入操作记录。
 
 首次启动后访问根目录 `/`，设置首个后台用户名（3 至 32 位）、密码（12 至 128 位）、登录入口（12 至 64 位），以及 Turnstile 站点密钥、服务端密钥和允许的前端 hostname。
 设置成功后初始化接口会永久关闭，后续只能通过该入口登录。也可在首次启动前同时配置

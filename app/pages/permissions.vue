@@ -241,6 +241,7 @@ onMounted(loadPermissions)
                     <small v-if="page.key === 'settings'">新账户默认可查看</small>
                     <small v-else-if="page.maxNonOwnerLevel === 'hidden'">仅初始账户可查看和编辑</small>
                     <small v-else-if="page.key === 'permissions'">新账户默认隐藏，非所有者最多可查看</small>
+                    <small v-else-if="page.key === 'server-manage'">新账户默认只可查看，细分权限需单独放开</small>
                     <small v-else-if="page.maxNonOwnerLevel === 'view'">非所有者仅可隐藏或查看</small>
                     <small v-else>新账户默认可编辑</small>
                   </span>

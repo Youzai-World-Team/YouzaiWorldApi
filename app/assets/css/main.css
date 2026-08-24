@@ -2,6 +2,8 @@
 :root[data-theme='light'] {
   color-scheme: light;
   --app-control-height: 40px;
+  /* 顶栏高度，与 layouts/default.vue 的 .app-bar 保持一致；弹窗按它避让。 */
+  --app-bar-height: 64px;
   --md-sys-color-primary: #8bc34a;
   --md-sys-color-on-primary: #1e3300;
   --md-sys-color-primary-container: #d9f2b0;
@@ -288,9 +290,23 @@ md-outlined-select {
 
 md-dialog {
   max-width: calc(100vw - 24px);
-  max-height: calc(100vh - 24px);
+  /*
+   * 弹窗由原生 <dialog> 渲染在 top layer 里，用 inset: 0 + margin: auto 居中，
+   * 完全看不到固定定位的顶栏。这里不改居中方式，而是把上下各留出「顶栏 + 间距」
+   * 的量：居中时上边界最少也落在顶栏下面，任何高度的弹窗都不会压住顶栏。
+   */
+  max-height: calc(100vh - 2 * (var(--app-bar-height) + 12px));
   --md-dialog-container-max-width: min(560px, calc(100vw - 24px));
-  --md-dialog-container-max-height: calc(100vh - 24px);
+  --md-dialog-container-max-height: calc(100vh - 2 * (var(--app-bar-height) + 12px));
+}
+
+/* 顶栏在此断点降到 56px，与 layouts/default.vue 的 @media (max-width: 899px) 对齐。 */
+@media (max-width: 899px) {
+  :root,
+  :root[data-theme='light'],
+  :root[data-theme='dark'] {
+    --app-bar-height: 56px;
+  }
 }
 
 @media (max-width: 640px) {

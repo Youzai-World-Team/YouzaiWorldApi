@@ -503,7 +503,7 @@ const ADMIN_ENTRY_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{11,63}$/
 const ADMIN_AVATAR_RE = /^\/(?:favicon\.ico|api\/uploads\/[A-Za-z0-9._-]+\.(?:png|jpe?g|webp|gif|avif))$/
 const RESERVED_ADMIN_ENTRIES = new Set([
   'login', 'account', 'activity', 'donors', 'bans', 'updates', 'game-accounts',
-  'game-cosmetics', 'game-account-email-templates',
+  'game-cosmetics', 'game-account-email-templates', 'server-manage',
   'admin-users', 'audit-logs', 'chat', 'mail', 'domain-mail', 'settings', 'permissions', 'api', '_nuxt', '_ipx', 'favicon', '__nuxt_error',
 ])
 
@@ -514,6 +514,18 @@ const INBOUND_MAIL_KEY_ENV = 'YZWC_INBOUND_MAIL_KEY'
 const INBOUND_MAIL_KEY_SETTING = 'inbound_mail.key'
 // 收件保留上限：邮件带附件二进制，无上限会把磁盘吃满。超出后按接收时间淘汰最旧的。
 const DOMAIN_MAIL_RETENTION_ROWS = 2000
+
+// ===== MCSManager 面板（「服务器管理」页） =====
+// ApiKey 等价于面板账户的全部权限（发命令、改文件、停服），因此写进 settings 后
+// 一律不再回显：接口只回报「是否已配置」，留空提交表示沿用旧值。
+// 与 turnstile.secret / inbound_mail.key 同一套存法，全部外呼只在服务端发起。
+const MCSM_BASE_URL_SETTING = 'mcsm.base_url'
+const MCSM_API_KEY_SETTING = 'mcsm.api_key'
+const MCSM_BACKUP_DIR_SETTING = 'mcsm.backup_dir'
+const MCSM_BASE_URL_ENV = 'YZWC_MCSM_BASE_URL'
+const MCSM_API_KEY_ENV = 'YZWC_MCSM_API_KEY'
+// 备份统一放在实例目录下的这个子目录里，页面只列这里的压缩包。
+const MCSM_DEFAULT_BACKUP_DIR = '/backups'
 
 export const ADMIN_COOKIE_NAME = '__Host-yzwc_admin'
 const ADMIN_USER_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{2,31}$/
@@ -1659,6 +1671,150 @@ export function inboundMailKeySource(): 'database' | 'env' | 'none' {
 
 export function inboundMailConfigured(): boolean {
   return inboundMailKeyUsable(getInboundMailKey())
+}
+
+/** 设置项来源：settings 表优先，其次环境变量。用于在设置页说明当前生效的是哪一份。 */
+export type SettingSource = 'database' | 'env' | 'none'
+
+export interface McsmConfig {
+  baseUrl: string
+  apiKey: string
+  backupDir: string
+}
+
+/** 回给后台页面的那一份：不含 ApiKey 明文，只说明是否已配置、来自哪里。 */
+export interface McsmAdminConfig {
+  baseUrl: string
+  baseUrlSource: SettingSource
+  apiKeyConfigured: boolean
+  apiKeySource: SettingSource
+  backupDir: string
+  configured: boolean
+}
+
+/**
+ * 校验并规范化 MCSM 面板地址。
+ * <p>
+ * 只接受 http/https，允许反向代理下的路径前缀（面板支持 path prefix），
+ * 但不接受查询串、片段和 URL 内嵌账号密码——这些要么无意义，要么会把凭据写进日志。
+ * 末尾斜杠统一去掉，方便后面直接拼 {@code /api/...}。
+ * </p>
+ */
+function requireMcsmBaseUrl(value: unknown): string {
+  const raw = String(value ?? '').trim()
+  if (!raw || raw.length > 256) {
+    throw createError({ statusCode: 400, statusMessage: 'MCSM 面板地址不能为空且不能超过 256 个字符' })
+  }
+  let url: URL
+  try {
+    url = new URL(raw)
+  } catch {
+    throw createError({ statusCode: 400, statusMessage: 'MCSM 面板地址必须是完整 URL，例如 http://127.0.0.1:23333' })
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw createError({ statusCode: 400, statusMessage: 'MCSM 面板地址只支持 http 或 https' })
+  }
+  if (url.username || url.password || url.search || url.hash) {
+    throw createError({ statusCode: 400, statusMessage: 'MCSM 面板地址不能包含账号密码、查询串或片段' })
+  }
+  const prefix = url.pathname.replace(/\/+$/, '')
+  if (prefix && !/^(?:\/[A-Za-z0-9._~-]+)+$/.test(prefix)) {
+    throw createError({ statusCode: 400, statusMessage: 'MCSM 面板地址的路径前缀含有不支持的字符' })
+  }
+  return `${url.protocol}//${url.host}${prefix}`
+}
+
+/** 面板 ApiKey：面板生成的是 32 位十六进制串，这里放宽到 16~256 位无空白字符。 */
+function requireMcsmApiKey(value: unknown): string {
+  const key = String(value ?? '').trim()
+  if (!/^[A-Za-z0-9_-]{16,256}$/.test(key)) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: 'MCSM ApiKey 需要为 16 至 256 位的字母、数字、下划线或短横线',
+    })
+  }
+  return key
+}
+
+/**
+ * 规范化备份目录：实例目录内的相对路径，统一成 {@code /a/b} 形式。
+ * <p>
+ * 拒掉 {@code ..}、盘符和控制字符——面板的文件接口本身限定在实例目录内，
+ * 这里再挡一层，避免把越权路径原样透给面板。
+ * </p>
+ */
+function requireMcsmBackupDir(value: unknown): string {
+  const raw = String(value ?? '').trim().replace(/\\/g, '/')
+  if (!raw) return MCSM_DEFAULT_BACKUP_DIR
+  const segments = raw.split('/').filter(Boolean)
+  if (segments.includes('..') || segments.includes('.')) {
+    throw createError({ statusCode: 400, statusMessage: '备份目录不能包含 . 或 .. 路径段' })
+  }
+  // 只剩斜杠时会退化成实例根目录，那样「删除备份」能删到服务器本体，直接回落默认值。
+  if (segments.length === 0) return MCSM_DEFAULT_BACKUP_DIR
+  const normalized = `/${segments.join('/')}`
+  if (normalized.length > 200 || /[^A-Za-z0-9._/-]/.test(normalized)) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: '备份目录只能包含字母、数字、点、下划线、短横线和斜杠，且不超过 200 个字符',
+    })
+  }
+  return normalized
+}
+
+function settingSource(settingKey: string, envName: string): SettingSource {
+  if (getSetting(settingKey)?.trim()) return 'database'
+  if (process.env[envName]?.trim()) return 'env'
+  return 'none'
+}
+
+/** 服务端调用面板时用的完整配置；ApiKey 只在服务端流转，不下发给浏览器。 */
+export function getMcsmConfig(): McsmConfig {
+  return {
+    baseUrl: getSetting(MCSM_BASE_URL_SETTING)?.trim() || process.env[MCSM_BASE_URL_ENV]?.trim() || '',
+    apiKey: getSetting(MCSM_API_KEY_SETTING)?.trim() || process.env[MCSM_API_KEY_ENV]?.trim() || '',
+    backupDir: getSetting(MCSM_BACKUP_DIR_SETTING)?.trim() || MCSM_DEFAULT_BACKUP_DIR,
+  }
+}
+
+export function mcsmConfigured(): boolean {
+  const config = getMcsmConfig()
+  return Boolean(config.baseUrl && config.apiKey)
+}
+
+export function getAdminMcsmConfig(): McsmAdminConfig {
+  const config = getMcsmConfig()
+  return {
+    baseUrl: config.baseUrl,
+    baseUrlSource: settingSource(MCSM_BASE_URL_SETTING, MCSM_BASE_URL_ENV),
+    apiKeyConfigured: Boolean(config.apiKey),
+    apiKeySource: settingSource(MCSM_API_KEY_SETTING, MCSM_API_KEY_ENV),
+    backupDir: config.backupDir,
+    configured: Boolean(config.baseUrl && config.apiKey),
+  }
+}
+
+/**
+ * 保存 MCSM 面板配置。
+ * <p>
+ * ApiKey 留空表示沿用已有那一份（页面从不回显明文，留空是「只改地址」的唯一表达方式）。
+ * 首次配置必须填写，否则保存下来的地址没有任何用处。
+ * </p>
+ */
+export function setMcsmConfig(input: { baseUrl?: unknown; apiKey?: unknown; backupDir?: unknown }): McsmAdminConfig {
+  const current = getMcsmConfig()
+  const baseUrl = requireMcsmBaseUrl(input.baseUrl)
+  const provided = String(input.apiKey ?? '').trim()
+  const apiKey = provided ? requireMcsmApiKey(provided) : current.apiKey
+  if (!apiKey) {
+    throw createError({ statusCode: 400, statusMessage: '首次配置 MCSM 面板时必须填写 ApiKey' })
+  }
+  const backupDir = requireMcsmBackupDir(input.backupDir === undefined ? current.backupDir : input.backupDir)
+
+  setSetting(MCSM_BASE_URL_SETTING, baseUrl)
+  setSetting(MCSM_API_KEY_SETTING, apiKey)
+  setSetting(MCSM_BACKUP_DIR_SETTING, backupDir)
+  return getAdminMcsmConfig()
 }
 
 /**

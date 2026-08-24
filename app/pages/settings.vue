@@ -17,6 +17,25 @@ interface TurnstileResponse {
   chat: ScopeState | null
 }
 
+type SettingSource = 'database' | 'env' | 'none'
+
+interface McsmConfig {
+  baseUrl: string
+  baseUrlSource: SettingSource
+  apiKeyConfigured: boolean
+  apiKeySource: SettingSource
+  backupDir: string
+  configured: boolean
+}
+
+interface McsmProbe {
+  ok: boolean
+  userName: string
+  permissionLabel: string
+  instanceCount: number
+  message: string
+}
+
 const endpoint = '/api/admin/turnstile'
 
 const loading = ref(true)
@@ -31,6 +50,12 @@ const showInboundMailKey = ref(false)
 const inboundMailKeyLoading = ref(true)
 const savingInboundMailKey = ref(false)
 const inboundMailKeySource = ref<'database' | 'env' | 'none'>('none')
+const mcsmForm = reactive({ baseUrl: '', apiKey: '', backupDir: '/backups' })
+const mcsmState = ref<McsmConfig | null>(null)
+const mcsmProbe = ref<McsmProbe | null>(null)
+const showMcsmApiKey = ref(false)
+const mcsmLoading = ref(true)
+const savingMcsm = ref(false)
 const access = useAdminAccess()
 const canEditPage = computed(() => access.levelForKey('settings') === 'edit')
 const gameApiKeyLevel = computed(() => access.featureLevelForKey('settings-game-api-key'))
@@ -39,6 +64,9 @@ const canEditGameApiKey = computed(() => canEditPage.value && gameApiKeyLevel.va
 const inboundMailKeyLevel = computed(() => access.featureLevelForKey('settings-inbound-mail-key'))
 const canViewInboundMailKey = computed(() => inboundMailKeyLevel.value !== 'hidden')
 const canEditInboundMailKey = computed(() => canEditPage.value && inboundMailKeyLevel.value === 'edit')
+const mcsmLevel = computed(() => access.featureLevelForKey('settings-mcsm'))
+const canViewMcsm = computed(() => mcsmLevel.value !== 'hidden')
+const canEditMcsm = computed(() => canEditPage.value && mcsmLevel.value === 'edit')
 const adminTurnstileLevel = computed(() => access.featureLevelForKey('settings-turnstile-admin'))
 const chatTurnstileLevel = computed(() => access.featureLevelForKey('settings-turnstile-chat'))
 const canViewAdminTurnstile = computed(() => adminTurnstileLevel.value !== 'hidden')
@@ -63,20 +91,22 @@ onMounted(() => {
   void loadSecrets()
 })
 
-// 两个密钥都要先拿到最新的功能权限才知道能不能读，所以共用一次 /api/auth/me。
+// 三块密钥/凭据都要先拿到最新的功能权限才知道能不能读，所以共用一次 /api/auth/me。
 async function loadSecrets() {
   gameApiKeyLoading.value = true
   inboundMailKeyLoading.value = true
+  mcsmLoading.value = true
   try {
     const auth = await $fetch<{ user: { isOwner: boolean; featurePermissions?: Record<string, 'hidden' | 'view' | 'edit'> } }>('/api/auth/me')
     access.updateProfile(auth.user)
   } catch (e: any) {
     gameApiKeyLoading.value = false
     inboundMailKeyLoading.value = false
+    mcsmLoading.value = false
     showToast(e?.data?.statusMessage || '权限加载失败', 'error')
     return
   }
-  await Promise.all([loadGameApiKey(), loadInboundMailKey()])
+  await Promise.all([loadGameApiKey(), loadInboundMailKey(), loadMcsm()])
 }
 
 async function loadGameApiKey() {
@@ -101,6 +131,58 @@ async function loadInboundMailKey() {
     showToast(e?.data?.statusMessage || '域名邮件投递密钥加载失败', 'error')
   } finally {
     inboundMailKeyLoading.value = false
+  }
+}
+
+async function loadMcsm() {
+  try {
+    if (!canViewMcsm.value) return
+    const config = await $fetch<McsmConfig>('/api/admin/mcsm-settings')
+    mcsmState.value = config
+    mcsmForm.baseUrl = config.baseUrl
+    mcsmForm.backupDir = config.backupDir
+    // 服务端不回显 ApiKey，输入框留空即表示沿用旧值。
+    mcsmForm.apiKey = ''
+  } catch (e: any) {
+    showToast(e?.data?.statusMessage || 'MCSM 面板配置加载失败', 'error')
+  } finally {
+    mcsmLoading.value = false
+  }
+}
+
+async function saveMcsm() {
+  if (savingMcsm.value || !canEditMcsm.value) return
+  if (!mcsmForm.baseUrl.trim()) {
+    showToast('请填写 MCSM 面板地址', 'error')
+    return
+  }
+  if (!mcsmState.value?.apiKeyConfigured && !mcsmForm.apiKey.trim()) {
+    showToast('首次配置必须填写 MCSM ApiKey', 'error')
+    return
+  }
+  savingMcsm.value = true
+  mcsmProbe.value = null
+  try {
+    const result = await $fetch<McsmConfig & { probe: McsmProbe }>('/api/admin/mcsm-settings', {
+      method: 'PATCH',
+      body: {
+        baseUrl: mcsmForm.baseUrl.trim(),
+        apiKey: mcsmForm.apiKey,
+        backupDir: mcsmForm.backupDir.trim(),
+      },
+    })
+    const { probe, ...config } = result
+    mcsmState.value = config
+    mcsmForm.baseUrl = config.baseUrl
+    mcsmForm.backupDir = config.backupDir
+    mcsmForm.apiKey = ''
+    showMcsmApiKey.value = false
+    mcsmProbe.value = probe
+    showToast(probe.ok ? '已保存，面板连接正常' : '配置已保存，但连接面板失败', probe.ok ? 'info' : 'error')
+  } catch (e: any) {
+    showToast(e?.data?.statusMessage || '保存失败', 'error')
+  } finally {
+    savingMcsm.value = false
   }
 }
 
@@ -314,6 +396,87 @@ function generateInboundMailKey() {
       </div>
     </div>
 
+    <div v-if="canViewMcsm" class="card">
+      <h2 class="card-title">MCSManager 面板</h2>
+      <p class="card-note">
+        「服务器管理」页靠这套凭据调用 MCSManager：发送命令、读控制台、启停实例、打包备份。
+        ApiKey 在面板右上角的用户信息页生成，权限与该面板账户完全一致，请当作密码保管。
+        它只保存在本服务端，页面不会回显明文，浏览器也拿不到——所有面板调用都由服务端代发。
+      </p>
+
+      <p v-if="!mcsmLoading && !mcsmState?.configured" class="inherit-warning">
+        <md-icon>warning</md-icon>
+        <span>尚未配置，「服务器管理」页会一直提示去这里填写。</span>
+      </p>
+      <p v-else-if="!mcsmLoading && mcsmState?.apiKeySource === 'env'" class="source-note">
+        <md-icon>info</md-icon>
+        <span>
+          当前生效的 ApiKey 来自环境变量 <code>YZWC_MCSM_API_KEY</code>。在此保存后将改用数据库里的值，
+          生产环境推荐这样做——Nitro 运行时不会读项目根目录的 <code>.env</code>。
+        </span>
+      </p>
+
+      <div class="setting-form">
+        <md-outlined-text-field
+          label="面板地址"
+          supporting-text="形如 http://127.0.0.1:23333，不要带路径参数；反向代理下的路径前缀可以保留"
+          autocomplete="off"
+          spellcheck="false"
+          :disabled="mcsmLoading"
+          :readonly="!canEditMcsm"
+          :value="mcsmForm.baseUrl"
+          @input="mcsmForm.baseUrl = ($event.target as HTMLInputElement).value"
+        ></md-outlined-text-field>
+
+        <div class="password-field">
+          <md-outlined-text-field
+            :type="showMcsmApiKey ? 'text' : 'password'"
+            label="MCSM ApiKey"
+            :supporting-text="mcsmState?.apiKeyConfigured ? '已配置，留空表示不修改' : '尚未配置，必须填写'"
+            autocomplete="new-password"
+            spellcheck="false"
+            :disabled="mcsmLoading"
+            :readonly="!canEditMcsm"
+            :value="mcsmForm.apiKey"
+            @input="mcsmForm.apiKey = ($event.target as HTMLInputElement).value"
+          ></md-outlined-text-field>
+          <md-icon-button
+            :aria-label="showMcsmApiKey ? '隐藏 ApiKey' : '显示 ApiKey'"
+            :disabled="mcsmLoading"
+            @click="showMcsmApiKey = !showMcsmApiKey"
+          >
+            <md-icon>{{ showMcsmApiKey ? 'visibility_off' : 'visibility' }}</md-icon>
+          </md-icon-button>
+        </div>
+
+        <md-outlined-text-field
+          label="备份目录"
+          supporting-text="实例目录下的相对路径，默认 /backups；只能用字母、数字、点、下划线、短横线和斜杠"
+          autocomplete="off"
+          spellcheck="false"
+          :disabled="mcsmLoading"
+          :readonly="!canEditMcsm"
+          :value="mcsmForm.backupDir"
+          @input="mcsmForm.backupDir = ($event.target as HTMLInputElement).value"
+        ></md-outlined-text-field>
+
+        <div v-if="canEditMcsm" class="form-actions">
+          <md-filled-button :disabled="mcsmLoading || savingMcsm" @click="saveMcsm">
+            {{ savingMcsm ? '保存并测试中…' : '保存并测试连接' }}
+          </md-filled-button>
+        </div>
+
+        <p v-if="mcsmProbe" :class="mcsmProbe.ok ? 'source-note' : 'inherit-warning'">
+          <md-icon>{{ mcsmProbe.ok ? 'check_circle' : 'error' }}</md-icon>
+          <span v-if="mcsmProbe.ok">
+            连接成功：面板账户 <strong>{{ mcsmProbe.userName }}</strong>（{{ mcsmProbe.permissionLabel }}），
+            这把 ApiKey 可管理 {{ mcsmProbe.instanceCount }} 个实例。
+          </span>
+          <span v-else>配置已保存，但连接面板失败：{{ mcsmProbe.message }}</span>
+        </p>
+      </div>
+    </div>
+
     <div v-if="canViewAdminTurnstile" class="card">
       <h2 class="card-title">后台登录人机验证</h2>
       <p class="card-note">保护本后台的登录页，允许域名应填写 API 站点域名。</p>
@@ -432,7 +595,7 @@ function generateInboundMailKey() {
       <h2 class="card-title">配置来源优先级</h2>
       <ol class="priority-list">
         <li>本页保存的数据库设置（最高，生产环境推荐）</li>
-        <li>进程环境变量（<code>TURNSTILE_*</code> / <code>TURNSTILE_CHAT_*</code> / <code>YZWC_GAME_API_KEY</code> / <code>YZWC_INBOUND_MAIL_KEY</code>）</li>
+        <li>进程环境变量（<code>TURNSTILE_*</code> / <code>TURNSTILE_CHAT_*</code> / <code>YZWC_GAME_API_KEY</code> / <code>YZWC_INBOUND_MAIL_KEY</code> / <code>YZWC_MCSM_BASE_URL</code> / <code>YZWC_MCSM_API_KEY</code>）</li>
         <li>聊天区未配置时回退到后台登录那一套</li>
       </ol>
       <p class="card-note">

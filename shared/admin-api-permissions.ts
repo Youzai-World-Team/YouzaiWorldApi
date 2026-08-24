@@ -5,8 +5,10 @@ export function pageKeyForApi(path: string): string | undefined {
   if (path.startsWith('/api/admin/users')) return 'admin-users'
   if (path.startsWith('/api/admin/audit-logs')) return 'audit-logs'
   if (path.startsWith('/api/admin/turnstile')
+    || path.startsWith('/api/admin/mcsm-settings')
     || path.startsWith('/api/auth/game-api-key')
     || path.startsWith('/api/auth/inbound-mail-key')) return 'settings'
+  if (path.startsWith('/api/admin/mcsm/')) return 'server-manage'
   if (path.startsWith('/api/admin/game-accounts')
     || path.startsWith('/api/admin/game-account-settings')
     || path.startsWith('/api/admin/game-account-email-preview')
