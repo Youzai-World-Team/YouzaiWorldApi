@@ -40,6 +40,9 @@ export const ADMIN_PAGE_DEFINITIONS: AdminPageDefinition[] = [
   // 这一页能停服和发送任意后台命令，默认只给「查看」：新管理员先能看控制台，
   // 需要动电源和发命令时再由所有者单独放开到「编辑」。
   { key: 'server-manage', label: '服务器管理', route: '/server-manage', icon: 'dns', defaultLevel: 'view' },
+  // 这一页能读写实例目录里的任意文件（含 jar 与启动脚本），默认整页隐藏，
+  // 需要时由所有者单独放开。
+  { key: 'server-files', label: '服务器文件', route: '/server-files', icon: 'folder', defaultLevel: 'hidden' },
   { key: 'game-accounts', label: '游戏账户', route: '/game-accounts', icon: 'manage_accounts', defaultLevel: 'edit' },
   { key: 'game-cosmetics', label: '账户装扮', route: '/game-cosmetics', icon: 'checkroom', defaultLevel: 'edit' },
   { key: 'mail', label: '服内邮件', route: '/mail', icon: 'mail', defaultLevel: 'edit' },
@@ -174,6 +177,24 @@ export const ADMIN_FEATURE_DEFINITIONS: AdminFeatureDefinition[] = [
     defaultLevel: 'hidden',
     availableLevels: ['hidden', 'edit'],
   },
+  {
+    key: 'server-manage-properties',
+    label: '服务器管理：服务器设置',
+    icon: 'tune',
+    description: '允许修改 server.properties，包括白名单、正版验证、难度与游戏模式等。',
+    parentKey: 'server-manage',
+    pageKey: 'server-manage',
+    defaultLevel: 'hidden',
+  },
+  {
+    key: 'server-manage-schedule',
+    label: '服务器管理：计划任务',
+    icon: 'schedule',
+    description: '允许创建与删除定时任务（定时执行命令、定时启动或停止实例）。',
+    parentKey: 'server-manage',
+    pageKey: 'server-manage',
+    defaultLevel: 'hidden',
+  },
 ]
 
 export const ADMIN_PAGE_KEYS = new Set(ADMIN_PAGE_DEFINITIONS.map((page) => page.key))
@@ -198,6 +219,9 @@ export function ownerAdminFeaturePermissions(): Record<string, AdminFeaturePermi
 export function adminPageKeyForPath(path: string): string | undefined {
   const normalized = path.length > 1 ? path.replace(/\/+$/, '') : path
   if (normalized === '/game-account-email-templates') return 'game-accounts'
+  // 独立预览页是「服务器文件」的子路由，权限必须跟着主页面走，
+  // 否则它会因为匹配不到页面定义而绕过页面权限检查。
+  if (normalized.startsWith('/server-files/')) return 'server-files'
   return ADMIN_PAGE_DEFINITIONS.find((page) => page.route === normalized)?.key
 }
 

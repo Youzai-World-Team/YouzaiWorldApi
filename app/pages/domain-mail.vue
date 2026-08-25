@@ -398,6 +398,11 @@ function formatBytes(value: number) {
 function attachmentHref(mailId: string, attachmentId: string) {
   return `/api/admin/domain-mails/attachment?mail=${mailId}&id=${attachmentId}`
 }
+
+/** .eml 下载地址。md-*-button 带 href 时会渲染成 <a>，配合响应头的 attachment 直接下载。 */
+function downloadHref(mailId: string) {
+  return `/api/admin/domain-mails/download?mail=${mailId}`
+}
 </script>
 
 <template>
@@ -481,6 +486,13 @@ function attachmentHref(mailId: string, attachmentId: string) {
                   <md-icon slot="icon">visibility</md-icon>
                   查看
                 </md-text-button>
+                <md-icon-button
+                  aria-label="下载 .eml"
+                  title="下载 .eml（可用邮件客户端打开）"
+                  :href="downloadHref(mail.id)"
+                >
+                  <md-icon>download</md-icon>
+                </md-icon-button>
                 <md-icon-button
                   v-if="canEdit"
                   aria-label="删除"
@@ -611,6 +623,14 @@ function attachmentHref(mailId: string, attachmentId: string) {
           class="delete-confirm"
           @click="requestDeleteFromDetail"
         >删除</md-text-button>
+        <md-text-button
+          v-if="detail"
+          :href="downloadHref(detail.id)"
+          title="按库里保存的字段重建 .eml（非原始报文字节），可用邮件客户端打开"
+        >
+          <md-icon slot="icon">download</md-icon>
+          下载 .eml
+        </md-text-button>
         <md-text-button @click="closeDetail">关闭</md-text-button>
       </div>
     </md-dialog>

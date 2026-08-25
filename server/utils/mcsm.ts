@@ -110,8 +110,12 @@ export function mcsmReady(): boolean {
  * 面板把鉴权失败也用 200 外壳里的 {@code status} 表达，所以 HTTP 状态和信封都要判。
  * 抛出的错误信息里绝不会带上 ApiKey——它只出现在这里拼好的 URL 中。
  * </p>
+ * <p>
+ * 导出给同目录的 {@code mcsm-server-config.ts} 复用：面板接口都走这一个出口，
+ * 免得 ApiKey 拼装和错误映射散落多处。
+ * </p>
  */
-async function callPanel<T>(
+export async function callPanel<T>(
   path: string,
   options: { method?: string; query?: Record<string, string | number | undefined>; body?: unknown } = {},
 ): Promise<T> {

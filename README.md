@@ -118,10 +118,19 @@ Worker 用 HMAC-SHA256 签名调用 `POST /api/inbound-mail`，请求头与规�
 | `GET /api/admin/domain-mails/:id` | 单封详情：正文、收件人/抄送、附件元信息 |
 | `DELETE /api/admin/domain-mails/:id` | 删除邮件，附件级联删除，记入 `/audit-logs` |
 | `GET /api/admin/domain-mails/attachment?mail=&id=` | 下载附件原文 |
+| `GET /api/admin/domain-mails/download?mail=` | 下载整封邮件的 `.eml`（重建，见下） |
 | `GET /api/auth/inbound-mail-key` | 读取当前投递密钥与其来源（数据库 / 环境变量 / 未配置） |
 | `POST /api/auth/inbound-mail-key` | 保存投递密钥到数据库设置 |
 
 列表给出主题、发件人、收件地址、发送时间（邮件头 `Date`，缺失或畸形时回退接收时间并标注）、接收时间、附件数、原信大小与 SPF / DKIM / DMARC 结论；详情另给信封发件人、回复地址、收件人与抄送、`Message-ID`，以及正文和附件清单。删除需要该页的 `edit` 权限，只有 `view` 时删除入口不显示。
+
+### 下载 `.eml`
+
+列表每行与详情弹窗都有下载按钮，产出可直接用 Thunderbird / Outlook / Apple Mail 打开的 `.eml`。
+
+**这是按库里字段重建的，不是原始报文。** Worker 只上传解析后的字段（部分头部、纯文本正文、HTML 正文、附件），原始 MIME 字节没有入库，所以头部顺序、非必要头部与原始分段结构无法还原，字节级取证需要另存原始 MIME。重建文件里带 `X-Yzwc-Reconstructed: yes; original-mime-not-stored` 头明示这一点，另有 `X-Yzwc-Mail-Id` / `X-Yzwc-Envelope-From` / `X-Yzwc-Envelope-To` / `X-Yzwc-Received-Time` 保留库里的元信息，被体积预算丢掉的附件用 `X-Yzwc-Dropped-Attachment` 登记名称与原始大小。
+
+实现在 `server/utils/eml.ts`：正文与附件统一 base64 传输编码（安全承载 UTF-8 与二进制，避开 quoted-printable 的行长细节），头部非 ASCII 走 RFC 2047 encoded-word 并按 45 字节切分（不切断码点，单词不超 75 字符），附件名同时给出 ASCII 回退与 RFC 2231 的 `filename*`。分段边界含 `-`，而 base64 字母表里没有 `-`，因此边界不可能与正文碰撞。头部取值一律剔除控制字符，防止用主题或显示名注入 `Bcc:` 之类的新头部。下载响应与附件同样强制 `Content-Disposition: attachment` + `nosniff`，不给浏览器内联解析陌生来信的机会。
 
 ### 两条安全约束
 
@@ -184,7 +193,72 @@ Cloudflare 入站单封上限 25 MiB。Worker 与服务端的预算必须一致�
 
 MCSManager 没有备份接口，这里用它的文件接口实现：`POST /api/files/compress`（`type: 1`）把实例根目录下选中的几个一级目录压缩成备份目录里的一个 zip，文件名为 `标签-时间戳.zip`。打包目标必须是面板真实列出来的一级目录，不接受调用方自己拼的路径，备份目录自身也排除在外（否则历史备份会一层层套进新备份）。恢复用同一个接口的 `type: 2` 解压回实例根目录，**只允许在实例已停止时执行**——运行中的服务器持有世界文件句柄，边跑边覆盖存档要么写不进去、要么退出时用内存里的旧状态把恢复结果再盖一遍。
 
-大世界压缩耗时可能超过 15 秒的请求超时，此时面板侧的压缩任务仍在继续，刷新备份列表就能看到结果。下载走面板的 `POST /api/files/download` 换一次性密码，地址直连守护进程（节点）而不经过本服务端——备份动辄几百 MB，代理一遍只是白占内存；节点是内网域名或浏览器拦下不安全下载时，改用面板自带的文件管理下载。
+大世界压缩耗时可能超过 15 秒的请求超时，此时面板侧的压缩任务仍在继续，刷新备份列表就能看到结果。面板没有可用的进度接口（`/api/files/status` 的计数在压缩全程都是 0），所以页面给不出进度条。
+
+**运行中的服务器会占着部分文件的句柄**：实测在服务器运行时压缩 `/mods` 会失败（`The decompression and compression program is abnormal`），因为 JVM 正持有那些 jar。世界存档目录可以正常压缩。要整机备份就先停服。
+
+下载走面板的 `POST /api/files/download` 换一次性密码，地址直连守护进程（节点）而不经过本服务端——备份动辄几百 MB，代理一遍只是白占内存；节点是内网域名或浏览器拦下不安全下载时，改用面板自带的文件管理下载。
+
+### 服务器设置（server.properties）
+
+面板的 `GET/PUT /api/protected_instance/process_config/file`（带 `fileName` + `type`，缺 `type` 会 500）把 `server.properties` 解析成**带类型的键值对**回来——布尔就是 `true/false`、数字就是数字，所以页面能按类型渲染成开关、下拉和数字框，不用让人手改文本。常用的十几项单独成组，其余七十来项折叠在「全部配置项」里并支持筛选。
+
+写入是**整份覆盖**，所以保存时先读一遍旧值、算出真正变化的项，只把这些写进 `/audit-logs`（七十项全记下来没法看，而「谁把 `white-list` 关了」恰恰是事后最需要查的）。服务端逐项校验键名与取值：只接受字符串 / 数字 / 布尔 / null，字符串不许含换行（换行会把一行配置拆成两行，等于凭空插入配置项），嵌套对象会被面板序列化成 `[object Object]` 所以直接拒掉。可编辑的文件走白名单（目前只有 `server.properties`）——这个接口能读写实例目录内的文件，不加白名单等于开放任意配置改写。
+
+**Minecraft 只在启动时读 `server.properties`，改完要重启服务器才生效**，页面上有提示，但不会代替管理员决定何时重启。
+
+### 计划任务
+
+面板的计划任务接口官方文档没有覆盖，下面的字段是实测结论：
+
+| 字段 | 含义 |
+|------|------|
+| `name` | 任务名，同时也是删除时的 `task_name` |
+| `count` | 执行次数，`-1` 表示无限 |
+| `type` | `1` = 循环（`time` 是间隔秒数，最小 3）、`2` = cron（`time` 是 5 段或 6 段表达式）、`3` = 指定时刻（`time` 形如 `2026-01-01 04:00:00`） |
+| `actions` | 动作数组，形如 `[{ type, payload }]` |
+
+动作类型为 `command`（`payload` 是命令）/ `start` / `stop` / `restart` / `kill`。**注意 `start` 与 HTTP 电源接口的 `open` 不同名。**
+
+最要紧的一点：**面板对 `actions` 的结构不做任何校验，传什么都原样落库**，但只有 `{type, payload}` 这种写法执行器才真的会执行。写成 `{action, payload}` 或纯字符串同样返回成功，任务却会到点静默不执行。所以服务端把这个结构固定死，不让调用方自由传。
+
+创建走「计划任务」区域权限，任务名、触发条件与动作一起记入 `/audit-logs`。面板对单个实例的任务数量有上限，超出时把它的原文报错透给页面。
+
+## 服务器文件（独立页面）
+
+完整的文件管理器，取代了之前「服务器管理」页里的简单文件卡片。功能包括：
+
+- **浏览**：面包屑导航、按名称/大小/时间排序、目录内搜索、多选
+- **预览**：
+  - **图片/音视频**：直接在页面里内联显示（字节由本服务端同源转发）
+  - **文本文件**：Monaco 代码编辑器打开并带语法高亮（json/yml/properties/md/sh/js/ts/css/xml…）
+  - **Markdown**：渲染后的 HTML 预览（编辑权限下同时显示编辑器）
+  - **Office 文档**：Word (`.docx`)、Excel (`.xlsx`) 转 HTML 预览
+  - **PDF**：iframe 内联展示
+  - **压缩包**：显示 `.zip`/`.jar` 内的文件列表
+- **编辑**：文本文件可以在 Monaco 里直接改并保存，支持语法高亮、自动缩进、查找替换
+- **上传**：支持拖拽，逐个上传并显示进度条，单文件上限 256 MiB
+- **下载**：同源代理转发，避免混合内容拦截与 CORS
+- **增删改**：新建目录/文件、重命名、复制/移动到其他目录、批量删除（递归，无回收站）
+- **压缩/解压**：把选中项打包成 zip（最多 50 项），或把 zip 解压到当前目录
+
+预览模式有三种：
+
+1. **弹窗预览**（默认）：点文件名或「预览/编辑」按钮
+2. **新页面预览**：弹窗右上角的「在新页面打开」图标，可以单独收藏或分享给同事
+3. **网页全屏**：弹窗右上角的全屏图标，铺满整个视口（非浏览器原生全屏，按 Esc 退出）
+
+守护进程的下载接口不支持 `Range` 请求，音视频只能顺序播放，拖动进度条通常无效。文本编辑是整份覆盖写且没有并发保护——两人同时改同一文件，后保存的会覆盖先保存的。
+
+### 权限
+
+整页默认 `hidden`（能读写实例内任意文件），需要所有者单独放开。`view` 档可以浏览和预览，`edit` 档才能上传、编辑、删除。
+
+### 这把 ApiKey 用不到的接口
+
+面板账户是普通用户（`permission: 1`），下列接口一律 403，不要再尝试：`/api/auth/search`（用户管理）、`/api/service/remote_service_instances`（按节点列实例）、`/api/service/remote_services_system`（节点系统信息）、`/api/environment/*`（Docker 镜像与容器）、`/api/service/remote_service`（节点增删改），以及 **`PUT /api/instance`（修改实例配置）**——所以昵称、自动重启开关这类实例级设置只能在面板里改。
+
+另外两项确认做不到：`/api/files/status` 虽然能调通（返回 `instanceFileTask` / `globalFileTask` / 磁盘列表），但压缩全程这些计数都是 0，**没法用它做备份进度**；`info.playersChart` 是空数组，**做不了在线人数曲线**。
 
 ### 权限
 
@@ -195,8 +269,11 @@ MCSManager 没有备份接口，这里用它的文件接口实现：`POST /api/f
 | `server-manage-power` | 启动 / 停止 / 重启 / 强制结束进程 |
 | `server-manage-command` | 向控制台发送命令 |
 | `server-manage-backup` | 创建 / 下载 / 恢复 / 删除备份 |
+| `server-manage-properties` | 修改 server.properties（白名单、正版验证、难度等） |
+| `server-manage-schedule` | 创建 / 删除计划任务 |
+| `server-manage-files` | 浏览实例目录、在线编辑文本文件 |
 
-所有者始终是 `edit`，其他账户要在 `/permissions` 里单独授权，且不会超过其「服务器管理」页面权限。所有写操作都记入 `/audit-logs`。
+前三个只有 `hidden` / `edit` 两档；后三个有 `hidden` / `view` / `edit` 三档，`view` 时卡片只读、`hidden` 时整个卡片不渲染。所有者始终是 `edit`，其他账户要在 `/permissions` 里单独授权，且不会超过其「服务器管理」页面权限。所有写操作都记入 `/audit-logs`。
 
 | 方法与路径 | 用途 | 需要的权限 |
 |-----------|------|-----------|
@@ -211,6 +288,22 @@ MCSManager 没有备份接口，这里用它的文件接口实现：`POST /api/f
 | `DELETE /api/admin/mcsm/backups` | 删除备份 | `server-manage-backup` |
 | `POST /api/admin/mcsm/backups/restore` | 恢复备份（要求实例已停止） | `server-manage-backup` |
 | `POST /api/admin/mcsm/backups/download` | 换取一次性下载地址 | `server-manage-backup` |
+| `GET /api/admin/mcsm/properties` | 读取解析后的 server.properties | 页面 `view` |
+| `PATCH /api/admin/mcsm/properties` | 整份写回配置 | `server-manage-properties` |
+| `GET /api/admin/mcsm/schedules` | 计划任务列表 + 类型/动作枚举 | 页面 `view` |
+| `POST /api/admin/mcsm/schedules` | 创建计划任务 | `server-manage-schedule` |
+| `DELETE /api/admin/mcsm/schedules` | 删除计划任务 | `server-manage-schedule` |
+| `GET /api/admin/mcsm/instances` | 读取面板配置与实例列表 | `server-manage` 或 `server-files` 任一 `view` |
+| `GET /api/admin/mcsm/files?path=&page=` | 浏览实例目录（附带类型判定） | `server-files` `view` |
+| `GET /api/admin/mcsm/files/raw?path=` | 流式代理文件字节（预览/下载） | `server-files` `view` |
+| `GET /api/admin/mcsm/file?path=` | 读取文本文件 | `server-files` `view` |
+| `PUT /api/admin/mcsm/file` | 保存文本文件 | `server-files` `edit` |
+| `POST /api/admin/mcsm/files/create` | 新建目录或文件 | `server-files` `edit` |
+| `POST /api/admin/mcsm/files/rename` | 重命名 | `server-files` `edit` |
+| `POST /api/admin/mcsm/files/transfer` | 批量复制或移动 | `server-files` `edit` |
+| `POST /api/admin/mcsm/files/delete` | 批量删除 | `server-files` `edit` |
+| `POST /api/admin/mcsm/files/archive` | 压缩/解压 | `server-files` `edit` |
+| `PUT /api/admin/mcsm/files/upload` | 上传（流式代理到守护进程） | `server-files` `edit` |
 | `GET /api/admin/mcsm-settings` | 读取面板地址、备份目录与「ApiKey 是否已配置」 | `settings-mcsm` `view` |
 | `PATCH /api/admin/mcsm-settings` | 保存面板配置并测试连通性 | `settings-mcsm` `edit` |
 

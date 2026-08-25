@@ -503,7 +503,7 @@ const ADMIN_ENTRY_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{11,63}$/
 const ADMIN_AVATAR_RE = /^\/(?:favicon\.ico|api\/uploads\/[A-Za-z0-9._-]+\.(?:png|jpe?g|webp|gif|avif))$/
 const RESERVED_ADMIN_ENTRIES = new Set([
   'login', 'account', 'activity', 'donors', 'bans', 'updates', 'game-accounts',
-  'game-cosmetics', 'game-account-email-templates', 'server-manage',
+  'game-cosmetics', 'game-account-email-templates', 'server-manage', 'server-files',
   'admin-users', 'audit-logs', 'chat', 'mail', 'domain-mail', 'settings', 'permissions', 'api', '_nuxt', '_ipx', 'favicon', '__nuxt_error',
 ])
 
@@ -1015,6 +1015,26 @@ export function adminFeatureAllows(
   if (!feature) return false
   if (feature.pageKey && !permissionAllows(user.permissions[feature.pageKey], required)) return false
   return permissionAllows(user.featurePermissions[featureKey], required)
+}
+
+/**
+ * 多个页面共用的接口：任一页面达到所需权限即可放行。
+ * <p>
+ * 「服务器管理」和「服务器文件」都要读实例列表，而页面权限中间件按路径只能
+ * 认一个页面键，所以这类接口从 {@code pageKeyForApi} 里排除、改由自己判定。
+ * </p>
+ */
+export function requireAnyPagePermission(
+  event: H3Event,
+  pageKeys: string[],
+  required: 'view' | 'edit',
+): AdminUser {
+  const user = requireAuth(event)
+  if (pageKeys.some((key) => permissionAllows(user.permissions[key], required))) return user
+  throw createError({
+    statusCode: 403,
+    statusMessage: required === 'edit' ? '当前账户没有此页面的编辑权限' : '当前账户没有此页面的查看权限',
+  })
 }
 
 export function requireFeaturePermission(
@@ -3904,6 +3924,34 @@ export function getDomainMailAttachment(mailId: string, attachmentId: string): {
     sha256: String(row.sha256 ?? ''),
     content: Buffer.from(row.content as Uint8Array),
   }
+}
+
+/**
+ * 取一封邮件的全部附件（含二进制），用于重建 .eml 下载。
+ * <p>
+ * 与 {@link getDomainMailAttachment} 的单个取法分开：这里会把附件内容一次性读进
+ * 内存，最多就是入库预算的那 12 MiB，仅供下载这一条路径使用，不要拿它做列表。
+ * 没存下内容的附件 {@code content} 为 null，重建时只在头部登记、不放进正文。
+ * </p>
+ */
+export function listDomainMailAttachmentsForEml(mailId: string): Array<{
+  filename: string
+  mimeType: string
+  disposition: string
+  contentId: string
+  size: number
+  content: Buffer | null
+}> {
+  return all(`SELECT filename, mime_type, disposition, content_id, size, content
+              FROM domain_mail_attachments WHERE mail_id = ? ORDER BY position`, mailId)
+    .map((row) => ({
+      filename: String(row.filename ?? ''),
+      mimeType: String(row.mime_type ?? ''),
+      disposition: String(row.disposition ?? ''),
+      contentId: String(row.content_id ?? ''),
+      size: Number(row.size ?? 0),
+      content: row.content == null ? null : Buffer.from(row.content as Uint8Array),
+    }))
 }
 
 /**

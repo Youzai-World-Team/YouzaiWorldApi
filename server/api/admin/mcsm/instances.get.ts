@@ -1,15 +1,17 @@
-import { getAdminMcsmConfig, requireAuth } from '../../../utils/db'
+import { getAdminMcsmConfig, requireAnyPagePermission } from '../../../utils/db'
 import { getPanelSnapshot } from '../../../utils/mcsm'
 
 /**
- * 「服务器管理」页的入口数据：面板是否配置好、当前 ApiKey 的身份、可管理的实例列表。
+ * 「服务器管理」和「服务器文件」两页共用的入口数据：面板是否配置好、
+ * 当前 ApiKey 的身份、可管理的实例列表。
  * <p>
- * 面板没配时不报错，返回 {@code configured: false} 让页面引导去站点设置；
- * 配了但连不上才把错误抛出去。
+ * 因为两个页面都要用，它从 {@code pageKeyForApi} 里排除了，改在这里自己判定
+ * 「任一页面可见即可」。面板没配时不报错，返回 {@code configured: false}
+ * 让页面引导去站点设置。
  * </p>
  */
 export default defineEventHandler(async (event) => {
-  requireAuth(event)
+  requireAnyPagePermission(event, ['server-manage', 'server-files'], 'view')
   const config = getAdminMcsmConfig()
   if (!config.configured) {
     return { configured: false, backupDir: config.backupDir, user: null, instances: [] }

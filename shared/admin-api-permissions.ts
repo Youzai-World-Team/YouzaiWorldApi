@@ -8,6 +8,11 @@ export function pageKeyForApi(path: string): string | undefined {
     || path.startsWith('/api/admin/mcsm-settings')
     || path.startsWith('/api/auth/game-api-key')
     || path.startsWith('/api/auth/inbound-mail-key')) return 'settings'
+  // 实例列表两个页面都要用，交给接口自己做「任一页面可见」判定。
+  if (path.startsWith('/api/admin/mcsm/instances')) return undefined
+  // /api/admin/mcsm/file 与 /api/admin/mcsm/files* 都归「服务器文件」页，
+  // 必须排在下面那条通用的 mcsm 规则前面。
+  if (path.startsWith('/api/admin/mcsm/file')) return 'server-files'
   if (path.startsWith('/api/admin/mcsm/')) return 'server-manage'
   if (path.startsWith('/api/admin/game-accounts')
     || path.startsWith('/api/admin/game-account-settings')

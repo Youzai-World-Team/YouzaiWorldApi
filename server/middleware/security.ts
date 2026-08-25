@@ -50,7 +50,15 @@ export default defineEventHandler((event) => {
   const contentLengthHeader = getHeader(event, 'content-length')
   const contentLength = Number(contentLengthHeader || 0)
   // multipart 还包含边界和字段头；实际图片仍由上传接口限制为 2 MiB。
-  const maxBytes = event.path === '/api/upload' ? 2 * 1024 * 1024 + 64 * 1024 : 256 * 1024
+  // 「服务器文件」页的上传是把原始字节直接 PUT 上来再转发给守护进程，
+  // 模组包动辄几十 MB，因此单独放到 256 MiB（与 mcsm-files.ts 的 UPLOAD_MAX_BYTES 一致，
+  // 精确的体积校验在那个接口里做）。
+  const path = event.path.split('?')[0] || event.path
+  const maxBytes = path === '/api/upload'
+    ? 2 * 1024 * 1024 + 64 * 1024
+    : path === '/api/admin/mcsm/files/upload'
+      ? 256 * 1024 * 1024
+      : 256 * 1024
   if (!Number.isFinite(contentLength) || contentLength < 0 || contentLength > maxBytes) {
     throw createError({ statusCode: 413, statusMessage: '请求体过大' })
   }

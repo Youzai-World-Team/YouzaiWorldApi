@@ -81,6 +81,11 @@ const canEditPage = computed(() => access.levelForKey('server-manage') === 'edit
 const canPower = computed(() => canEditPage.value && access.featureLevelForKey('server-manage-power') === 'edit')
 const canCommand = computed(() => canEditPage.value && access.featureLevelForKey('server-manage-command') === 'edit')
 const canBackup = computed(() => canEditPage.value && access.featureLevelForKey('server-manage-backup') === 'edit')
+// 这三块各自有独立区域权限：hidden 时整个卡片不渲染，view 时只读。
+const propertiesLevel = computed(() => access.featureLevelForKey('server-manage-properties'))
+const scheduleLevel = computed(() => access.featureLevelForKey('server-manage-schedule'))
+const canEditProperties = computed(() => canEditPage.value && propertiesLevel.value === 'edit')
+const canEditSchedule = computed(() => canEditPage.value && scheduleLevel.value === 'edit')
 
 const loading = ref(true)
 const configured = ref(false)
@@ -839,6 +844,10 @@ onBeforeUnmount(() => {
             大世界压缩耗时较长，请求可能先超时，压缩任务仍在面板侧继续，稍后刷新即可看到。
             恢复会把压缩包解压回实例根目录并覆盖同名文件，因此只允许在实例已停止时执行。
           </p>
+          <p class="card-note">
+            服务器运行时会占着部分文件的句柄，压缩 <code>mods</code> 这类目录会失败；
+            世界存档可以正常备份，要整机备份请先停服。
+          </p>
           <p v-if="!canBackup" class="card-note">当前账户没有「备份管理」权限，只能查看列表。</p>
 
           <div class="table-wrap">
@@ -879,6 +888,21 @@ onBeforeUnmount(() => {
             <p v-else-if="!backups.length" class="empty">{{ backupDir }} 下还没有备份压缩包</p>
           </div>
         </section>
+
+        <ServerProperties
+          v-if="propertiesLevel !== 'hidden'"
+          :uuid="current.instanceUuid"
+          :daemon-id="current.daemonId"
+          :can-edit="canEditProperties"
+        />
+
+        <ServerSchedules
+          v-if="scheduleLevel !== 'hidden'"
+          :uuid="current.instanceUuid"
+          :daemon-id="current.daemonId"
+          :can-edit="canEditSchedule"
+        />
+
       </template>
     </template>
 
