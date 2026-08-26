@@ -101,7 +101,9 @@ const uploadName = ref('')
 const uploadPercent = ref(0)
 const dragOver = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
+const mobileMenuEntry = ref<string | null>(null)
 let uploadRequest: XMLHttpRequest | null = null
+const UPLOAD_MAX_BYTES = 256 * 1024 * 1024
 
 const instance = computed(() => instances.value.find((item) => instanceKey(item) === selectedKey.value) || null)
 
@@ -288,6 +290,18 @@ function previewPageUrl(entry: FileEntry) {
 function downloadUrl(entry: FileEntry) {
   const params = new URLSearchParams({ ...requestBase(), path: fullPath(entry.name), download: '1' })
   return `/api/admin/mcsm/files/raw?${params.toString()}`
+}
+
+function mobileActionId(entryIndex: number) {
+  return `mobile-file-actions-${entryIndex}`
+}
+
+function toggleMobileMenu(entry: FileEntry) {
+  mobileMenuEntry.value = mobileMenuEntry.value === entry.name ? null : entry.name
+}
+
+function closeMobileMenu(entry: FileEntry) {
+  if (mobileMenuEntry.value === entry.name) mobileMenuEntry.value = null
 }
 
 function onFullscreenKeydown(event: KeyboardEvent) {
@@ -562,11 +576,16 @@ function onDrop(event: DragEvent) {
 }
 
 /**
- * 逐个上传。用 XHR 而不是 fetch，因为只有 XHR 能给上传进度；
- * 请求体是原始字节，服务端负责拼 multipart 转发给守护进程。
+ * 逐个分块上传。用 XHR 而不是 fetch，因为只有 XHR 能给上传进度；
+ * 每个请求体保持很小，服务端在全部分块收到后再拼成 multipart 转发给守护进程。
  */
 async function uploadFiles(files: File[]) {
   if (!canEdit.value || !files.length || uploading.value) return
+  const oversized = files.find((file) => file.size > UPLOAD_MAX_BYTES)
+  if (oversized) {
+    showToast(`${oversized.name} 超过 256 MiB，无法上传`, 'error')
+    return
+  }
   uploading.value = true
   try {
     for (const file of files) {
@@ -586,14 +605,53 @@ async function uploadFiles(files: File[]) {
   }
 }
 
-function uploadOne(file: File) {
+async function uploadOne(file: File) {
+  const chunkSize = 128 * 1024
+  const uploadId = createUploadId()
+  let offset = 0
+
+  while (offset < file.size || (file.size === 0 && offset === 0)) {
+    const end = Math.min(file.size, offset + chunkSize)
+    const chunk = file.slice(offset, end)
+    const final = end === file.size
+    await uploadChunk(file, uploadId, offset, chunk, final)
+    offset = end
+    uploadPercent.value = file.size === 0 ? 100 : Math.round((offset / file.size) * 100)
+    if (file.size === 0) break
+  }
+}
+
+function createUploadId() {
+  const webCrypto = globalThis.crypto
+  if (typeof webCrypto?.randomUUID === 'function') return webCrypto.randomUUID()
+  const bytes = new Uint8Array(16)
+  if (typeof webCrypto?.getRandomValues === 'function') webCrypto.getRandomValues(bytes)
+  else bytes.forEach((_, index) => { bytes[index] = Math.floor(Math.random() * 256) })
+  bytes[6] = (bytes[6]! & 0x0f) | 0x40
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80
+  const hex = [...bytes].map((value) => value.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
+function uploadChunk(file: File, uploadId: string, offset: number, chunk: Blob, final: boolean) {
   return new Promise<void>((resolve, reject) => {
-    const params = new URLSearchParams({ ...requestBase(), path: path.value, name: file.name })
+    const params = new URLSearchParams({
+      ...requestBase(),
+      path: path.value,
+      name: file.name,
+      uploadId,
+      offset: String(offset),
+      total: String(file.size),
+      final: final ? '1' : '0',
+    })
     const request = new XMLHttpRequest()
     uploadRequest = request
-    request.open('PUT', `/api/admin/mcsm/files/upload?${params.toString()}`)
+    request.open('PUT', `/api/admin/mcsm/files/upload-chunk?${params.toString()}`)
+    request.setRequestHeader('Content-Type', 'application/octet-stream')
     request.upload.addEventListener('progress', (event) => {
-      if (event.lengthComputable) uploadPercent.value = Math.round((event.loaded / event.total) * 100)
+      if (event.lengthComputable && file.size > 0) {
+        uploadPercent.value = Math.round(((offset + event.loaded) / file.size) * 100)
+      }
     })
     request.addEventListener('load', () => {
       if (request.status >= 200 && request.status < 300) {
@@ -611,7 +669,7 @@ function uploadOne(file: File) {
     })
     request.addEventListener('error', () => reject(new Error('上传过程中网络中断')))
     request.addEventListener('abort', () => reject(new Error('上传已取消')))
-    request.send(file)
+    request.send(chunk)
   })
 }
 
@@ -828,7 +886,7 @@ onBeforeUnmount(() => {
             </thead>
             <tbody>
               <tr
-                v-for="entry in visibleItems"
+                v-for="(entry, entryIndex) in visibleItems"
                 :key="entry.name"
                 :class="{ 'row--selected': selectedNames.includes(entry.name) }"
               >
@@ -849,55 +907,107 @@ onBeforeUnmount(() => {
                 <td class="col-size">{{ entry.kind === 'directory' ? '—' : formatBytes(entry.size) }}</td>
                 <td class="col-time">{{ formatTime(entry.time) }}</td>
                 <td class="cell-actions">
-                  <div class="actions-left">
-                    <md-icon-button
-                      v-if="canEdit && entry.kind === 'archive' && entry.name.toLowerCase().endsWith('.zip')"
-                      aria-label="解压"
-                      title="解压"
-                      @click="openExtract(entry)"
-                    >
-                      <md-icon>unarchive</md-icon>
-                    </md-icon-button>
+                  <div class="cell-actions-content desktop-actions">
+                    <div class="actions-left">
+                      <md-icon-button
+                        v-if="canEdit && entry.kind === 'archive' && entry.name.toLowerCase().endsWith('.zip')"
+                        aria-label="解压"
+                        title="解压"
+                        @click="openExtract(entry)"
+                      >
+                        <md-icon>unarchive</md-icon>
+                      </md-icon-button>
+                    </div>
+                    <div class="actions-right">
+                      <md-icon-button
+                        v-if="entry.kind !== 'directory'"
+                        :aria-label="entry.editable && canEdit ? '编辑' : '预览'"
+                        :title="entry.editable && canEdit ? '编辑' : '预览'"
+                        @click="openPreview(entry)"
+                      >
+                        <md-icon>{{ entry.editable && canEdit ? 'edit' : 'visibility' }}</md-icon>
+                      </md-icon-button>
+                      <md-icon-button
+                        v-if="entry.kind !== 'directory'"
+                        aria-label="下载"
+                        title="下载"
+                        :href="downloadUrl(entry)"
+                      >
+                        <md-icon>download</md-icon>
+                      </md-icon-button>
+                      <md-icon-button
+                        v-if="canEdit"
+                        aria-label="复制到..."
+                        title="复制到..."
+                        @click="copySingle(entry)"
+                      >
+                        <md-icon>content_copy</md-icon>
+                      </md-icon-button>
+                      <md-icon-button
+                        v-if="canEdit"
+                        aria-label="移动到..."
+                        title="移动到..."
+                        @click="moveSingle(entry)"
+                      >
+                        <md-icon>drive_file_move</md-icon>
+                      </md-icon-button>
+                      <md-icon-button v-if="canEdit" aria-label="重命名" title="重命名" @click="openRename(entry)">
+                        <md-icon>drive_file_rename_outline</md-icon>
+                      </md-icon-button>
+                      <md-icon-button v-if="canEdit" aria-label="删除" title="删除" @click="deleteSingle(entry)">
+                        <md-icon>delete</md-icon>
+                      </md-icon-button>
+                    </div>
                   </div>
-                  <div class="actions-right">
+                  <div v-if="entry.kind !== 'directory' || canEdit" class="mobile-actions">
                     <md-icon-button
-                      v-if="entry.kind !== 'directory'"
-                      :aria-label="entry.editable && canEdit ? '编辑' : '预览'"
-                      :title="entry.editable && canEdit ? '编辑' : '预览'"
-                      @click="openPreview(entry)"
+                      :id="mobileActionId(entryIndex)"
+                      aria-label="更多操作"
+                      title="更多操作"
+                      @click="toggleMobileMenu(entry)"
                     >
-                      <md-icon>{{ entry.editable && canEdit ? 'edit' : 'visibility' }}</md-icon>
+                      <md-icon>more_vert</md-icon>
                     </md-icon-button>
-                    <md-icon-button
-                      v-if="entry.kind !== 'directory'"
-                      aria-label="下载"
-                      title="下载"
-                      :href="downloadUrl(entry)"
+                    <md-menu
+                      :anchor="mobileActionId(entryIndex)"
+                      positioning="fixed"
+                      anchor-corner="end-end"
+                      menu-corner="start-end"
+                      :open="mobileMenuEntry === entry.name"
+                      @closed="closeMobileMenu(entry)"
                     >
-                      <md-icon>download</md-icon>
-                    </md-icon-button>
-                    <md-icon-button
-                      v-if="canEdit"
-                      aria-label="复制到..."
-                      title="复制到..."
-                      @click="copySingle(entry)"
-                    >
-                      <md-icon>content_copy</md-icon>
-                    </md-icon-button>
-                    <md-icon-button
-                      v-if="canEdit"
-                      aria-label="移动到..."
-                      title="移动到..."
-                      @click="moveSingle(entry)"
-                    >
-                      <md-icon>drive_file_move</md-icon>
-                    </md-icon-button>
-                    <md-icon-button v-if="canEdit" aria-label="重命名" title="重命名" @click="openRename(entry)">
-                      <md-icon>drive_file_rename_outline</md-icon>
-                    </md-icon-button>
-                    <md-icon-button v-if="canEdit" aria-label="删除" title="删除" @click="deleteSingle(entry)">
-                      <md-icon>delete</md-icon>
-                    </md-icon-button>
+                      <md-menu-item
+                        v-if="canEdit && entry.kind === 'archive' && entry.name.toLowerCase().endsWith('.zip')"
+                        @click="openExtract(entry)"
+                      >
+                        <md-icon slot="start">unarchive</md-icon>
+                        <span slot="headline">解压</span>
+                      </md-menu-item>
+                      <md-menu-item v-if="entry.kind !== 'directory'" @click="openPreview(entry)">
+                        <md-icon slot="start">{{ entry.editable && canEdit ? 'edit' : 'visibility' }}</md-icon>
+                        <span slot="headline">{{ entry.editable && canEdit ? '编辑' : '预览' }}</span>
+                      </md-menu-item>
+                      <md-menu-item v-if="entry.kind !== 'directory'" type="link" :href="downloadUrl(entry)">
+                        <md-icon slot="start">download</md-icon>
+                        <span slot="headline">下载</span>
+                      </md-menu-item>
+                      <md-menu-item v-if="canEdit" @click="copySingle(entry)">
+                        <md-icon slot="start">content_copy</md-icon>
+                        <span slot="headline">复制到...</span>
+                      </md-menu-item>
+                      <md-menu-item v-if="canEdit" @click="moveSingle(entry)">
+                        <md-icon slot="start">drive_file_move</md-icon>
+                        <span slot="headline">移动到...</span>
+                      </md-menu-item>
+                      <md-menu-item v-if="canEdit" @click="openRename(entry)">
+                        <md-icon slot="start">drive_file_rename_outline</md-icon>
+                        <span slot="headline">重命名</span>
+                      </md-menu-item>
+                      <md-menu-item v-if="canEdit" @click="deleteSingle(entry)">
+                        <md-icon slot="start">delete</md-icon>
+                        <span slot="headline">删除</span>
+                      </md-menu-item>
+                    </md-menu>
                   </div>
                 </td>
               </tr>
@@ -1257,24 +1367,30 @@ onBeforeUnmount(() => {
 .bulk-actions { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
 .danger { color: var(--md-sys-color-error); }
 .table-wrap { overflow-x: auto; margin-top: 12px; }
-.data-table { width: 100%; border-collapse: collapse; table-layout: auto; }
-.data-table th, .data-table td { padding: 8px 10px; border-bottom: 1px solid var(--md-sys-color-outline-variant); text-align: left; vertical-align: middle; }
+.data-table { width: 100%; min-width: 820px; border-collapse: collapse; table-layout: fixed; }
+.data-table th, .data-table td { min-width: 0; padding: 8px 10px; border-bottom: 1px solid var(--md-sys-color-outline-variant); text-align: left; vertical-align: middle; }
 .data-table th { color: var(--md-sys-color-on-surface-variant); font-size: 12px; font-weight: 500; white-space: nowrap; }
 .col-check { width: 44px; }
+.data-table th:nth-child(2), .data-table td:nth-child(2) { width: auto; }
+.data-table th:nth-child(3), .data-table td:nth-child(3) { width: 82px; }
+.data-table th:nth-child(4), .data-table td:nth-child(4) { width: 142px; }
+.data-table th:nth-child(5), .data-table td:nth-child(5) { width: 292px; }
 .col-size, .col-time { white-space: nowrap; }
 .col-time { font-size: 12px; color: var(--md-sys-color-on-surface-variant); }
 .col-actions { width: 1%; white-space: nowrap; text-align: right; padding-right: 8px !important; }
 .sort-button { display: inline-flex; align-items: center; gap: 4px; border: 0; padding: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
 .sort-button md-icon { --md-icon-size: 16px; }
 .row--selected { background: color-mix(in srgb, var(--md-sys-color-secondary-container) 55%, transparent); }
-.name-cell { padding: 0 !important; }
-.name-cell-content { display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 600px; padding: 8px 10px; }
+.name-cell { padding: 0 !important; min-width: 0; }
+.name-cell-content { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; box-sizing: border-box; overflow: hidden; padding: 8px 10px; }
 .type-icon { flex: 0 0 auto; --md-icon-size: 20px; color: var(--md-sys-color-on-surface-variant); }
 .type-icon--directory { color: var(--md-sys-color-primary); }
-.name-link { border: 0; padding: 0; background: none; color: var(--md-sys-color-on-surface); font-family: 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; cursor: pointer; text-align: left; word-break: break-word; hyphens: auto; }
+.name-link { display: block; flex: 1 1 auto; min-width: 0; max-width: 100%; border: 0; padding: 0; background: none; color: var(--md-sys-color-on-surface); font-family: 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; cursor: pointer; text-align: left; overflow-wrap: anywhere; word-break: break-word; white-space: normal; hyphens: auto; }
 .name-link:hover { color: var(--md-sys-color-primary); text-decoration: underline; }
 .cell-actions { text-align: right; white-space: nowrap; padding-right: 4px !important; }
-.cell-actions { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
+.cell-actions-content { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
+.mobile-actions { display: none; position: relative; justify-content: flex-end; }
+.mobile-actions md-menu { --md-menu-container-shape: 8px; }
 .actions-left { display: flex; align-items: center; flex-shrink: 0; }
 .actions-right { display: flex; align-items: center; flex-shrink: 0; margin-left: auto; }
 .count-note { padding: 12px 0 0; margin: 0; font-size: 12px; color: var(--md-sys-color-on-surface-variant); }
@@ -1327,5 +1443,11 @@ onBeforeUnmount(() => {
   .search { flex: 1 1 100%; }
   .preview-body { min-width: 0; }
   .col-time { display: none; }
+  .data-table { min-width: 640px; }
+  .data-table th:nth-child(2), .data-table td:nth-child(2) { width: auto; }
+  .data-table th:nth-child(3), .data-table td:nth-child(3) { width: 76px; }
+  .data-table th:nth-child(5), .data-table td:nth-child(5) { width: 64px; }
+  .desktop-actions { display: none; }
+  .mobile-actions { display: flex; }
 }
 </style>

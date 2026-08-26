@@ -194,7 +194,7 @@ onBeforeUnmount(() => {
             <span slot="headline" :class="{ 'label--active': isActive('/account') }">{{ accountLabel }}</span>
           </md-list-item>
         </div>
-        <AppScrollbar :target="mobileNavList" label="侧边栏滚动条" />
+        <AppScrollbar v-if="drawerOpen" :target="mobileNavList" label="侧边栏滚动条" />
       </md-navigation-drawer-modal>
 
       <main class="content">
@@ -343,6 +343,13 @@ onBeforeUnmount(() => {
   gap: 4px;
   overflow-x: hidden;
   overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.collapsed-nav-list::-webkit-scrollbar,
+.nav-list::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 .collapsed-nav-item--active {
@@ -374,6 +381,10 @@ md-navigation-drawer-modal.drawer-modal--open {
   pointer-events: auto;
 }
 
+md-navigation-drawer-modal:not(.drawer-modal--open) {
+  visibility: hidden;
+}
+
 .drawer-content {
   height: 100%;
   min-height: 0;
@@ -388,6 +399,7 @@ md-navigation-drawer-modal.drawer-modal--open {
   overflow-x: hidden;
   overflow-y: auto;
   padding-top: 8px;
+  scrollbar-width: none;
 }
 
 .logout-item {

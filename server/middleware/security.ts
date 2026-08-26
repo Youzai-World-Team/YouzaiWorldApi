@@ -1,6 +1,7 @@
 const TRUSTED_WEB_ORIGINS = new Set(['https://mcyzw.top', 'https://www.mcyzw.top', 'https://api.mcyzw.top'])
 const LOCAL_DEVELOPMENT_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1'])
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
+const MCSM_UPLOAD_CHUNK_MAX_BYTES = 128 * 1024
 
 function isTrustedWebOrigin(origin: string): boolean {
   if (TRUSTED_WEB_ORIGINS.has(origin)) return true
@@ -50,14 +51,13 @@ export default defineEventHandler((event) => {
   const contentLengthHeader = getHeader(event, 'content-length')
   const contentLength = Number(contentLengthHeader || 0)
   // multipart 还包含边界和字段头；实际图片仍由上传接口限制为 2 MiB。
-  // 「服务器文件」页的上传是把原始字节直接 PUT 上来再转发给守护进程，
-  // 模组包动辄几十 MB，因此单独放到 256 MiB（与 mcsm-files.ts 的 UPLOAD_MAX_BYTES 一致，
-  // 精确的体积校验在那个接口里做）。
+  // 服务器文件上传使用 upload-chunk 分块接口，单块体积由下面的 128 KiB
+  // 限制，完整文件上限仍由接口校验。
   const path = event.path.split('?')[0] || event.path
   const maxBytes = path === '/api/upload'
     ? 2 * 1024 * 1024 + 64 * 1024
-    : path === '/api/admin/mcsm/files/upload'
-      ? 256 * 1024 * 1024
+    : path === '/api/admin/mcsm/files/upload-chunk'
+      ? MCSM_UPLOAD_CHUNK_MAX_BYTES
       : 256 * 1024
   if (!Number.isFinite(contentLength) || contentLength < 0 || contentLength > maxBytes) {
     throw createError({ statusCode: 413, statusMessage: '请求体过大' })

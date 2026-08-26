@@ -237,7 +237,7 @@ MCSManager 没有备份接口，这里用它的文件接口实现：`POST /api/f
   - **PDF**：iframe 内联展示
   - **压缩包**：显示 `.zip`/`.jar` 内的文件列表
 - **编辑**：文本文件可以在 Monaco 里直接改并保存，支持语法高亮、自动缩进、查找替换
-- **上传**：支持拖拽，逐个上传并显示进度条，单文件上限 256 MiB
+- **上传**：支持拖拽，逐个分块上传并显示进度条，单文件上限 256 MiB；分块可避开反向代理对单个请求体的默认限制
 - **下载**：同源代理转发，避免混合内容拦截与 CORS
 - **增删改**：新建目录/文件、重命名、复制/移动到其他目录、批量删除（递归，无回收站）
 - **压缩/解压**：把选中项打包成 zip（最多 50 项），或把 zip 解压到当前目录
@@ -303,7 +303,7 @@ MCSManager 没有备份接口，这里用它的文件接口实现：`POST /api/f
 | `POST /api/admin/mcsm/files/transfer` | 批量复制或移动 | `server-files` `edit` |
 | `POST /api/admin/mcsm/files/delete` | 批量删除 | `server-files` `edit` |
 | `POST /api/admin/mcsm/files/archive` | 压缩/解压 | `server-files` `edit` |
-| `PUT /api/admin/mcsm/files/upload` | 上传（流式代理到守护进程） | `server-files` `edit` |
+| `PUT /api/admin/mcsm/files/upload-chunk` | 分块上传（完成后流式代理到守护进程） | `server-files` `edit` |
 | `GET /api/admin/mcsm-settings` | 读取面板地址、备份目录与「ApiKey 是否已配置」 | `settings-mcsm` `view` |
 | `PATCH /api/admin/mcsm-settings` | 保存面板配置并测试连通性 | `settings-mcsm` `edit` |
 

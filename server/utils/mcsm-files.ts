@@ -13,7 +13,7 @@ import { getAdminMcsmConfig } from './db'
  * <p>
  * 下载和上传都是「先换一次性票据、再直连守护进程」两步式。浏览器直连守护进程会
  * 撞上混合内容与 CSP，所以这两条都由本服务端代理转发（见 {@code files/raw.get.ts}
- * 与 {@code files/upload.put.ts}）。
+ * 与 {@code files/upload-chunk.put.ts}）。
  * </p>
  */
 
@@ -24,6 +24,8 @@ export const TEXT_FILE_MAX_CHARS = 512 * 1024
 export const INLINE_PREVIEW_MAX_BYTES = 64 * 1024 * 1024
 // 上传上限：模组包通常几十 MB，给到 256 MiB 足够，同时避免被当成无限上传通道。
 export const UPLOAD_MAX_BYTES = 256 * 1024 * 1024
+// 浏览器分块上传的单块大小，低于常见反向代理的 1 MiB 请求体默认值。
+export const UPLOAD_CHUNK_MAX_BYTES = 128 * 1024
 
 const TEXT_EXTENSIONS = new Set([
   'properties', 'json', 'json5', 'jsonc', 'mcmeta', 'yml', 'yaml', 'toml',
