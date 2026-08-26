@@ -13,6 +13,8 @@ export default defineEventHandler((event) => {
 
   const method = event.method.toUpperCase()
   const readOperation = isReadOperation(path, method)
+  // 官网下载页需要匿名读取项目列表；新增、修改和删除仍受下载项目页面权限保护。
+  if (path === '/api/downloads' && readOperation) return
   if (readOperation && !getAuthenticatedUser(event)) return
   requirePagePermission(event, pageKey, readOperation ? 'view' : 'edit')
 })

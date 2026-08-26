@@ -130,6 +130,16 @@ db.exec(`
     release_time TEXT,
     changelog TEXT
   );
+  CREATE TABLE IF NOT EXISTS downloads (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL,
+    name TEXT NOT NULL,
+    url TEXT NOT NULL,
+    version TEXT NOT NULL,
+    description TEXT NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL DEFAULT 0
+  );
   CREATE TABLE IF NOT EXISTS game_accounts (
     username_lower TEXT PRIMARY KEY,
     username TEXT NOT NULL,
@@ -1293,6 +1303,67 @@ export function updateUpdate(item: UpdateEntry) {
 
 export function deleteUpdate(id: string) {
   run('DELETE FROM updates WHERE id = ?', id)
+}
+
+export type DownloadProjectType = '整合包' | '模组'
+
+export interface DownloadProject {
+  id: string
+  type: DownloadProjectType
+  name: string
+  url: string
+  version: string
+  description: string
+  createdAt: number
+  updatedAt: number
+}
+
+function mapDownloadProject(row: Record<string, unknown>): DownloadProject {
+  return {
+    id: row.id as string,
+    type: row.type as DownloadProjectType,
+    name: row.name as string,
+    url: row.url as string,
+    version: row.version as string,
+    description: row.description as string,
+    createdAt: Number(row.created_at || 0),
+    updatedAt: Number(row.updated_at || 0),
+  }
+}
+
+export function listDownloadProjects(): DownloadProject[] {
+  return all('SELECT id, type, name, url, version, description, created_at, updated_at FROM downloads ORDER BY rowid DESC').map(mapDownloadProject)
+}
+
+export function insertDownloadProject(item: DownloadProject) {
+  run(
+    'INSERT INTO downloads (id, type, name, url, version, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    item.id,
+    item.type,
+    item.name,
+    item.url,
+    item.version,
+    item.description,
+    item.createdAt,
+    item.updatedAt,
+  )
+}
+
+export function updateDownloadProject(item: DownloadProject) {
+  run(
+    'UPDATE downloads SET type = ?, name = ?, url = ?, version = ?, description = ?, updated_at = ? WHERE id = ?',
+    item.type,
+    item.name,
+    item.url,
+    item.version,
+    item.description,
+    item.updatedAt,
+    item.id,
+  )
+}
+
+export function deleteDownloadProject(id: string) {
+  run('DELETE FROM downloads WHERE id = ?', id)
 }
 
 /** 访客只填昵称；玩家用游戏账户登录；管理员由后台代发。 */

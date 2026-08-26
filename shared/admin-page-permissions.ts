@@ -37,6 +37,7 @@ export const ADMIN_PAGE_DEFINITIONS: AdminPageDefinition[] = [
   { key: 'donors', label: '捐赠列表', route: '/donors', icon: 'redeem', defaultLevel: 'edit' },
   { key: 'bans', label: '封禁列表', route: '/bans', icon: 'gavel', defaultLevel: 'edit' },
   { key: 'updates', label: '更新服务', route: '/updates', icon: 'system_update', defaultLevel: 'edit' },
+  { key: 'downloads', label: '下载项目', route: '/downloads', icon: 'download', defaultLevel: 'edit' },
   // 这一页能停服和发送任意后台命令，默认只给「查看」：新管理员先能看控制台，
   // 需要动电源和发命令时再由所有者单独放开到「编辑」。
   { key: 'server-manage', label: '服务器管理', route: '/server-manage', icon: 'dns', defaultLevel: 'view' },

@@ -27,6 +27,7 @@ export function pageKeyForApi(path: string): string | undefined {
   if (path.startsWith('/api/donors')) return 'donors'
   if (path.startsWith('/api/bans')) return 'bans'
   if (path.startsWith('/api/updates')) return 'updates'
+  if (path.startsWith('/api/downloads')) return 'downloads'
   return undefined
 }
 
