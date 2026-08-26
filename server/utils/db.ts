@@ -1332,7 +1332,7 @@ function mapDownloadProject(row: Record<string, unknown>): DownloadProject {
 }
 
 export function listDownloadProjects(): DownloadProject[] {
-  return all('SELECT id, type, name, url, version, description, created_at, updated_at FROM downloads ORDER BY rowid DESC').map(mapDownloadProject)
+  return all('SELECT id, type, name, url, version, description, created_at, updated_at FROM downloads WHERE type IN (\'整合包\', \'模组\') ORDER BY rowid DESC').map(mapDownloadProject)
 }
 
 export function insertDownloadProject(item: DownloadProject) {
@@ -4127,6 +4127,11 @@ async function readJsonFile<T>(file: string): Promise<T | null> {
 }
 
 export async function migrateFromJson() {
+  if (getSetting('downloads.launchers_removed') !== 'true') {
+    run("DELETE FROM downloads WHERE type = '启动器'")
+    deleteSetting('downloads.default_launchers_seeded')
+    setSetting('downloads.launchers_removed', 'true')
+  }
   const config = await readJsonFile<{ password?: string; entry?: string }>('config.json')
   const legacyPassword = getSetting('password') || config?.password || ''
   const configuredPassword = process.env[ADMIN_PASSWORD_ENV]?.trim() || ''
