@@ -311,6 +311,8 @@ MCSManager 没有备份接口，这里用它的文件接口实现：`POST /api/f
 
 ## GitHub Release 自动部署
 
+远端服务器的完整配置步骤请参阅 [DEPLOYMENT.md](./DEPLOYMENT.md)。
+
 仓库中的 `.github/workflows/release.yml` 监听 GitHub Release 的 `published` 事件。创建并正式发布 Release 后，GitHub Actions 会使用 Node.js 22 与 pnpm 安装锁定依赖、执行 `pnpm run build`，把 `.output` **目录内的内容**打包成 zip，再携带部署令牌上传到 `POST /api/deploy`，最后轮询公开接口确认重启后的 API 已恢复响应。同一仓库的多个 Release 部署会排队执行。草稿和仅创建 tag 不会触发；预发布版本只要执行了 Publish 也会触发。
 
 首次上线仍需人工准备生产目录、完成一次构建并注册进程守护服务，因为尚未运行的 API 无法接收部署包。此后每次发布 Release 才能通过下面的流程更新：
