@@ -18,7 +18,9 @@ function isTrustedWebOrigin(origin: string): boolean {
 
 export default defineEventHandler((event) => {
   setResponseHeaders(event, {
-    'Cache-Control': event.path.startsWith('/api/auth/') || event.path.startsWith('/api/admin/')
+    'Cache-Control': event.path.startsWith('/api/auth/')
+      || event.path.startsWith('/api/admin/')
+      || event.path === '/api/deploy'
       ? 'no-store'
       : 'no-cache',
     'Content-Security-Policy': "default-src 'self'; base-uri 'self'; connect-src 'self' https://mcyzw.top https://challenges.cloudflare.com; font-src 'self' https://fonts.gstatic.com data:; form-action 'self'; frame-ancestors 'none'; frame-src https://challenges.cloudflare.com; img-src 'self' data: blob:; object-src 'none'; script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
@@ -32,11 +34,12 @@ export default defineEventHandler((event) => {
   })
 
   const method = event.method.toUpperCase()
-  // /api/game/ 与 /api/inbound-mail 由各自的 HMAC 中间件把关：调用方是服务器模组和
-  // Cloudflare Email Worker，不带 Origin，也不受这里的 256 KiB 体积上限约束。
+  // /api/game/、/api/inbound-mail 与 /api/deploy 由各自的签名/令牌校验把关：调用方是服务器模组、
+  // Cloudflare Email Worker 或 GitHub Actions，不带 Origin，也不受这里的 256 KiB 体积上限约束。
   if (!MUTATING_METHODS.has(method)
     || event.path.startsWith('/api/game/')
-    || event.path === '/api/inbound-mail') return
+    || event.path === '/api/inbound-mail'
+    || event.path === '/api/deploy') return
 
   const origin = getHeader(event, 'origin')
   if (origin && !isTrustedWebOrigin(origin)) {

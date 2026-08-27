@@ -309,6 +309,54 @@ MCSManager 没有备份接口，这里用它的文件接口实现：`POST /api/f
 
 下载虽然只是换个地址，但拿到它等于能把整个世界拷走，因此也按「备份管理」把关并记入操作记录。
 
+## GitHub Release 自动部署
+
+仓库中的 `.github/workflows/release.yml` 监听 GitHub Release 的 `published` 事件。创建并正式发布 Release 后，GitHub Actions 会使用 Node.js 22 与 pnpm 安装锁定依赖、执行 `pnpm run build`，把 `.output` **目录内的内容**打包成 zip，再携带部署令牌上传到 `POST /api/deploy`，最后轮询公开接口确认重启后的 API 已恢复响应。同一仓库的多个 Release 部署会排队执行。草稿和仅创建 tag 不会触发；预发布版本只要执行了 Publish 也会触发。
+
+首次上线仍需人工准备生产目录、完成一次构建并注册进程守护服务，因为尚未运行的 API 无法接收部署包。此后每次发布 Release 才能通过下面的流程更新：
+
+```text
+GitHub Release (published)
+  -> GitHub Actions 构建 .output
+  -> POST <DEPLOY_URL>/api/deploy
+  -> 校验令牌与 zip
+  -> 暂存并校验 Nuxt 产物
+  -> 原子替换生产目录的 .output
+  -> 退出或执行重启命令
+  -> 进程守护器拉起新版本
+```
+
+### GitHub Secrets
+
+在仓库 `Settings -> Secrets and variables -> Actions` 中配置：
+
+| Secret | 内容 |
+|--------|------|
+| `DEPLOY_URL` | 已运行 API 的外部地址，例如 `https://api.mcyzw.top`，不要带 `/api/deploy` |
+| `DEPLOY_TOKEN` | 随机部署令牌，必须与生产环境 `YZWC_DEPLOY_TOKEN` 完全一致；至少 32 个字符且不含空白 |
+
+部署地址必须允许 GitHub Actions 访问 `POST /api/deploy`。若前面有 Cloudflare、Nginx 或其他反向代理，还要确认其请求体上限和超时时间能够接收部署包；应用自身限制压缩包最多 100 MiB。
+
+### 生产环境
+
+可从 `.env.example` 复制部署相关配置：
+
+```dotenv
+YZWC_DEPLOY_TOKEN=replace-with-at-least-32-random-characters
+YZWC_DEPLOY_ROOT=/srv/youzai-world-api
+# YZWC_DEPLOY_RESTART_COMMAND=pm2 restart YouzaiWorldApi
+```
+
+- `YZWC_DEPLOY_ROOT` 是包含 `.output` 与持久化 `server/data` 的生产根目录；未配置时使用进程工作目录。生产服务的工作目录也应指向该根目录，否则数据库与上传文件会落到别处。
+- Nitro 生产进程不会自动读取项目根目录的 `.env`；请把这些变量注入 systemd、PM2 或容器的进程环境后再启动服务。
+- 未配置 `YZWC_DEPLOY_RESTART_COMMAND` 时，接口返回成功约 1.5 秒后进程以退出码 0 退出，应由 systemd、PM2 或容器自动拉起。systemd 需使用 `Restart=always`，不能只用 `Restart=on-failure`。
+- 配置了 `YZWC_DEPLOY_RESTART_COMMAND` 时，服务会在成功响应后从部署根目录异步执行该命令；该命令必须确实能重启当前实例。
+- 部署只替换 `.output`，不会改动 `server/data`、环境变量或其他生产文件。更新前的产物保留在 `.deploy/previous-output`，只保留最近一版；需要回滚时先停止服务，再将它恢复为 `.output` 后重新启动。
+
+部署端点使用常量时间比较验证 `X-Deploy-Token`，并拒绝空包、CRC 错误、绝对路径、路径穿越、符号链接、重复路径和超额归档。zip 根目录必须直接包含 Nitro 运行入口 `server/index.mjs`，不能额外套一层 `.output/` 目录；其他文件（例如 `public/`、`nitro.json`）由 `pnpm run build` 自动生成并随包上传。解压后上限为 512 MiB、条目上限为 20,000；同一时间只允许一个部署任务。只有产物完成暂存和校验后才交换目录，交换失败会尝试恢复原 `.output`。
+
+Actions 页面中的 Release Deploy 任务全部成功，才表示部署包已替换且重启后的公开 API 已恢复响应。若失败，按 HTTP 状态排查：`400` 表示 zip 损坏、路径或产物结构不合规，`401` 表示令牌不一致，`409` 表示已有部署任务，`411` 表示反向代理移除了 `Content-Length`，`413` 表示压缩包过大，`415` 表示上传类型不是 zip，`503` 表示生产环境没有配置有效令牌；其他 `500` 表示暂存或目录交换等服务器内部错误。上传成功但最后的健康检查失败，通常表示进程守护服务没有重新拉起 API，或新版本启动失败。
+
 首次启动后访问根目录 `/`，设置首个后台用户名（3 至 32 位）、密码（12 至 128 位）、登录入口（12 至 64 位），以及 Turnstile 站点密钥、服务端密钥和允许的前端 hostname。
 设置成功后初始化接口会永久关闭，后续只能通过该入口登录。也可在首次启动前同时配置
 `YZWC_ADMIN_USERNAME`、`YZWC_ADMIN_PASSWORD` 和 `YZWC_ADMIN_ENTRY` 进行无人值守初始化。

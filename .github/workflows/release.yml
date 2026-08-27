@@ -1,0 +1,62 @@
+name: Release Deploy
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Package
+        working-directory: .output
+        run: zip -r ../deploy.zip .
+
+      - name: Upload to API server
+        env:
+          DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
+          DEPLOY_URL: ${{ secrets.DEPLOY_URL }}
+        run: |
+          DEPLOY_URL="${DEPLOY_URL%/}"
+          curl --fail-with-body --show-error --silent -X POST \
+            --connect-timeout 15 \
+            --max-time 300 \
+            -H "X-Deploy-Token: $DEPLOY_TOKEN" \
+            -H "Content-Type: application/zip" \
+            --data-binary @deploy.zip \
+            "$DEPLOY_URL/api/deploy"
+
+      - name: Verify restarted API
+        env:
+          DEPLOY_URL: ${{ secrets.DEPLOY_URL }}
+        run: |
+          DEPLOY_URL="${DEPLOY_URL%/}"
+          sleep 3
+          curl --fail --show-error --silent \
+            --retry 10 \
+            --retry-delay 3 \
+            --retry-all-errors \
+            "$DEPLOY_URL/api/downloads" > /dev/null
