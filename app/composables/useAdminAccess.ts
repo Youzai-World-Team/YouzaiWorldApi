@@ -22,6 +22,19 @@ export interface AdminAccessUser {
 
 let accessLoadPromise: Promise<AdminAccessUser> | null = null
 
+function normalizeAccessUser(current: AdminAccessUser): AdminAccessUser {
+  const permissions = Object.fromEntries(ADMIN_PAGE_DEFINITIONS.map((page) => [
+    page.key,
+    current.permissions?.[page.key] ?? (current.isOwner ? (page.readOnly ? 'view' : 'edit') : page.defaultLevel),
+  ])) as Record<string, AdminPagePermissionLevel>
+  const featurePermissions = Object.fromEntries(ADMIN_FEATURE_DEFINITIONS.map((feature) => [
+    feature.key,
+    current.featurePermissions?.[feature.key] ?? (current.isOwner ? 'edit' : feature.defaultLevel),
+  ])) as Record<string, AdminFeaturePermissionLevel>
+
+  return { ...current, permissions, featurePermissions }
+}
+
 export function useAdminAccess() {
   const user = useState<AdminAccessUser | null>('admin-access-user', () => null)
 
@@ -30,8 +43,9 @@ export function useAdminAccess() {
     if (!accessLoadPromise) {
       accessLoadPromise = $fetch<{ user: AdminAccessUser }>('/api/auth/me')
         .then((result) => {
-          user.value = result.user
-          return result.user
+          const normalized = normalizeAccessUser(result.user)
+          user.value = normalized
+          return normalized
         })
         .finally(() => {
           accessLoadPromise = null

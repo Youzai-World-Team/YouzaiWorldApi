@@ -57,6 +57,10 @@ const editTarget = ref<GameTitle | null>(null)
 const editorOpen = ref(false)
 const playerTarget = ref<PlayerTitles | null>(null)
 const saving = ref(false)
+const pendingOperation = ref('')
+const editorDialog = ref<HTMLElement | null>(null)
+const playerDialog = ref<HTMLElement | null>(null)
+const { apply: applyDialogAnimation } = useDialogAnimation()
 
 const form = ref({
   id: '',
@@ -156,7 +160,11 @@ function closeEditor() {
 }
 
 async function saveTitle() {
-  if (!canEditCatalog.value || saving.value) return
+  if (!canEditCatalog.value) {
+    showToast('当前账户没有称号目录的修改权限', 'error')
+    return
+  }
+  if (saving.value) return
   saving.value = true
   try {
     const path = editTarget.value
@@ -174,7 +182,13 @@ async function saveTitle() {
 }
 
 async function changeGrant(player: PlayerTitles, title: GameTitle, action: 'grant' | 'revoke') {
-  if (!canEditGrants.value) return
+  if (!canEditGrants.value) {
+    showToast('当前账户没有玩家称号授权权限', 'error')
+    return
+  }
+  const operation = `${action}:${player.username}:${title.id}`
+  if (pendingOperation.value) return
+  pendingOperation.value = operation
   try {
     await $fetch('/api/admin/game-titles/grants', {
       method: 'POST',
@@ -184,11 +198,19 @@ async function changeGrant(player: PlayerTitles, title: GameTitle, action: 'gran
     await loadOverview()
   } catch (error: any) {
     showToast(error?.data?.statusMessage || '称号授权操作失败', 'error')
+  } finally {
+    if (pendingOperation.value === operation) pendingOperation.value = ''
   }
 }
 
 async function equipForPlayer(player: PlayerTitles, titleId: string | null) {
-  if (!canEditGrants.value) return
+  if (!canEditGrants.value) {
+    showToast('当前账户没有玩家称号授权权限', 'error')
+    return
+  }
+  const operation = `equip:${player.username}:${titleId || 'none'}`
+  if (pendingOperation.value) return
+  pendingOperation.value = operation
   try {
     await $fetch('/api/admin/game-titles/selection', {
       method: 'PATCH', body: { username: player.username, title_id: titleId },
@@ -197,14 +219,29 @@ async function equipForPlayer(player: PlayerTitles, titleId: string | null) {
     await loadOverview()
   } catch (error: any) {
     showToast(error?.data?.statusMessage || '佩戴状态更新失败', 'error')
+  } finally {
+    if (pendingOperation.value === operation) pendingOperation.value = ''
   }
+}
+
+function operationPending(operation: string, player: PlayerTitles, titleId: string | null) {
+  return pendingOperation.value === `${operation}:${player.username}:${titleId || 'none'}`
 }
 
 function setRenderType(event: Event) {
   form.value.render_type = (event.target as HTMLSelectElement).value as RenderType
 }
 
-onMounted(loadOverview)
+onMounted(async () => {
+  try {
+    await access.load(true)
+    await loadOverview()
+  } catch (error: any) {
+    showToast(error?.data?.statusMessage || '称号管理初始化失败', 'error')
+  }
+  applyDialogAnimation(editorDialog.value)
+  applyDialogAnimation(playerDialog.value)
+})
 </script>
 
 <template>
@@ -274,7 +311,7 @@ onMounted(loadOverview)
       </div>
     </template>
 
-    <md-dialog :open="editorOpen" @closed="closeEditor">
+    <md-dialog ref="editorDialog" :open="editorOpen" :aria-busy="saving ? 'true' : 'false'" @closed="closeEditor">
       <div slot="headline">{{ editTarget ? '编辑称号' : '新建称号' }}</div>
       <div slot="content" class="dialog-form title-editor">
         <md-outlined-text-field label="称号 ID" :readonly="!!editTarget" :value="form.id" @input="form.id = ($event.target as HTMLInputElement).value"></md-outlined-text-field>
@@ -294,23 +331,23 @@ onMounted(loadOverview)
         </template>
         <div class="check-row"><label><md-checkbox :checked="form.bold" @change="form.bold = !form.bold"></md-checkbox>粗体</label><label><md-checkbox :checked="form.italic" @change="form.italic = !form.italic"></md-checkbox>斜体</label><label><md-checkbox :checked="form.enabled" @change="form.enabled = !form.enabled"></md-checkbox>启用</label></div>
       </div>
-      <div slot="actions"><md-text-button @click="closeEditor">取消</md-text-button><md-filled-button :disabled="saving" @click="saveTitle">{{ saving ? '保存中…' : '保存' }}</md-filled-button></div>
+      <div slot="actions"><md-text-button :disabled="saving" @click="closeEditor">取消</md-text-button><md-filled-button :disabled="saving" @click="saveTitle">{{ saving ? '保存中…' : '保存' }}</md-filled-button></div>
     </md-dialog>
 
-    <md-dialog :open="!!playerTarget" @closed="playerTarget = null">
+    <md-dialog ref="playerDialog" :open="!!playerTarget" :aria-busy="pendingOperation ? 'true' : 'false'" @closed="playerTarget = null">
       <div slot="headline">管理 {{ playerTarget?.username }} 的称号</div>
       <div slot="content" class="grant-list">
-        <div class="unequip-row"><span>当前佩戴：{{ playerTarget ? equippedName(playerTarget) : '' }}</span><md-text-button v-if="canEditGrants && playerTarget?.equipped_title_id" @click="equipForPlayer(playerTarget!, null)">卸下</md-text-button></div>
+        <div class="unequip-row"><span>当前佩戴：{{ playerTarget ? equippedName(playerTarget) : '' }}</span><md-text-button v-if="canEditGrants && playerTarget?.equipped_title_id" :disabled="!!pendingOperation" @click="equipForPlayer(playerTarget!, null)">{{ playerTarget && operationPending('equip', playerTarget, null) ? '卸下中…' : '卸下' }}</md-text-button></div>
         <div v-for="title in overview.titles" :key="title.id" class="grant-row">
           <div><strong>{{ title.display_name }}</strong><span v-if="!title.enabled" class="disabled-badge">已停用</span><div class="source-list"><span v-for="grant in grantsFor(playerTarget!, title.id)" :key="`${grant.source}-${grant.source_key}`">{{ sourceLabel(grant.source) }}</span><span v-if="!grantsFor(playerTarget!, title.id).length">尚未拥有</span></div></div>
           <div class="grant-actions">
-            <md-icon-button v-if="canEditGrants && title.enabled && playerTarget?.owned_title_ids.includes(title.id) && playerTarget.equipped_title_id !== title.id" aria-label="佩戴称号" title="佩戴称号" @click="equipForPlayer(playerTarget!, title.id)"><md-icon>check_circle</md-icon></md-icon-button>
-            <md-icon-button v-if="canEditGrants && title.enabled && !playerTarget?.owned_title_ids.includes(title.id)" aria-label="授予称号" title="授予称号" @click="changeGrant(playerTarget!, title, 'grant')"><md-icon>add_circle</md-icon></md-icon-button>
-            <md-icon-button v-if="canEditGrants && hasEditableGrant(playerTarget!, title.id)" aria-label="回收称号" title="仅回收注册和手动来源" @click="changeGrant(playerTarget!, title, 'revoke')"><md-icon>remove_circle</md-icon></md-icon-button>
+            <md-icon-button v-if="canEditGrants && title.enabled && playerTarget?.owned_title_ids.includes(title.id) && playerTarget.equipped_title_id !== title.id" aria-label="佩戴称号" title="佩戴称号" :disabled="!!pendingOperation" @click="equipForPlayer(playerTarget!, title.id)"><md-icon>{{ playerTarget && operationPending('equip', playerTarget, title.id) ? 'progress_activity' : 'check_circle' }}</md-icon></md-icon-button>
+            <md-icon-button v-if="canEditGrants && title.enabled && !playerTarget?.owned_title_ids.includes(title.id)" aria-label="授予称号" title="授予称号" :disabled="!!pendingOperation" @click="changeGrant(playerTarget!, title, 'grant')"><md-icon>{{ playerTarget && operationPending('grant', playerTarget, title.id) ? 'progress_activity' : 'add_circle' }}</md-icon></md-icon-button>
+            <md-icon-button v-if="canEditGrants && hasEditableGrant(playerTarget!, title.id)" aria-label="回收称号" title="仅回收注册和手动来源" :disabled="!!pendingOperation" @click="changeGrant(playerTarget!, title, 'revoke')"><md-icon>{{ playerTarget && operationPending('revoke', playerTarget, title.id) ? 'progress_activity' : 'remove_circle' }}</md-icon></md-icon-button>
           </div>
         </div>
       </div>
-      <div slot="actions"><md-text-button @click="playerTarget = null">关闭</md-text-button></div>
+      <div slot="actions"><md-text-button :disabled="!!pendingOperation" @click="playerTarget = null">关闭</md-text-button></div>
     </md-dialog>
   </div>
 </template>

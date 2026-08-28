@@ -14,6 +14,17 @@ export interface DomainMailTemplateData {
   senderRole: string
 }
 
+const DOMAIN_MAIL_SOURCE_GUIDES: Record<keyof DomainMailTemplateData, string> = {
+  subject: 'HTML 文档标题；实际邮件主题请使用写信窗口顶部的“主题”输入框',
+  preheader: '邮箱邮件列表中显示的预览摘要',
+  eyebrow: '眉题，例如通知类型或栏目名称',
+  heading: '邮件正文标题',
+  greeting: '问候语',
+  body: '邮件正文，可在此注释后填写文本或行内 HTML',
+  senderName: '署名',
+  senderRole: '署名职位',
+}
+
 interface DomainMailCompositionInput {
   mode?: unknown
   fields?: unknown
@@ -72,6 +83,14 @@ export function defaultDomainMailTemplateData(): DomainMailTemplateData {
     senderName: '',
     senderRole: '',
   }
+}
+
+/** Build an editable source-mode starter without leaving visible placeholder text in the email. */
+export function buildDomainMailSourceTemplate(html: string): string {
+  return html.replace(/\{\{([A-Za-z][A-Za-z0-9]*)\}\}/g, (placeholder, field: string) => {
+    const guide = DOMAIN_MAIL_SOURCE_GUIDES[field as keyof DomainMailTemplateData]
+    return guide ? `<!-- [编辑指引：${guide}] -->` : placeholder
+  })
 }
 
 function tagContents(html: string, tag: string): string[] {

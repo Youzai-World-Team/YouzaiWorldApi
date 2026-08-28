@@ -1,5 +1,6 @@
 import { recordAudit, requireFeaturePermission, getSmtpTransportSettings } from '../../../utils/db'
 import { normalizeDomainMailAttachments } from '../../../utils/domain-mail-attachments'
+import { requireDomainMailSenderAddress } from '../../../utils/domain-mail-sender'
 import { requireEmailAddress } from '../../../utils/game-input'
 import { sendHtmlEmail } from '../../../utils/smtp'
 import {
@@ -31,8 +32,8 @@ export default defineEventHandler(async (event) => {
   const html = rendered.html
   const attachments = normalizeDomainMailAttachments(body?.attachments)
 
-  const senderAddress = user.isOwner && body?.fromAddress
-    ? requireEmailAddress(body.fromAddress)
+  const senderAddress = user.isOwner
+    ? requireDomainMailSenderAddress(body?.fromLocalPart ?? user.username)
     : `${user.username}@mcyzw.top`.toLowerCase()
   const senderName = user.isOwner && body?.fromName !== undefined
     ? textField(body.fromName, '发件人名称', 128)

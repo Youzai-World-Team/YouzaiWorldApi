@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 useHead({ title: '域名邮件' })
 
@@ -216,14 +216,16 @@ const composeTo = ref('')
 const composeSubject = ref('')
 const composeHtml = ref('')
 const composeFields = ref<Record<string, string>>({})
-const composeFromAddress = ref('')
+const composeFromLocalPart = ref('')
 const composeFromName = ref('')
-const composeSender = ref({ owner: false, defaultAddress: '', defaultName: '' })
+const composeSender = ref({ owner: false, defaultLocalPart: '', defaultAddress: '', defaultName: '' })
 const composeFile = ref<HTMLInputElement | null>(null)
 const composeFileName = ref('')
 const composeAttachmentInput = ref<HTMLInputElement | null>(null)
 const composeAttachments = ref<ComposeAttachment[]>([])
 const composeDialog = ref<HTMLElement | null>(null)
+const composeSourceEditor = ref<{ layout: () => void; focus: () => void } | null>(null)
+const composeSourceFullscreen = ref(false)
 const composePreviewDocument = ref('')
 const composePreviewLoading = ref(false)
 const composePreviewError = ref('')
@@ -231,6 +233,7 @@ const composePreviewBlockedImages = ref(0)
 const composePreviewTruncated = ref(false)
 let composePreviewTimer: ReturnType<typeof setTimeout> | null = null
 let composePreviewRequest = 0
+let composePreviousBodyOverflow = ''
 
 /** 收件前缀下拉：按实际收到过的 mailbox 归集，方便只看某个地址。 */
 const mailboxes = computed(() => [...new Set(mails.value.map((mail) => mail.mailbox).filter(Boolean))]
@@ -240,6 +243,7 @@ const unreadCount = computed(() => domainMailUnread.count.value
 const attachmentCount = computed(() => mails.value.reduce((total, mail) => total + mail.attachmentCount, 0))
 const composeAttachmentBytes = computed(() => composeAttachments.value
   .reduce((total, attachment) => total + attachment.file.size, 0))
+const composeSourceEditorHeight = computed(() => composeSourceFullscreen.value ? '100%' : '420px')
 const todayReceivedCount = computed(() => {
   const start = new Date()
   start.setHours(0, 0, 0, 0)
@@ -352,16 +356,47 @@ function onLinkDialogClosed() {
   linkBlocked.value = false
 }
 
+function setComposeSourceFullscreen(value: boolean) {
+  const nextValue = Boolean(value && composeOpen.value && composeMode.value === 'source')
+  if (nextValue === composeSourceFullscreen.value) return
+  if (nextValue) {
+    composePreviousBodyOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+  } else {
+    document.body.style.overflow = composePreviousBodyOverflow
+    composePreviousBodyOverflow = ''
+  }
+  composeSourceFullscreen.value = nextValue
+  void nextTick(() => {
+    composeSourceEditor.value?.layout()
+    composeSourceEditor.value?.focus()
+  })
+}
+
+function toggleComposeSourceFullscreen() {
+  setComposeSourceFullscreen(!composeSourceFullscreen.value)
+}
+
+function onComposeEditorKeydown(event: KeyboardEvent) {
+  if (event.key !== 'Escape' || !composeSourceFullscreen.value) return
+  event.preventDefault()
+  event.stopPropagation()
+  setComposeSourceFullscreen(false)
+}
+
 onMounted(() => {
   load()
   applyDialogAnimation(detailDialog.value)
   applyDialogAnimation(linkDialog.value)
   applyDialogAnimation(composeDialog.value)
   window.addEventListener('message', onFrameMessage)
+  window.addEventListener('keydown', onComposeEditorKeydown, true)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('message', onFrameMessage)
+  window.removeEventListener('keydown', onComposeEditorKeydown, true)
+  setComposeSourceFullscreen(false)
   if (composePreviewTimer) clearTimeout(composePreviewTimer)
 })
 
@@ -385,9 +420,10 @@ async function openCompose() {
   composeLoading.value = true
   try {
     const data = await $fetch<any>('/api/admin/domain-mails/compose-template')
+    composeHtml.value = data.sourceHtml || data.html || ''
     composeFields.value = { ...(data.fields || {}) }
     composeSubject.value = composeFields.value.subject || ''
-    composeFromAddress.value = data.sender?.defaultAddress || ''
+    composeFromLocalPart.value = data.sender?.defaultLocalPart || ''
     composeFromName.value = data.sender?.defaultName || ''
     composeSender.value = data.sender || composeSender.value
   } catch (error: any) {
@@ -401,6 +437,7 @@ async function openCompose() {
 
 function closeCompose() {
   if (!sending.value) {
+    setComposeSourceFullscreen(false)
     composeOpen.value = false
     composePreviewRequest += 1
     composePreviewLoading.value = false
@@ -409,6 +446,7 @@ function closeCompose() {
 }
 
 function onComposeClosed() {
+  setComposeSourceFullscreen(false)
   composeOpen.value = false
   composePreviewRequest += 1
   composePreviewLoading.value = false
@@ -588,11 +626,12 @@ async function sendCompose() {
       })))
     }
     if (composeSender.value.owner) {
-      payload.fromAddress = composeFromAddress.value
+      payload.fromLocalPart = composeFromLocalPart.value
       payload.fromName = composeFromName.value
     }
     await $fetch('/api/admin/domain-mails/send', { method: 'POST', body: payload })
     showToast('邮件已发送')
+    setComposeSourceFullscreen(false)
     composeOpen.value = false
   } catch (error: any) {
     showToast(error?.data?.statusMessage || error?.message || '邮件发送失败', 'error')
@@ -900,9 +939,6 @@ function readerInitial(reader: MailReader) {
     <md-dialog ref="composeDialog" class="compose-mail-dialog" :open="composeOpen" @closed="onComposeClosed">
       <div slot="headline">发送域名邮件</div>
       <div slot="content" class="compose-dialog">
-        <p v-if="!composeSender.owner" class="form-hint">
-          发件人：{{ composeSender.defaultName }} &lt;{{ composeSender.defaultAddress }}&gt;
-        </p>
         <div class="compose-grid">
           <md-outlined-text-field
             label="收件人"
@@ -915,27 +951,45 @@ function readerInitial(reader: MailReader) {
             @input="composeSubject = ($event.target as HTMLInputElement).value; onTemplateField('subject', composeSubject)"
           />
         </div>
-        <div v-if="composeSender.owner" class="compose-grid">
+        <div
+          class="compose-sender-grid"
+          :class="{
+            'compose-sender-grid--owner': composeSender.owner,
+            'compose-sender-grid--template': composeMode === 'template',
+          }"
+        >
+          <div v-if="composeSender.owner" class="compose-sender-fields">
+            <md-outlined-text-field
+              label="发件人名称"
+              :value="composeFromName"
+              @input="composeFromName = ($event.target as HTMLInputElement).value"
+            />
+            <md-outlined-text-field
+              label="发件地址"
+              suffix-text="@mcyzw.top"
+              spellcheck="false"
+              :value="composeFromLocalPart"
+              @input="composeFromLocalPart = ($event.target as HTMLInputElement).value"
+            />
+          </div>
+          <p v-else class="form-hint compose-sender-summary">
+            发件人：{{ composeSender.defaultName }} &lt;{{ composeSender.defaultAddress }}&gt;
+          </p>
           <md-outlined-text-field
-            label="自定义发件地址"
-            :value="composeFromAddress"
-            @input="composeFromAddress = ($event.target as HTMLInputElement).value"
-          />
-          <md-outlined-text-field
-            label="发件人名称"
-            :value="composeFromName"
-            @input="composeFromName = ($event.target as HTMLInputElement).value"
+            v-if="composeMode === 'template'"
+            label="预览摘要"
+            :value="composeFields.preheader"
+            @input="onTemplateField('preheader', ($event.target as HTMLInputElement).value)"
           />
         </div>
         <div class="compose-workspace">
           <section class="compose-editor">
             <div class="compose-mode">
-              <button type="button" class="view-tab" :class="{ 'view-tab--active': composeMode === 'template' }" @click="composeMode = 'template'">默认模板</button>
-              <button type="button" class="view-tab" :class="{ 'view-tab--active': composeMode === 'source' }" @click="composeMode = 'source'">HTML 源码</button>
+              <button type="button" class="view-tab" :class="{ 'view-tab--active': composeMode === 'template' }" @click="composeMode = 'template'">从模板创建邮件</button>
+              <button type="button" class="view-tab" :class="{ 'view-tab--active': composeMode === 'source' }" @click="composeMode = 'source'">自定义邮件</button>
             </div>
             <template v-if="composeMode === 'template'">
-              <div class="compose-grid">
-                <md-outlined-text-field label="预览摘要" :value="composeFields.preheader" @input="onTemplateField('preheader', ($event.target as HTMLInputElement).value)" />
+              <div class="compose-template-heading-fields">
                 <md-outlined-text-field label="眉题" :value="composeFields.eyebrow" @input="onTemplateField('eyebrow', ($event.target as HTMLInputElement).value)" />
                 <md-outlined-text-field label="标题" :value="composeFields.heading" @input="onTemplateField('heading', ($event.target as HTMLInputElement).value)" />
                 <md-outlined-text-field label="问候语" :value="composeFields.greeting" @input="onTemplateField('greeting', ($event.target as HTMLInputElement).value)" />
@@ -947,22 +1001,39 @@ function readerInitial(reader: MailReader) {
               </div>
             </template>
             <template v-else>
-              <CodeEditor
-                class="compose-source"
-                :model-value="composeHtml"
-                language="html"
-                height="420px"
-                aria-label="邮件 HTML 源码"
-                @update:model-value="onComposeHtmlChange"
-              />
-              <div class="compose-file-row">
-                <input ref="composeFile" class="compose-file-input" type="file" accept=".html,.htm,text/html" @change="onComposeFile">
-                <md-outlined-button @click="composeFile?.click()">
-                  <md-icon slot="icon">upload_file</md-icon>
-                  上传 HTML
-                </md-outlined-button>
-                <span v-if="composeFileName" class="compose-file-name">{{ composeFileName }}</span>
-              </div>
+              <section class="compose-source-panel" :class="{ 'compose-source-panel--fullscreen': composeSourceFullscreen }">
+                <div class="compose-source-toolbar">
+                  <div>
+                    <md-icon>code</md-icon>
+                    <strong>HTML 源码</strong>
+                    <span>{{ composeHtml.length.toLocaleString() }} 字符</span>
+                  </div>
+                  <md-icon-button
+                    :aria-label="composeSourceFullscreen ? '退出网页全屏编辑' : '网页全屏编辑'"
+                    :title="composeSourceFullscreen ? '退出网页全屏编辑' : '网页全屏编辑'"
+                    @click="toggleComposeSourceFullscreen"
+                  >
+                    <md-icon>{{ composeSourceFullscreen ? 'fullscreen_exit' : 'fullscreen' }}</md-icon>
+                  </md-icon-button>
+                </div>
+                <CodeEditor
+                  ref="composeSourceEditor"
+                  class="compose-source"
+                  :model-value="composeHtml"
+                  language="html"
+                  :height="composeSourceEditorHeight"
+                  aria-label="邮件 HTML 源码"
+                  @update:model-value="onComposeHtmlChange"
+                />
+                <div class="compose-file-row">
+                  <input ref="composeFile" class="compose-file-input" type="file" accept=".html,.htm,text/html" @change="onComposeFile">
+                  <md-outlined-button @click="composeFile?.click()">
+                    <md-icon slot="icon">upload_file</md-icon>
+                    上传 HTML
+                  </md-outlined-button>
+                  <span v-if="composeFileName" class="compose-file-name">{{ composeFileName }}</span>
+                </div>
+              </section>
             </template>
 
             <section class="compose-attachments" aria-labelledby="compose-attachments-title">
@@ -1391,10 +1462,23 @@ function readerInitial(reader: MailReader) {
 .compose-mail-dialog { --md-dialog-container-width: min(1180px, calc(100vw - 32px)); --md-dialog-container-max-width: min(1180px, calc(100vw - 32px)); }
 .compose-dialog { width: min(1100px, calc(100vw - 88px)); min-width: 0; display: flex; flex-direction: column; gap: 14px; }
 .compose-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.compose-sender-grid { min-width: 0; display: grid; gap: 12px; }
+.compose-sender-grid--owner, .compose-sender-grid--template { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.compose-sender-fields { min-width: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.compose-sender-summary { min-width: 0; min-height: 56px; margin: 0; display: flex; align-items: center; overflow-wrap: anywhere; }
+.compose-template-heading-fields { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
 .compose-body { width: 100%; }
 .compose-workspace { min-width: 0; display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(380px, .95fr); gap: 14px; align-items: start; }
 .compose-editor { min-width: 0; display: flex; flex-direction: column; gap: 12px; }
 .compose-mode { width: fit-content; display: flex; gap: 2px; padding: 3px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 7px; background: var(--md-sys-color-surface); }
+.compose-source-panel { min-width: 0; display: grid; grid-template-rows: auto minmax(0, auto) auto; gap: 10px; }
+.compose-source-toolbar { min-width: 0; min-height: 42px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 2px 4px 2px 10px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 7px; background: var(--md-sys-color-surface-container); }
+.compose-source-toolbar > div { min-width: 0; display: flex; align-items: center; gap: 7px; }
+.compose-source-toolbar md-icon { --md-icon-size: 17px; color: var(--md-sys-color-primary); }
+.compose-source-toolbar strong { font-size: 11px; }
+.compose-source-toolbar span { overflow: hidden; color: var(--md-sys-color-on-surface-variant); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.compose-source-panel--fullscreen { position: fixed; inset: 0; z-index: 1000; width: 100vw; height: 100vh; height: 100dvh; box-sizing: border-box; grid-template-rows: auto minmax(0, 1fr) auto; padding: 12px; overflow: hidden; background: var(--md-sys-color-surface); }
+.compose-source-panel--fullscreen .compose-source { min-height: 0; }
 .compose-file-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .compose-file-input { display: none; }
 .compose-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--md-sys-color-on-surface-variant); font-size: 13px; }
@@ -1477,6 +1561,7 @@ function readerInitial(reader: MailReader) {
   .detail-dialog-title > strong { max-width: calc(100vw - 100px); }
   .compose-dialog { width: 100%; }
   .compose-grid { grid-template-columns: 1fr; }
+  .compose-sender-grid--owner, .compose-sender-grid--template, .compose-sender-fields { grid-template-columns: 1fr; }
   .compose-attachments-heading { align-items: flex-start; }
   .compose-attachments-heading > div { padding-top: 9px; }
   .compose-preview-body, .compose-preview-frame, .compose-preview-empty { min-height: 360px; }

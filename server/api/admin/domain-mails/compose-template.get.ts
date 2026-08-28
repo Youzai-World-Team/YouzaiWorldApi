@@ -1,5 +1,6 @@
 import { requireFeaturePermission } from '../../../utils/db'
 import {
+  buildDomainMailSourceTemplate,
   defaultDomainMailTemplateData,
   parseDomainMailTemplate,
   readDomainMailTemplate,
@@ -12,9 +13,11 @@ export default defineEventHandler(async (event) => {
   const senderName = user.fullName || user.username
   return {
     html,
+    sourceHtml: buildDomainMailSourceTemplate(html),
     fields: { ...defaultDomainMailTemplateData(), ...parsed },
     sender: {
       owner: user.isOwner,
+      defaultLocalPart: user.username.toLowerCase(),
       defaultAddress: `${user.username}@mcyzw.top`.toLowerCase(),
       defaultName: senderName,
     },

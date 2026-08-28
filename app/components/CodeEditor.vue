@@ -114,6 +114,11 @@ async function create() {
     insertSpaces: true,
     wordWrap: 'off',
     scrollBeyondLastLine: false,
+    scrollbar: {
+      horizontal: 'visible',
+      horizontalScrollbarSize: 12,
+      alwaysConsumeMouseWheel: false,
+    },
     renderWhitespace: 'selection',
     padding: { top: 12, bottom: 12 },
     lineNumbersMinChars: 3,
@@ -153,7 +158,11 @@ watch(() => props.readonly, (readonly) => editor?.updateOptions({ readOnly: read
 function layout() {
   editor?.layout()
 }
-defineExpose({ layout })
+
+function focus() {
+  editor?.focus()
+}
+defineExpose({ layout, focus })
 
 onMounted(create)
 
@@ -188,20 +197,6 @@ onBeforeUnmount(() => {
 <style scoped>
 .monaco-wrap { position: relative; width: 100%; min-height: 160px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 8px; overflow: hidden; background: var(--md-sys-color-surface); }
 .monaco-host { width: 100%; height: 100%; }
-
-/* 强制修复 Monaco 文本偏移问题 */
-.monaco-host :deep(.monaco-editor .lines-content) {
-  left: 0 !important;
-}
-.monaco-host :deep(.monaco-editor .view-lines) {
-  left: 0 !important;
-}
-.monaco-host :deep(.monaco-editor .view-overlays) {
-  left: 0 !important;
-}
-.monaco-host :deep(.monaco-editor .cursors-layer) {
-  left: 0 !important;
-}
 
 .monaco-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--md-sys-color-on-surface-variant); font-size: 13px; pointer-events: none; }
 .monaco-failed { margin: 0; padding: 8px 12px; color: var(--md-sys-color-error); font-size: 12px; }
