@@ -4,6 +4,7 @@ export function pageKeyForApi(path: string): string | undefined {
   if (path.startsWith('/api/admin/permissions')) return 'permissions'
   if (path.startsWith('/api/admin/users')) return 'admin-users'
   if (path.startsWith('/api/admin/audit-logs')) return 'audit-logs'
+  if (path.startsWith('/api/admin/status')) return 'status'
   if (path.startsWith('/api/admin/turnstile')
     || path.startsWith('/api/admin/mcsm-settings')
     || path.startsWith('/api/auth/game-api-key')
@@ -19,6 +20,7 @@ export function pageKeyForApi(path: string): string | undefined {
     || path.startsWith('/api/admin/game-account-email-preview')
     || path.startsWith('/api/admin/game-account-uuid')) return 'game-accounts'
   if (path.startsWith('/api/admin/game-cosmetics')) return 'game-cosmetics'
+  if (path.startsWith('/api/admin/game-titles')) return 'game-titles'
   if (path.startsWith('/api/admin/domain-mails')) return 'domain-mail'
   if (path.startsWith('/api/admin/mails')) return 'mail'
   if (path.startsWith('/api/admin/chat')) return 'chat'

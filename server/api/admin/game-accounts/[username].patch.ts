@@ -1,8 +1,8 @@
 import { createError } from 'h3'
-import { deleteGameSessionsForUser, gameAccountWire, getGameAccount, hashGamePassword, requireAuth, upsertGameAccount } from '../../../utils/db'
+import { deleteGameSessionsForUser, gameAccountWire, getGameAccount, hashGamePassword, requireFeaturePermission, upsertGameAccount } from '../../../utils/db'
 
 export default defineEventHandler(async (event) => {
-  requireAuth(event)
+  requireFeaturePermission(event, 'game-accounts-manage', 'edit')
   const username = String(getRouterParam(event, 'username') || '').trim()
   const account = getGameAccount(username)
   if (!account) throw createError({ statusCode: 404, statusMessage: '账户不存在' })

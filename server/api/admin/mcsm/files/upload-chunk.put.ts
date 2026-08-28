@@ -2,7 +2,7 @@ import { createWriteStream } from 'node:fs'
 import { mkdir, readdir, rm, stat } from 'node:fs/promises'
 import { pipeline } from 'node:stream/promises'
 import path from 'node:path'
-import { recordAudit, requirePagePermission } from '../../../../utils/db'
+import { recordAudit, requireFeaturePermission } from '../../../../utils/db'
 import { assertInstanceAllowed } from '../../../../utils/mcsm'
 import {
   fileUploadUrl,
@@ -32,7 +32,7 @@ async function cleanupStaleUploads(): Promise<void> {
 }
 
 export default defineEventHandler(async (event) => {
-  const user = requirePagePermission(event, 'server-files', 'edit')
+  const user = requireFeaturePermission(event, 'server-files-upload', 'edit')
   const query = getQuery(event)
   const uploadId = String(query.uploadId || '')
   if (!UPLOAD_ID_RE.test(uploadId)) {

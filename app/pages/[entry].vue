@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, onBeforeUnmount, onMounted } from 'vue'
+import { computed, ref, onBeforeUnmount, onMounted } from 'vue'
 import type { ThemeMode } from '../composables/useThemeTransition'
+import { clientDeviceIcon } from '#shared/client-device'
 
 definePageMeta({ layout: false })
 
@@ -16,12 +17,36 @@ const { toggleTheme, themeIcon, themeModeLabel, themeButtonLabel } = useThemeTra
 const turnstileContainer = ref<HTMLElement | null>(null)
 const turnstileWidgetId = ref<string | number | null>(null)
 const turnstileSiteKey = ref('')
+interface OnlineSession {
+  createdAt: number
+  lastSeenAt: number
+  ip: string
+  browser: string
+  os: string
+  device: string
+  location: string
+}
+interface TakeoverPrompt {
+  takeoverToken: string
+  expiresAt: number
+  sessionCount: number
+  session: OnlineSession | null
+}
+const takeoverPrompt = ref<TakeoverPrompt | null>(null)
+const takeoverPending = ref(false)
 const route = useRoute()
 const runtimeConfig = useRuntimeConfig()
 const { remember } = useEntry()
 remember(String(route.params.entry || ''))
 
 const { showToast } = useToast()
+const takeoverMessage = computed(() => {
+  const count = takeoverPrompt.value?.sessionCount || 0
+  return count > 1
+    ? `当前账户有 ${count} 个在线会话，继续登录将退出全部旧设备。`
+    : '当前账户已在其他设备在线，继续登录将退出旧设备。'
+})
+const takeoverDeviceIcon = computed(() => clientDeviceIcon(takeoverPrompt.value?.session))
 
 function loadTurnstile(): Promise<void> {
   if (typeof window === 'undefined') return Promise.resolve()
@@ -94,11 +119,57 @@ async function login() {
     })
     await navigateTo('/')
   } catch (e: any) {
+    const conflict = e?.data?.data
+    if (conflict?.code === 'ADMIN_ACCOUNT_ONLINE' && typeof conflict.takeoverToken === 'string') {
+      takeoverPrompt.value = {
+        takeoverToken: conflict.takeoverToken,
+        expiresAt: Number(conflict.expiresAt || 0),
+        sessionCount: Math.max(1, Number(conflict.sessionCount || 1)),
+        session: conflict.session || null,
+      }
+      resetTurnstile()
+      return
+    }
     showToast(e?.data?.statusMessage || '登录失败', 'error')
     resetTurnstile()
   } finally {
     loading.value = false
   }
+}
+
+async function confirmTakeover() {
+  if (!takeoverPrompt.value || takeoverPending.value) return
+  takeoverPending.value = true
+  try {
+    await $fetch('/api/auth/login', {
+      method: 'POST',
+      body: {
+        entry: String(route.params.entry || ''),
+        takeoverToken: takeoverPrompt.value.takeoverToken,
+      },
+    })
+    takeoverPrompt.value = null
+    await navigateTo('/')
+  } catch (error: any) {
+    takeoverPrompt.value = null
+    showToast(error?.data?.statusMessage || '挤下线登录失败，请重新登录', 'error')
+    resetTurnstile()
+  } finally {
+    takeoverPending.value = false
+  }
+}
+
+function cancelTakeover() {
+  if (!takeoverPending.value) takeoverPrompt.value = null
+}
+
+function formatClient(session: OnlineSession | null) {
+  if (!session) return '未知设备'
+  return [session.device, session.browser, session.os].filter(Boolean).join(' · ') || '未知设备'
+}
+
+function formatSessionTime(value: number | undefined) {
+  return value ? new Date(value).toLocaleString('zh-CN') : '未知'
 }
 
 onBeforeUnmount(() => {
@@ -138,6 +209,26 @@ onBeforeUnmount(() => {
         </md-filled-button>
       </div>
     </main>
+
+    <ConfirmDialog
+      :open="!!takeoverPrompt"
+      title="账户当前在线"
+      :message="takeoverMessage"
+      :icon="takeoverDeviceIcon"
+      confirm-label="挤下线并登录"
+      pending-label="正在切换…"
+      :pending="takeoverPending"
+      :destructive="true"
+      @confirm="confirmTakeover"
+      @cancel="cancelTakeover"
+    >
+      <dl v-if="takeoverPrompt?.session" class="online-session-detail">
+        <div><dt>在线设备</dt><dd class="online-device"><DeviceClientIcon :client="takeoverPrompt.session" /><span>{{ formatClient(takeoverPrompt.session) }}</span></dd></div>
+        <div><dt>连接地址</dt><dd><code>{{ takeoverPrompt.session.ip || '未知' }}</code></dd></div>
+        <div v-if="takeoverPrompt.session.location"><dt>IP 归属地</dt><dd>{{ takeoverPrompt.session.location }}</dd></div>
+        <div><dt>最近活动</dt><dd>{{ formatSessionTime(takeoverPrompt.session.lastSeenAt) }}</dd></div>
+      </dl>
+    </ConfirmDialog>
   </div>
 </template>
 
@@ -190,6 +281,54 @@ onBeforeUnmount(() => {
   display: flex;
   justify-content: center;
   overflow: hidden;
+}
+
+.online-session-detail {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: 8px;
+  background: var(--md-sys-color-surface-container);
+}
+
+.online-session-detail div {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 12px;
+}
+
+.online-session-detail dt,
+.online-session-detail dd {
+  min-width: 0;
+  margin: 0;
+  font-size: 12px;
+}
+
+.online-session-detail dt {
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.online-session-detail dd {
+  overflow-wrap: anywhere;
+}
+
+.online-device {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.online-device span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.online-session-detail code {
+  font-family: 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
 }
 
 @media (max-width: 480px) {

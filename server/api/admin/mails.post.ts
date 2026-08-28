@@ -3,7 +3,7 @@ import {
   insertGameMail,
   listGameAccounts,
   recordAudit,
-  requireAuth,
+  requireFeaturePermission,
 } from '../../utils/db'
 import {
   requireGameUsername,
@@ -31,7 +31,7 @@ const MAX_SPECIFIC_PLAYERS = 500
  * </p>
  */
 export default defineEventHandler(async (event) => {
-  const actor = requireAuth(event)
+  const actor = requireFeaturePermission(event, 'mail-publish', 'edit')
   const body = await readBody<any>(event)
 
   const rawType = String(body?.type ?? '').trim().toUpperCase()

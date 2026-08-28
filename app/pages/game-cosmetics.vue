@@ -68,7 +68,8 @@ const SLOT_LABELS: Record<string, string> = {
 const route = useRoute()
 const { showToast } = useToast()
 const access = useAdminAccess()
-const canEdit = computed(() => access.levelForKey('game-cosmetics') === 'edit')
+const canRefresh = computed(() => access.levelForKey('game-cosmetics') === 'edit'
+  && access.featureLevelForKey('game-cosmetics-refresh') === 'edit')
 const { apply: applyDialogAnimation } = useDialogAnimation()
 
 const overview = ref<Overview | null>(null)
@@ -176,7 +177,7 @@ async function load() {
  * 一次最多 60 个代号，按批提交，避免把 Mojang 的名称查询配额打满。
  */
 async function lookupMojang(refresh: boolean) {
-  if (lookupDisabled.value || lookingUp.value) return
+  if (lookupDisabled.value || lookingUp.value || (refresh && !canRefresh.value)) return
   const accounts = overview.value?.accounts ?? []
   const targets = accounts
     .filter((account) => refresh || !account.mojang || account.mojang.stale)
@@ -220,7 +221,7 @@ function applyProfiles(profiles: Record<string, MojangInfo>) {
 }
 
 async function refreshOne(username: string) {
-  if (lookupDisabled.value) return
+  if (lookupDisabled.value || !canRefresh.value) return
   try {
     const result = await $fetch<{ profiles: Record<string, MojangInfo> }>(
       '/api/admin/game-cosmetics/lookup',
@@ -300,15 +301,10 @@ onMounted(() => {
 <template>
   <div class="page">
     <div class="page-heading">
-      <div>
-        <h1 class="page-title">账户装扮</h1>
-        <p class="page-subtitle">
-          查看每个游戏账户在离线模式下上传并生效的皮肤与披风。没有上传记录时，会按玩家代号向 Mojang 查询同名正版档案并代理拉取官方皮肤，仅作参考——服务器只下发数据库里的外观。
-        </p>
-      </div>
+      <h1 class="page-title">账户装扮</h1>
       <div class="heading-actions">
         <md-filled-tonal-button
-          v-if="canEdit"
+          v-if="canRefresh"
           :disabled="loading || lookingUp || lookupDisabled"
           @click="lookupMojang(true)"
         >
@@ -461,10 +457,7 @@ onMounted(() => {
             <div class="detail-main-stack">
               <section class="detail-panel model-panel">
                 <div class="panel-heading">
-                  <div>
-                    <h3>交互模型</h3>
-                    <p>拖动旋转，滚轮缩放，并可在右侧切换动作。</p>
-                  </div>
+                  <h3>交互模型</h3>
                 </div>
                 <div v-if="detailRow.figureSkin || detailRow.figureCape" class="model-preview-row">
                   <SkinModelViewer
@@ -484,10 +477,7 @@ onMounted(() => {
                 class="detail-panel texture-panel"
               >
                 <div class="panel-heading">
-                  <div>
-                    <h3>纹理原图</h3>
-                    <p>点击名称可在新标签页打开未经缩放的 PNG 文件。</p>
-                  </div>
+                  <h3>纹理原图</h3>
                 </div>
                 <div class="texture-gallery">
                   <div v-if="detailRow.localSkin" class="texture-item">
@@ -517,10 +507,7 @@ onMounted(() => {
             <div class="source-stack">
               <section class="detail-panel source-panel">
                 <div class="panel-heading">
-                  <div>
-                    <h3>离线上传</h3>
-                    <p>服务器实际下发并生效的装扮。</p>
-                  </div>
+                  <h3>离线上传</h3>
                   <span class="badge badge-local">{{ detailRow.hasLocal ? '服务器生效' : '未上传' }}</span>
                 </div>
                 <template v-if="detailRow.hasLocal">
@@ -593,10 +580,7 @@ onMounted(() => {
 
           <section v-if="detailSlots.length" class="detail-panel files-panel">
             <div class="panel-heading">
-              <div>
-                <h3>服务器文件明细</h3>
-                <p>Api 服务端保存的离线上传文件及校验信息。</p>
-              </div>
+              <h3>服务器文件明细</h3>
             </div>
             <div class="table-scroll">
               <table class="data-table inner-table">
@@ -621,7 +605,7 @@ onMounted(() => {
       </div>
       <div slot="actions">
         <md-text-button
-          v-if="canEdit && detailRow && !lookupDisabled"
+          v-if="canRefresh && detailRow && !lookupDisabled"
           @click="refreshOne(detailRow.account.username)"
         >
           <md-icon slot="icon">cloud_sync</md-icon>
@@ -635,7 +619,6 @@ onMounted(() => {
 
 <style scoped>
 .page-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
-.page-subtitle { margin: -12px 0 20px; color: var(--md-sys-color-on-surface-variant); font-size: 13px; max-width: 760px; line-height: 1.6; }
 .heading-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .refresh-icon--loading { animation: refresh-spin 800ms linear infinite; }
 @keyframes refresh-spin { to { transform: rotate(360deg); } }

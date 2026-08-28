@@ -12,7 +12,8 @@ import { computed } from 'vue'
  */
 const route = useRoute()
 const access = useAdminAccess()
-const canEdit = computed(() => access.levelForKey('server-files') === 'edit')
+const canEdit = computed(() => access.levelForKey('server-files') === 'edit'
+  && access.featureLevelForKey('server-files-edit') === 'edit')
 
 const uuid = computed(() => String(route.query.uuid || ''))
 const daemonId = computed(() => String(route.query.daemonId || ''))
@@ -82,4 +83,10 @@ function backToFiles() {
 .mono { font-family: 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 .plain-link { text-decoration: none; flex-shrink: 0; }
 .empty { padding: 24px 0; color: var(--md-sys-color-on-surface-variant); font-size: 14px; }
+@media (max-width: 640px) {
+  .page-heading { align-items: stretch; flex-direction: column; }
+  .heading-main { width: 100%; }
+  .plain-link,
+  .plain-link md-outlined-button { width: 100%; }
+}
 </style>

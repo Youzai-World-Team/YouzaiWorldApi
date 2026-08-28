@@ -13,6 +13,7 @@ const DEPLOY_LOCK_MAX_AGE_MS = 15 * 60 * 1000
 const RESTART_DELAY_MS = 1_500
 const DEPLOY_TOKEN_RE = /^\S{32,512}$/u
 const CRC32_TABLE = new Uint32Array(256)
+const DEPLOY_INFO_FILE = 'last-deployment.json'
 
 for (let index = 0; index < CRC32_TABLE.length; index += 1) {
   let value = index
@@ -30,8 +31,56 @@ export interface DeployResult {
   bytes: number
 }
 
+interface DeploymentInfo {
+  releaseId: string
+  deployedAt: number
+}
+
 function deployRoot(): string {
   return path.resolve(process.env.YZWC_DEPLOY_ROOT?.trim() || process.cwd())
+}
+
+function validDeploymentTime(value: unknown): value is number {
+  return Number.isFinite(value)
+    && Number(value) > 0
+    && Number(value) <= Date.now() + 5 * 60 * 1000
+}
+
+async function recordDeployment(deployDir: string, releaseId: string): Promise<void> {
+  const info: DeploymentInfo = { releaseId, deployedAt: Date.now() }
+  try {
+    await fs.writeFile(
+      path.join(deployDir, DEPLOY_INFO_FILE),
+      JSON.stringify(info),
+      { encoding: 'utf8', mode: 0o600 },
+    )
+  } catch (error) {
+    console.warn('部署已完成，但部署时间记录失败', error)
+  }
+}
+
+export async function getLastDeploymentTime(): Promise<number> {
+  const root = deployRoot()
+  try {
+    const content = await fs.readFile(path.join(root, '.deploy', DEPLOY_INFO_FILE), 'utf8')
+    const info = JSON.parse(content) as Partial<DeploymentInfo>
+    if (validDeploymentTime(info.deployedAt)) return info.deployedAt
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT' && !(error instanceof SyntaxError)) {
+      console.warn('读取部署时间记录失败', error)
+    }
+  }
+
+  try {
+    const stat = await fs.stat(path.join(root, '.output', 'server', 'index.mjs'))
+    if (validDeploymentTime(stat.mtimeMs)) return stat.mtimeMs
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.warn('读取部署产物时间失败', error)
+    }
+  }
+
+  return Date.now() - Math.round(process.uptime() * 1000)
 }
 
 function configuredToken(): string {
@@ -237,6 +286,7 @@ export async function deployNuxtOutput(archive: Buffer): Promise<DeployResult> {
     const extracted = await extractArchive(archive, stagingDir)
     await validateStagedOutput(stagingDir)
     await swapOutput(root, stagingDir, deployDir)
+    await recordDeployment(deployDir, releaseId)
     return { releaseId, ...extracted }
   } finally {
     await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => {})

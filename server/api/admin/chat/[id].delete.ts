@@ -1,7 +1,7 @@
-import { deleteChatMessage, recordAudit, requireAuth } from '../../../utils/db'
+import { deleteChatMessage, recordAudit, requireFeaturePermission } from '../../../utils/db'
 
 export default defineEventHandler((event) => {
-  const user = requireAuth(event)
+  const user = requireFeaturePermission(event, 'chat-moderate', 'edit')
 
   const id = getRouterParam(event, 'id') || ''
   if (!deleteChatMessage(id)) {

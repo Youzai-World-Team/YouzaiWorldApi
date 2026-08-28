@@ -1,4 +1,4 @@
-import { recordAudit, requirePagePermission } from '../../../utils/db'
+import { recordAudit, requireFeaturePermission } from '../../../utils/db'
 import { assertInstanceAllowed } from '../../../utils/mcsm'
 import { writeTextFile } from '../../../utils/mcsm-files'
 
@@ -10,7 +10,7 @@ import { writeTextFile } from '../../../utils/mcsm-files'
  * </p>
  */
 export default defineEventHandler(async (event) => {
-  const user = requirePagePermission(event, 'server-files', 'edit')
+  const user = requireFeaturePermission(event, 'server-files-edit', 'edit')
   const body = await readBody<{ uuid?: string; daemonId?: string; path?: string; text?: string }>(event)
 
   const uuid = String(body?.uuid || '')

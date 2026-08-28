@@ -84,6 +84,20 @@ body {
   transition: background-color 220ms ease, color 180ms ease;
 }
 
+img,
+video,
+audio,
+canvas,
+iframe {
+  max-width: 100%;
+}
+
+md-outlined-text-field,
+md-outlined-select {
+  min-width: 0;
+  max-width: 100%;
+}
+
 /* 主题颜色由 useThemeTransition 统一逐帧插值，避免设备和浏览器实现差异。 */
 :root.theme-transition-colors,
 :root.theme-transition-colors * {
@@ -275,9 +289,18 @@ md-outlined-select {
 }
 
 .table-wrap {
+  width: 100%;
+  min-width: 0;
   max-width: 100%;
   overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
   -webkit-overflow-scrolling: touch;
+}
+
+.table-wrap th,
+.table-wrap td {
+  min-width: 0;
 }
 
 .table-wrap tbody tr {
@@ -327,8 +350,64 @@ md-dialog {
     margin-bottom: 16px;
   }
 
+  /* 页面标题与工具栏在窄屏允许自然换行，长标题不能挤出操作按钮。 */
+  .page-heading,
+  .card-head,
+  .card-heading,
+  .section-heading,
+  .toolbar {
+    min-width: 0;
+    max-width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .page-heading > *,
+  .card-head > *,
+  .card-heading > *,
+  .section-heading > *,
+  .toolbar > * {
+    min-width: 0;
+    max-width: 100%;
+  }
+
   md-dialog {
+    max-width: calc(100vw - 16px);
     --md-dialog-container-width: calc(100vw - 24px);
+    --md-dialog-container-max-width: calc(100vw - 24px);
+  }
+
+  /* 长标题、正文和按钮组都不能把移动端弹窗横向撑出视口。 */
+  md-dialog > [slot='headline'],
+  md-dialog > [slot='content'],
+  md-dialog > [slot='actions'] {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  md-dialog > [slot='content'] {
+    width: 100%;
+    overflow-x: auto;
+    overflow-wrap: anywhere;
+  }
+
+  md-dialog > [slot='actions'] {
+    flex-wrap: wrap;
+  }
+
+  md-dialog .dialog-form,
+  md-dialog .compose-form,
+  md-dialog .compose-dialog,
+  md-dialog .link-dialog {
+    width: 100%;
+    min-width: 0 !important;
+    max-width: 100%;
+  }
+
+  .table-wrap td:not(.cell-actions):not(.actions):not(.row-actions) {
+    max-width: 20rem;
+    white-space: normal !important;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 }
 

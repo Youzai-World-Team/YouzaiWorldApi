@@ -56,8 +56,14 @@ const mcsmProbe = ref<McsmProbe | null>(null)
 const showMcsmApiKey = ref(false)
 const mcsmLoading = ref(true)
 const savingMcsm = ref(false)
+const securityEntryInput = ref('')
+const currentSecurityEntry = ref('')
+const securityEntryLoading = ref(true)
+const savingSecurityEntry = ref(false)
 const access = useAdminAccess()
+const { entry: entryState } = useEntry()
 const canEditPage = computed(() => access.levelForKey('settings') === 'edit')
+const canManageSecurityEntry = computed(() => access.user.value?.isOwner === true)
 const gameApiKeyLevel = computed(() => access.featureLevelForKey('settings-game-api-key'))
 const canViewGameApiKey = computed(() => gameApiKeyLevel.value !== 'hidden')
 const canEditGameApiKey = computed(() => canEditPage.value && gameApiKeyLevel.value === 'edit')
@@ -103,10 +109,50 @@ async function loadSecrets() {
     gameApiKeyLoading.value = false
     inboundMailKeyLoading.value = false
     mcsmLoading.value = false
+    securityEntryLoading.value = false
     showToast(e?.data?.statusMessage || '权限加载失败', 'error')
     return
   }
-  await Promise.all([loadGameApiKey(), loadInboundMailKey(), loadMcsm()])
+  await Promise.all([loadSecurityEntry(), loadGameApiKey(), loadInboundMailKey(), loadMcsm()])
+}
+
+async function loadSecurityEntry() {
+  securityEntryLoading.value = true
+  try {
+    if (!canManageSecurityEntry.value) return
+    const result = await $fetch<{ entry: string }>('/api/auth/entry')
+    currentSecurityEntry.value = result.entry
+    securityEntryInput.value = result.entry
+  } catch (e: any) {
+    showToast(e?.data?.statusMessage || '安全入口加载失败', 'error')
+  } finally {
+    securityEntryLoading.value = false
+  }
+}
+
+async function saveSecurityEntry() {
+  if (savingSecurityEntry.value || !canManageSecurityEntry.value) return
+  const entry = securityEntryInput.value.trim().replace(/^\/+|\/+$/g, '')
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{11,63}$/.test(entry)) {
+    showToast('安全入口需要为 12 至 64 位字母、数字、下划线或连字符', 'error')
+    return
+  }
+  savingSecurityEntry.value = true
+  try {
+    const result = await $fetch<{ entry: string }>('/api/auth/entry', {
+      method: 'POST',
+      body: { entry },
+    })
+    currentSecurityEntry.value = result.entry
+    securityEntryInput.value = result.entry
+    entryState.value = result.entry
+    if (import.meta.client) sessionStorage.setItem('security-entry', result.entry)
+    showToast(`安全入口已更新为 /${result.entry}`)
+  } catch (e: any) {
+    showToast(e?.data?.statusMessage || '安全入口保存失败', 'error')
+  } finally {
+    savingSecurityEntry.value = false
+  }
 }
 
 async function loadGameApiKey() {
@@ -301,14 +347,30 @@ function generateInboundMailKey() {
 <template>
   <div class="page">
     <h1 class="page-title">站点设置</h1>
-    <p class="page-subtitle">
-      后台登录的 widget 跑在 API 域名下，
-      官网聊天区的 widget 跑在主站域名下，混用会导致校验域名不匹配。
-    </p>
+
+    <div v-if="canManageSecurityEntry" class="card">
+      <h2 class="card-title">后台安全入口</h2>
+      <p class="card-note">当前入口：<code>/{{ currentSecurityEntry || '…' }}</code></p>
+      <div class="setting-form">
+        <md-outlined-text-field
+          label="安全入口"
+          supporting-text="12 至 64 位字母、数字、下划线或连字符"
+          autocomplete="off"
+          spellcheck="false"
+          :disabled="securityEntryLoading"
+          :value="securityEntryInput"
+          @input="securityEntryInput = ($event.target as HTMLInputElement).value"
+        ></md-outlined-text-field>
+        <div class="form-actions">
+          <md-filled-button :disabled="securityEntryLoading || savingSecurityEntry" @click="saveSecurityEntry">
+            {{ savingSecurityEntry ? '保存中…' : '保存安全入口' }}
+          </md-filled-button>
+        </div>
+      </div>
+    </div>
 
     <div v-if="canViewGameApiKey" class="card">
       <h2 class="card-title">游戏 API 密钥</h2>
-      <p class="card-note">用于 Minecraft 模组与 API 服务端的签名通信。拥有该区域修改权限的账户可以修改。</p>
 
       <div class="setting-form">
         <div class="password-field">
@@ -341,10 +403,7 @@ function generateInboundMailKey() {
 
     <div v-if="canViewInboundMailKey" class="card">
       <h2 class="card-title">域名邮件投递密钥</h2>
-      <p class="card-note">
-        Cloudflare Email Worker 把 <code>@mcyzw.top</code> 的来信投递到本服务端时用它签名，
-        服务端用同一个值校验。与上面的游戏 API 密钥是两把独立的钥匙，不要复用。
-      </p>
+      <p class="card-note">请勿与游戏 API 密钥复用。</p>
 
       <p v-if="!inboundMailKeyLoading && inboundMailKeySource === 'none'" class="inherit-warning">
         <md-icon>warning</md-icon>
@@ -353,8 +412,7 @@ function generateInboundMailKey() {
       <p v-else-if="!inboundMailKeyLoading && inboundMailKeySource === 'env'" class="source-note">
         <md-icon>info</md-icon>
         <span>
-          当前生效的是环境变量 <code>YZWC_INBOUND_MAIL_KEY</code>。在此保存后将改用数据库里的值，
-          生产环境推荐这样做——Nitro 运行时不会读项目根目录的 <code>.env</code>。
+          当前使用环境变量 <code>YZWC_INBOUND_MAIL_KEY</code>。在此保存后改用数据库值；Nitro 不读取根目录 <code>.env</code>。
         </span>
       </p>
 
@@ -389,20 +447,14 @@ function generateInboundMailKey() {
           </md-outlined-button>
         </div>
         <p v-if="canEditInboundMailKey" class="card-note">
-          改完记得在 Worker 侧执行
-          <code>npx wrangler secret put INBOUND_MAIL_KEY</code>
-          填入同一个值。两边不一致时所有收件都会被拒收（401），但 Worker 会让发信方稍后重试，信一般不会丢。
+          保存后需在 Worker 执行 <code>npx wrangler secret put INBOUND_MAIL_KEY</code> 并填入相同值；不一致会拒收（401）。
         </p>
       </div>
     </div>
 
     <div v-if="canViewMcsm" class="card">
       <h2 class="card-title">MCSManager 面板</h2>
-      <p class="card-note">
-        「服务器管理」页靠这套凭据调用 MCSManager：发送命令、读控制台、启停实例、打包备份。
-        ApiKey 在面板右上角的用户信息页生成，权限与该面板账户完全一致，请当作密码保管。
-        它只保存在本服务端，页面不会回显明文，浏览器也拿不到——所有面板调用都由服务端代发。
-      </p>
+      <p class="card-note">ApiKey 权限与面板账户完全一致，请当作密码保管。</p>
 
       <p v-if="!mcsmLoading && !mcsmState?.configured" class="inherit-warning">
         <md-icon>warning</md-icon>
@@ -411,8 +463,7 @@ function generateInboundMailKey() {
       <p v-else-if="!mcsmLoading && mcsmState?.apiKeySource === 'env'" class="source-note">
         <md-icon>info</md-icon>
         <span>
-          当前生效的 ApiKey 来自环境变量 <code>YZWC_MCSM_API_KEY</code>。在此保存后将改用数据库里的值，
-          生产环境推荐这样做——Nitro 运行时不会读项目根目录的 <code>.env</code>。
+          当前使用环境变量 <code>YZWC_MCSM_API_KEY</code>。在此保存后改用数据库值；Nitro 不读取根目录 <code>.env</code>。
         </span>
       </p>
 
@@ -537,9 +588,7 @@ function generateInboundMailKey() {
       <p v-if="state.chat.inherited && !loading" class="inherit-warning">
         <md-icon>warning</md-icon>
         <span>
-          当前未单独配置，正在复用上面「后台登录」那一套。
-          由于两者允许域名不同，聊天区会出现「前端显示验证通过、发送却提示人机验证失败」。
-          请在此填写聊天区专用凭据。
+          当前复用后台登录配置；域名不同会导致发送校验失败，请填写聊天区专用凭据。
         </span>
       </p>
 
@@ -592,28 +641,15 @@ function generateInboundMailKey() {
     </div>
 
     <div class="card">
-      <h2 class="card-title">配置来源优先级</h2>
-      <ol class="priority-list">
-        <li>本页保存的数据库设置（最高，生产环境推荐）</li>
-        <li>进程环境变量（<code>TURNSTILE_*</code> / <code>TURNSTILE_CHAT_*</code> / <code>YZWC_GAME_API_KEY</code> / <code>YZWC_INBOUND_MAIL_KEY</code> / <code>YZWC_MCSM_BASE_URL</code> / <code>YZWC_MCSM_API_KEY</code>）</li>
-        <li>聊天区未配置时回退到后台登录那一套</li>
-      </ol>
+      <h2 class="card-title">生产环境配置</h2>
       <p class="card-note">
-        开发环境会读取项目根目录的 <code>.env</code>，但生产环境的 Nitro 运行时不会读它，
-        所以线上请用本页保存，或在服务的进程环境里设置变量。
+        Nitro 运行时不会读取项目根目录的 <code>.env</code>；请使用本页保存或进程环境变量。
       </p>
     </div>
   </div>
 </template>
 
 <style scoped>
-.page-subtitle {
-  margin: -8px 0 24px;
-  font-size: 14px;
-  line-height: 1.6;
-  color: var(--md-sys-color-on-surface-variant);
-}
-
 .card + .card {
   margin-top: 20px;
 }
@@ -625,8 +661,7 @@ function generateInboundMailKey() {
   color: var(--md-sys-color-on-surface-variant);
 }
 
-.card-note code,
-.priority-list code {
+.card-note code {
   padding: 1px 5px;
   border-radius: 4px;
   background: var(--md-sys-color-surface);
@@ -706,14 +741,6 @@ function generateInboundMailKey() {
   justify-content: flex-start;
   flex-wrap: wrap;
   gap: 12px;
-}
-
-.priority-list {
-  margin: 16px 0 0;
-  padding-left: 22px;
-  font-size: 14px;
-  line-height: 1.9;
-  color: var(--md-sys-color-on-surface-variant);
 }
 
 @media (max-width: 640px) {

@@ -1,9 +1,9 @@
 import { createError } from 'h3'
-import { gameAccountWire, getGameAccount, hashGamePassword, requireAuth, upsertGameAccount } from '../../utils/db'
+import { gameAccountWire, getGameAccount, hashGamePassword, requireFeaturePermission, upsertGameAccount } from '../../utils/db'
 import { offlinePlayerUuid, requireGameUsername } from '../../utils/game-input'
 
 export default defineEventHandler(async (event) => {
-  requireAuth(event)
+  requireFeaturePermission(event, 'game-accounts-manage', 'edit')
   const body = await readBody<any>(event)
   const username = requireGameUsername(body?.username)
   const password = String(body?.password || '')

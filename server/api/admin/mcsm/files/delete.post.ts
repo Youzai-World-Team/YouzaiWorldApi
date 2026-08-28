@@ -1,4 +1,4 @@
-import { recordAudit, requirePagePermission } from '../../../../utils/db'
+import { recordAudit, requireFeaturePermission } from '../../../../utils/db'
 import { assertInstanceAllowed } from '../../../../utils/mcsm'
 import { deleteEntries } from '../../../../utils/mcsm-files'
 
@@ -7,7 +7,7 @@ import { deleteEntries } from '../../../../utils/mcsm-files'
  * 路径全部写进操作记录，事后才能查是谁删了什么。
  */
 export default defineEventHandler(async (event) => {
-  const user = requirePagePermission(event, 'server-files', 'edit')
+  const user = requireFeaturePermission(event, 'server-files-delete', 'edit')
   const body = await readBody<{ uuid?: string; daemonId?: string; paths?: unknown }>(event)
 
   const uuid = String(body?.uuid || '')

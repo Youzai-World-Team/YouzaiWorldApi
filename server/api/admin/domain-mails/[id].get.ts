@@ -1,4 +1,4 @@
-import { getDomainMailDetail, requireAuth } from '../../../utils/db'
+import { getDomainMailDetail, listDomainMailReaders, markDomainMailRead, requireAuth } from '../../../utils/db'
 import { UUID_RE } from '../../../utils/game-input'
 import { sanitizeEmailHtml } from '../../../utils/html-sanitize'
 
@@ -10,15 +10,19 @@ import { sanitizeEmailHtml } from '../../../utils/html-sanitize'
  * </p>
  */
 export default defineEventHandler((event) => {
-  requireAuth(event)
+  const user = requireAuth(event)
   const id = String(getRouterParam(event, 'id') || '').trim().toLowerCase()
   if (!UUID_RE.test(id)) throw createError({ statusCode: 400, statusMessage: '邮件 ID 格式不正确' })
-  const detail = getDomainMailDetail(id)
+  const detail = getDomainMailDetail(id, user.id)
   if (!detail) throw createError({ statusCode: 404, statusMessage: '邮件不存在' })
 
   const sanitized = sanitizeEmailHtml(detail.htmlBody)
+  markDomainMailRead(user.id, id)
+  const readers = listDomainMailReaders(id)
   return {
     ...detail,
+    unread: false,
+    readers,
     htmlSafe: sanitized.html,
     htmlSafeCss: sanitized.css,
     htmlBlockedImages: sanitized.blockedImages,

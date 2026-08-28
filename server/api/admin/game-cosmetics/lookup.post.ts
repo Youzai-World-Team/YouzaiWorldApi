@@ -1,4 +1,4 @@
-import { requireAuth } from '../../../utils/db'
+import { requireAuth, requireFeaturePermission } from '../../../utils/db'
 import { GAME_USERNAME_RE } from '../../../utils/game-input'
 import { isMojangLookupDisabled, resolveMojangProfiles } from '../../../utils/mojang'
 
@@ -9,12 +9,13 @@ const MAX_USERNAMES = 60
  * 用 POST 只是为了在请求体里带玩家名单，因此在审计插件里被排除。
  */
 export default defineEventHandler(async (event) => {
-  requireAuth(event)
+  const body = await readBody<any>(event)
+  if (body?.refresh) requireFeaturePermission(event, 'game-cosmetics-refresh', 'edit')
+  else requireAuth(event)
   if (isMojangLookupDisabled()) {
     throw createError({ statusCode: 503, message: '本实例已关闭 Mojang 查询（YZWC_MOJANG_DISABLED=1）' })
   }
 
-  const body = await readBody<any>(event)
   const raw = Array.isArray(body?.usernames) ? body.usernames : []
   if (!raw.length) throw createError({ statusCode: 400, message: '请至少提交一个玩家代号' })
   if (raw.length > MAX_USERNAMES) {

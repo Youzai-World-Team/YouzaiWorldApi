@@ -1,4 +1,5 @@
 const DIALOG_ANIMATION_PATCHED = Symbol.for('youzaiworld.dialog-animation-patched')
+const DIALOG_BACKDROP_STYLE = 'youzaiworld-dialog-backdrop'
 
 interface AnimatedDialogElement extends HTMLElement {
   getOpenAnimation: typeof openAnimation
@@ -8,6 +9,19 @@ interface AnimatedDialogElement extends HTMLElement {
 interface AnimatedDialogPrototype extends AnimatedDialogElement {
   connectedCallback?: () => void
   [key: symbol]: unknown
+}
+
+function installNativeBackdrop(el: HTMLElement) {
+  const root = el.shadowRoot
+  if (!root || root.querySelector(`style[data-patch='${DIALOG_BACKDROP_STYLE}']`)) return
+
+  const style = document.createElement('style')
+  style.dataset.patch = DIALOG_BACKDROP_STYLE
+  style.textContent = `
+    :host([open]) .scrim { display: none !important; }
+    dialog::backdrop { background: rgb(0 0 0 / 32%); }
+  `
+  root.append(style)
 }
 
 function duration(value: number) {
@@ -61,6 +75,7 @@ export function applyDialogAnimation(el: HTMLElement | null) {
   const dialog = el as AnimatedDialogElement
   dialog.getOpenAnimation = openAnimation
   dialog.getCloseAnimation = closeAnimation
+  installNativeBackdrop(el)
 }
 
 export function installDialogAnimation() {
@@ -74,8 +89,8 @@ export function installDialogAnimation() {
     if (!prototype[DIALOG_ANIMATION_PATCHED]) {
       const connectedCallback = prototype.connectedCallback
       prototype.connectedCallback = function (this: HTMLElement) {
-        applyDialogAnimation(this)
         connectedCallback?.call(this)
+        applyDialogAnimation(this)
       }
       Object.defineProperty(prototype, DIALOG_ANIMATION_PATCHED, { value: true })
     }

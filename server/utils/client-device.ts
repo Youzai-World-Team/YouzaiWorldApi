@@ -39,6 +39,9 @@ function parseBrowser(userAgent: string): string {
 }
 
 function parseOperatingSystem(userAgent: string, platformHint: string): string {
+  const harmony = `${userAgent} ${platformHint}`.match(/(?:HarmonyOS|OpenHarmony)(?:[\/\s]+([\d.]+))?/i)
+  if (harmony) return versionLabel('HarmonyOS', harmony[1])
+
   const windows = userAgent.match(/Windows NT ([\d.]+)/)
   if (windows) {
     const versions: Record<string, string> = {
@@ -55,6 +58,7 @@ function parseOperatingSystem(userAgent: string, platformHint: string): string {
 
   const ios = userAgent.match(/(?:iPhone OS|CPU (?:iPhone )?OS) ([\d_]+)/)
   if (ios) return versionLabel(/iPad/.test(userAgent) ? 'iPadOS' : 'iOS', ios[1])
+  if (/Macintosh.*Mobile\//.test(userAgent)) return 'iPadOS'
 
   const macOs = userAgent.match(/Mac OS X ([\d_]+)/)
   if (macOs) return versionLabel('macOS', macOs[1])
@@ -68,19 +72,20 @@ function parseOperatingSystem(userAgent: string, platformHint: string): string {
 }
 
 function parseDevice(userAgent: string, mobileHint: string): string {
-  if (/iPad/.test(userAgent)) return 'iPad'
+  if (/iPad|Macintosh.*Mobile\//.test(userAgent)) return 'iPad'
   if (/iPhone/.test(userAgent)) return 'iPhone'
   if (/iPod/.test(userAgent)) return 'iPod'
 
   if (/Android/.test(userAgent)) {
+    const category = /Mobile/.test(userAgent) || mobileHint === '?1' ? 'Android 手机' : 'Android 平板'
     const model = userAgent.match(/Android [^;\)]+;\s*([^;\)]+?)(?:\s+Build\/[^;\)]+)?[;\)]/)?.[1]?.trim()
-    if (model && !/^(?:wv|[a-z]{1,2})$/i.test(model)) return model.slice(0, 64)
-    return /Mobile/.test(userAgent) || mobileHint === '?1' ? 'Android 手机' : 'Android 平板'
+    if (model && !/^(?:wv|[a-z]{1,2})$/i.test(model)) return `${model} · ${category}`.slice(0, 64)
+    return category
   }
 
-  if (/Windows|Macintosh|CrOS|Linux/.test(userAgent)) return '桌面设备'
   if (/Tablet/.test(userAgent)) return '平板设备'
   if (/Mobile/.test(userAgent) || mobileHint === '?1') return '移动设备'
+  if (/Windows|Macintosh|CrOS|Linux/.test(userAgent)) return '桌面设备'
   return '未知设备'
 }
 

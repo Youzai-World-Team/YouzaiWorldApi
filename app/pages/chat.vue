@@ -52,12 +52,14 @@ const clearDialog = ref<HTMLElement | null>(null)
 const { showToast } = useToast()
 const { apply: applyDialogAnimation } = useDialogAnimation()
 const access = useAdminAccess()
-const canEdit = computed(() => access.levelForKey('chat') === 'edit')
+const canEditPage = computed(() => access.levelForKey('chat') === 'edit')
+const canSendMessages = computed(() => canEditPage.value && access.featureLevelForKey('chat-send') === 'edit')
+const canModerateMessages = computed(() => canEditPage.value && access.featureLevelForKey('chat-moderate') === 'edit')
 
 const senderCount = computed(() => new Set(messages.value.map((m) => m.ipTag)).size)
 const displayName = computed(() => currentUser.value?.fullName || currentUser.value?.username || '账户')
 const composeLength = computed(() => composeContent.value.trim().length)
-const canSend = computed(() => !sending.value && composeLength.value > 0 && composeLength.value <= CONTENT_MAX)
+const canSend = computed(() => canSendMessages.value && !sending.value && composeLength.value > 0 && composeLength.value <= CONTENT_MAX)
 
 onMounted(() => {
   load()
@@ -103,6 +105,7 @@ function formatTime(value: number) {
 }
 
 function openCompose() {
+  if (!canSendMessages.value) return
   composeContent.value = ''
   composeOpen.value = true
 }
@@ -136,6 +139,7 @@ async function submitCompose() {
 }
 
 function openDelete(message: ChatMessage) {
+  if (!canModerateMessages.value) return
   deleteTarget.value = message
   deleteOpen.value = true
 }
@@ -150,7 +154,7 @@ function onDeleteClosed() {
 
 async function confirmDelete() {
   const target = deleteTarget.value
-  if (deleting.value || !target) return
+  if (!canModerateMessages.value || deleting.value || !target) return
   deleting.value = true
   try {
     await $fetch(`${adminEndpoint}/${target.id}`, { method: 'DELETE' })
@@ -165,6 +169,7 @@ async function confirmDelete() {
 }
 
 function openClear() {
+  if (!canModerateMessages.value) return
   clearOpen.value = true
 }
 
@@ -177,7 +182,7 @@ function onClearClosed() {
 }
 
 async function confirmClear() {
-  if (clearing.value) return
+  if (!canModerateMessages.value || clearing.value) return
   clearing.value = true
   try {
     const result = await $fetch<{ removed: number }>(adminEndpoint, { method: 'DELETE' })
@@ -194,13 +199,11 @@ async function confirmClear() {
 
 <template>
   <div class="page">
-    <h1 class="page-title">聊天区</h1>
-
-    <div class="endpoint">
-      <span class="endpoint-label">数据 API：</span>
-      <code class="endpoint-url">
-        <a :href="publicEndpoint" target="_blank" rel="noopener">GET {{ publicEndpoint }}</a>
-      </code>
+    <div class="page-heading">
+      <h1 class="page-title">聊天区</h1>
+      <md-icon-button :href="publicEndpoint" target="_blank" rel="noopener" aria-label="打开数据 API" title="打开数据 API">
+        <md-icon>api</md-icon>
+      </md-icon-button>
     </div>
 
     <div class="card">
@@ -213,12 +216,12 @@ async function confirmClear() {
           <md-icon-button aria-label="刷新留言记录" title="刷新留言记录" :disabled="refreshing" @click="load">
             <md-icon :class="{ 'refresh-icon--loading': refreshing }">refresh</md-icon>
           </md-icon-button>
-          <md-filled-button v-if="canEdit" @click="openCompose">
+          <md-filled-button v-if="canSendMessages" @click="openCompose">
             <md-icon slot="icon">add</md-icon>
             新增消息
           </md-filled-button>
           <md-filled-button
-            v-if="canEdit"
+            v-if="canModerateMessages"
             class="clear-btn"
             :disabled="messages.length === 0"
             @click="openClear"
@@ -238,7 +241,7 @@ async function confirmClear() {
               <th>内容</th>
               <th>IP 归属地</th>
               <th>IP 标识</th>
-              <th>操作</th>
+              <th v-if="canModerateMessages">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -256,8 +259,8 @@ async function confirmClear() {
               <td class="cell-content">{{ m.content }}</td>
               <td class="cell-location">{{ m.location }}</td>
               <td class="cell-ip"><code>{{ m.ipTag }}</code></td>
-              <td class="cell-actions">
-                <md-text-button v-if="canEdit" class="delete-btn" @click="openDelete(m)">
+              <td v-if="canModerateMessages" class="cell-actions">
+                <md-text-button class="delete-btn" @click="openDelete(m)">
                   <md-icon slot="icon">delete</md-icon>
                   删除
                 </md-text-button>
@@ -342,29 +345,16 @@ async function confirmClear() {
 </template>
 
 <style scoped>
-.endpoint {
+.page-heading {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: -6px 0 20px;
-  font-size: 14px;
-  color: var(--md-sys-color-on-surface-variant);
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
 }
 
-.endpoint-url {
-  font-family: 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 13px;
-}
-
-.endpoint-url a {
-  color: var(--md-sys-color-primary);
-  text-decoration: none;
-  border-bottom: 1px dashed currentColor;
-}
-
-.endpoint-url a:hover {
-  opacity: 0.8;
+.page-title {
+  margin: 0;
 }
 
 .card-head {
@@ -638,16 +628,6 @@ async function confirmClear() {
 }
 
 @media (max-width: 640px) {
-  .endpoint {
-    align-items: flex-start;
-    margin-bottom: 16px;
-  }
-
-  .endpoint-url {
-    min-width: 0;
-    overflow-wrap: anywhere;
-  }
-
   .card-head {
     align-items: stretch;
     gap: 12px;

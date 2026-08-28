@@ -53,7 +53,12 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS sessions (
     token TEXT PRIMARY KEY,
     time INTEGER NOT NULL,
-    user_id INTEGER
+    user_id INTEGER,
+    last_seen INTEGER NOT NULL DEFAULT 0,
+    ip TEXT NOT NULL DEFAULT '',
+    browser TEXT NOT NULL DEFAULT '',
+    os TEXT NOT NULL DEFAULT '',
+    device TEXT NOT NULL DEFAULT ''
   );
   CREATE TABLE IF NOT EXISTS admin_users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -92,6 +97,7 @@ db.exec(`
   );
   CREATE TABLE IF NOT EXISTS login_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
     ip TEXT,
     time INTEGER,
     username TEXT NOT NULL DEFAULT '',
@@ -154,6 +160,39 @@ db.exec(`
     last_kicked_date TEXT,
     last_position TEXT,
     in_place_respawn_count INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS game_titles (
+    id TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    render_type TEXT NOT NULL,
+    text_content TEXT NOT NULL DEFAULT '',
+    text_color TEXT NOT NULL DEFAULT '#FFFFFF',
+    bold INTEGER NOT NULL DEFAULT 0,
+    italic INTEGER NOT NULL DEFAULT 0,
+    texture_key TEXT NOT NULL DEFAULT '',
+    font_id TEXT NOT NULL DEFAULT 'youzaiworldcore:title',
+    glyph TEXT NOT NULL DEFAULT '',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    system_managed INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS game_player_title_grants (
+    username_lower TEXT NOT NULL,
+    title_id TEXT NOT NULL,
+    source TEXT NOT NULL,
+    source_key TEXT NOT NULL DEFAULT '',
+    granted_by TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (username_lower, title_id, source, source_key)
+  );
+  CREATE INDEX IF NOT EXISTS game_player_title_grants_player_idx
+    ON game_player_title_grants (username_lower, title_id);
+  CREATE TABLE IF NOT EXISTS game_player_title_selection (
+    username_lower TEXT PRIMARY KEY,
+    title_id TEXT NOT NULL,
     updated_at INTEGER NOT NULL
   );
   CREATE TABLE IF NOT EXISTS game_sessions (
@@ -269,6 +308,18 @@ db.exec(`
     window_started INTEGER NOT NULL,
     attempts INTEGER NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS admin_login_takeovers (
+    token TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    ip TEXT NOT NULL,
+    browser TEXT NOT NULL,
+    os TEXT NOT NULL,
+    device TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS admin_login_takeovers_expires_idx
+    ON admin_login_takeovers (expires_at);
   CREATE TABLE IF NOT EXISTS chat_messages (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -340,6 +391,57 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS domain_mail_attachments_mail_idx
     ON domain_mail_attachments (mail_id, position);
+  CREATE TABLE IF NOT EXISTS domain_mail_reads (
+    user_id INTEGER NOT NULL,
+    mail_id TEXT NOT NULL,
+    read_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, mail_id)
+  );
+  CREATE INDEX IF NOT EXISTS domain_mail_reads_mail_idx
+    ON domain_mail_reads (mail_id, user_id);
+`)
+
+const defaultGameTitles = [
+  ['newbie_plea', '萌新求饶', 'texture', '萌新求饶', '#55FF55', 'new', '\uE100', 10, 1],
+  ['admin_junior', '初级管理员', 'texture', '初级管理员', '#55FFFF', 'junior_administrator', '\uE101', 20, 1],
+  ['admin_middle', '中级管理员', 'texture', '中级管理员', '#FFAA00', 'middle_administrator', '\uE102', 30, 1],
+  ['admin_senior', '高级管理员', 'texture', '高级管理员', '#FF5555', 'senior_administrator', '\uE103', 40, 1],
+] as const
+const seedGameTitle = db.prepare(`INSERT OR IGNORE INTO game_titles
+  (id, display_name, render_type, text_content, text_color, texture_key, font_id, glyph,
+   enabled, sort_order, system_managed, created_at, updated_at)
+  VALUES (?, ?, ?, ?, ?, ?, 'youzaiworldcore:title', ?, 1, ?, ?, ?, ?)`)
+for (const [id, displayName, renderType, textContent, textColor, textureKey, glyph, sortOrder, systemManaged] of defaultGameTitles) {
+  const now = Date.now()
+  seedGameTitle.run(id, displayName, renderType, textContent, textColor, textureKey, glyph, sortOrder, systemManaged, now, now)
+}
+
+// 默认称号只在账户第一次完成注册时发放。触发器与账户写入处于同一 SQLite 事务，
+// 不会回填已有账户，也不会在管理员回收后因普通账户更新而重新补发。
+db.exec(`
+  CREATE TRIGGER IF NOT EXISTS game_accounts_default_title_after_insert
+  AFTER INSERT ON game_accounts
+  WHEN NEW.password <> ''
+  BEGIN
+    INSERT OR IGNORE INTO game_player_title_grants
+      (username_lower, title_id, source, source_key, granted_by, created_at)
+      VALUES (NEW.username_lower, 'newbie_plea', 'registration', 'new_account', 'system', unixepoch('subsec') * 1000);
+    INSERT OR IGNORE INTO game_player_title_selection
+      (username_lower, title_id, updated_at)
+      VALUES (NEW.username_lower, 'newbie_plea', unixepoch('subsec') * 1000);
+  END;
+
+  CREATE TRIGGER IF NOT EXISTS game_accounts_default_title_after_registration
+  AFTER UPDATE OF password ON game_accounts
+  WHEN OLD.password = '' AND NEW.password <> ''
+  BEGIN
+    INSERT OR IGNORE INTO game_player_title_grants
+      (username_lower, title_id, source, source_key, granted_by, created_at)
+      VALUES (NEW.username_lower, 'newbie_plea', 'registration', 'new_account', 'system', unixepoch('subsec') * 1000);
+    INSERT OR IGNORE INTO game_player_title_selection
+      (username_lower, title_id, updated_at)
+      VALUES (NEW.username_lower, 'newbie_plea', unixepoch('subsec') * 1000);
+  END;
 `)
 
 const adminUserColumns = db.prepare('PRAGMA table_info(admin_users)').all() as { name?: string }[]
@@ -369,18 +471,60 @@ if (!sessionColumns.some((column) => column.name === 'user_id')) {
     if (!migratedColumns.some((column) => column.name === 'user_id')) throw error
   }
 }
+for (const [column, definition] of [
+  ['last_seen', 'INTEGER NOT NULL DEFAULT 0'],
+  ['ip', "TEXT NOT NULL DEFAULT ''"],
+  ['browser', "TEXT NOT NULL DEFAULT ''"],
+  ['os', "TEXT NOT NULL DEFAULT ''"],
+  ['device', "TEXT NOT NULL DEFAULT ''"],
+] as const) {
+  if (sessionColumns.some((item) => item.name === column)) continue
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN ${column} ${definition}`)
+  } catch (error) {
+    const migratedColumns = db.prepare('PRAGMA table_info(sessions)').all() as { name?: string }[]
+    if (!migratedColumns.some((item) => item.name === column)) throw error
+  }
+}
+db.exec('UPDATE sessions SET last_seen = time WHERE last_seen <= 0')
+// 单设备登录上线时，历史数据库可能已有多个会话；仅保留每个账户最近活动的一个。
+db.exec(`
+  DELETE FROM sessions
+  WHERE user_id IS NOT NULL
+    AND EXISTS (
+      SELECT 1
+      FROM sessions AS newer
+      WHERE newer.user_id = sessions.user_id
+        AND (
+          newer.last_seen > sessions.last_seen
+          OR (newer.last_seen = sessions.last_seen AND newer.time > sessions.time)
+          OR (newer.last_seen = sessions.last_seen AND newer.time = sessions.time AND newer.token > sessions.token)
+        )
+    )
+`)
 
 const loginHistoryColumns = db.prepare('PRAGMA table_info(login_history)').all() as { name?: string }[]
-for (const column of ['username', 'browser', 'os', 'device']) {
+for (const [column, definition] of [
+  ['user_id', 'INTEGER'],
+  ['username', "TEXT NOT NULL DEFAULT ''"],
+  ['browser', "TEXT NOT NULL DEFAULT ''"],
+  ['os', "TEXT NOT NULL DEFAULT ''"],
+  ['device', "TEXT NOT NULL DEFAULT ''"],
+] as const) {
   if (loginHistoryColumns.some((item) => item.name === column)) continue
   try {
-    db.exec(`ALTER TABLE login_history ADD COLUMN ${column} TEXT NOT NULL DEFAULT ''`)
+    db.exec(`ALTER TABLE login_history ADD COLUMN ${column} ${definition}`)
   } catch (error) {
     // 多进程同时启动时，允许另一进程已经先完成同一迁移。
     const migratedColumns = db.prepare('PRAGMA table_info(login_history)').all() as { name?: string }[]
     if (!migratedColumns.some((item) => item.name === column)) throw error
   }
 }
+db.exec(`
+  CREATE INDEX IF NOT EXISTS sessions_user_seen_idx ON sessions (user_id, last_seen DESC);
+  CREATE INDEX IF NOT EXISTS login_history_user_time_idx ON login_history (user_id, time DESC);
+  CREATE INDEX IF NOT EXISTS audit_logs_user_time_idx ON audit_logs (user_id, time DESC);
+`)
 
 // 为现有数据库补充历史登录 IP 字段，并用尚未清除的旧 last_ip 数据做一次回填。
 const gameAccountColumns = db.prepare('PRAGMA table_info(game_accounts)').all() as { name?: string }[]
@@ -456,6 +600,8 @@ for (const [column, definition] of [
 }
 
 const ADMIN_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000
+const ADMIN_ONLINE_WINDOW_MS = 5 * 60 * 1000
+const ADMIN_LOGIN_TAKEOVER_TTL_MS = 2 * 60 * 1000
 const GAME_REQUEST_MAX_SKEW_SECONDS = 300
 const GAME_REQUEST_NONCE_TTL_MS = 10 * 60 * 1000
 const GAME_REGISTRATION_SESSION_TTL_MS = 15 * 60 * 1000
@@ -758,10 +904,9 @@ function getAdminPagePermissions(userId: number, isOwner: boolean): Record<strin
   return permissions
 }
 
-function getAdminFeaturePermissions(
+function getStoredAdminFeaturePermissions(
   userId: number,
   isOwner: boolean,
-  pagePermissions: Record<string, AdminPagePermissionLevel>,
 ): Record<string, AdminFeaturePermissionLevel> {
   if (isOwner) return ownerAdminFeaturePermissions()
   const permissions = defaultAdminFeaturePermissions()
@@ -777,11 +922,32 @@ function getAdminFeaturePermissions(
         ? 'view'
         : level
   }
+  return permissions
+}
+
+function capFeatureLevelToPage(
+  feature: (typeof ADMIN_FEATURE_DEFINITIONS)[number],
+  level: AdminFeaturePermissionLevel,
+  pagePermissions: Record<string, AdminPagePermissionLevel>,
+): AdminFeaturePermissionLevel {
+  if (!feature.pageKey) return level
+  const pageLevel = pagePermissions[feature.pageKey] || 'hidden'
+  if (pageLevel === 'hidden') return 'hidden'
+  if (pageLevel === 'view' && level === 'edit') {
+    return (feature.availableLevels || ['hidden', 'view', 'edit']).includes('view') ? 'view' : 'hidden'
+  }
+  return level
+}
+
+function getAdminFeaturePermissions(
+  userId: number,
+  isOwner: boolean,
+  pagePermissions: Record<string, AdminPagePermissionLevel>,
+): Record<string, AdminFeaturePermissionLevel> {
+  const permissions = getStoredAdminFeaturePermissions(userId, isOwner)
+  if (isOwner) return permissions
   for (const feature of ADMIN_FEATURE_DEFINITIONS) {
-    if (!feature.pageKey) continue
-    const pageLevel = pagePermissions[feature.pageKey] || 'hidden'
-    if (pageLevel === 'hidden') permissions[feature.key] = 'hidden'
-    else if (pageLevel === 'view' && permissions[feature.key] === 'edit') permissions[feature.key] = 'view'
+    permissions[feature.key] = capFeatureLevelToPage(feature, permissions[feature.key]!, pagePermissions)
   }
   return permissions
 }
@@ -803,16 +969,16 @@ function mapAdminUser(row: Record<string, unknown>): AdminUser {
   }
 }
 
-export function updateAdminPermissions(
-  userId: number,
+function normalizeAdminPermissions(
   pageInput: Record<string, unknown>,
   featureInput: Record<string, unknown>,
-): AdminUser {
-  const current = getAdminUserById(userId)
-  if (!current) throw createError({ statusCode: 404, statusMessage: '后台用户不存在' })
-  if (current.isOwner) throw createError({ statusCode: 400, statusMessage: '初始所有者始终拥有全部权限' })
-
-  const normalized = defaultAdminPagePermissions()
+  pageBase: Record<string, AdminPagePermissionLevel>,
+  featureBase: Record<string, AdminFeaturePermissionLevel>,
+): {
+  pages: Record<string, AdminPagePermissionLevel>
+  features: Record<string, AdminFeaturePermissionLevel>
+} {
+  const normalized = { ...pageBase }
   for (const page of ADMIN_PAGE_DEFINITIONS) {
     const requested = String(pageInput?.[page.key] ?? normalized[page.key]) as AdminPagePermissionLevel
     if (!['hidden', 'view', 'edit'].includes(requested)) {
@@ -825,51 +991,105 @@ export function updateAdminPermissions(
         : requested
   }
 
-  const normalizedFeatures = defaultAdminFeaturePermissions()
+  const normalizedFeatures = { ...featureBase }
   for (const feature of ADMIN_FEATURE_DEFINITIONS) {
     const requested = String(featureInput?.[feature.key] ?? normalizedFeatures[feature.key]) as AdminFeaturePermissionLevel
     const availableLevels = feature.availableLevels || ['hidden', 'view', 'edit']
     if (!availableLevels.includes(requested)) {
       throw createError({ statusCode: 400, statusMessage: `${feature.label}的权限值无效` })
     }
-    let level: AdminFeaturePermissionLevel = feature.maxNonOwnerLevel === 'hidden'
+    const level: AdminFeaturePermissionLevel = feature.maxNonOwnerLevel === 'hidden'
       ? 'hidden'
       : feature.maxNonOwnerLevel === 'view' && requested === 'edit'
         ? 'view'
         : requested
-    if (feature.pageKey) {
-      const pageLevel = normalized[feature.pageKey] || 'hidden'
-      if (pageLevel === 'hidden') level = 'hidden'
-      else if (pageLevel === 'view' && level === 'edit') level = 'view'
-    }
-    normalizedFeatures[feature.key] = level
+    normalizedFeatures[feature.key] = capFeatureLevelToPage(feature, level, normalized)
   }
+  return { pages: normalized, features: normalizedFeatures }
+}
+
+function writeAdminPermissions(
+  userId: number,
+  pages: Record<string, AdminPagePermissionLevel>,
+  features: Record<string, AdminFeaturePermissionLevel>,
+  now: number,
+) {
+  run('DELETE FROM admin_page_permissions WHERE user_id = ?', userId)
+  run('DELETE FROM admin_feature_permissions WHERE user_id = ?', userId)
+  for (const page of ADMIN_PAGE_DEFINITIONS) {
+    if (pages[page.key] === page.defaultLevel) continue
+    run(
+      'INSERT INTO admin_page_permissions (user_id, page_key, level, updated_at) VALUES (?, ?, ?, ?)',
+      userId, page.key, pages[page.key], now,
+    )
+  }
+  for (const feature of ADMIN_FEATURE_DEFINITIONS) {
+    if (features[feature.key] === feature.defaultLevel) continue
+    run(
+      'INSERT INTO admin_feature_permissions (user_id, feature_key, level, updated_at) VALUES (?, ?, ?, ?)',
+      userId, feature.key, features[feature.key], now,
+    )
+  }
+}
+
+export function updateAdminPermissions(
+  userId: number,
+  pageInput: Record<string, unknown>,
+  featureInput: Record<string, unknown>,
+): AdminUser {
+  const current = getAdminUserById(userId)
+  if (!current) throw createError({ statusCode: 404, statusMessage: '后台用户不存在' })
+  if (current.isOwner) throw createError({ statusCode: 400, statusMessage: '初始所有者始终拥有全部权限' })
+  const normalized = normalizeAdminPermissions(
+    pageInput,
+    featureInput,
+    current.permissions,
+    current.featurePermissions,
+  )
 
   db.exec('BEGIN IMMEDIATE')
   try {
-    run('DELETE FROM admin_page_permissions WHERE user_id = ?', userId)
-    run('DELETE FROM admin_feature_permissions WHERE user_id = ?', userId)
-    const now = Date.now()
-    for (const page of ADMIN_PAGE_DEFINITIONS) {
-      if (normalized[page.key] === page.defaultLevel) continue
-      run(
-        'INSERT INTO admin_page_permissions (user_id, page_key, level, updated_at) VALUES (?, ?, ?, ?)',
-        userId, page.key, normalized[page.key], now,
-      )
-    }
-    for (const feature of ADMIN_FEATURE_DEFINITIONS) {
-      if (normalizedFeatures[feature.key] === feature.defaultLevel) continue
-      run(
-        'INSERT INTO admin_feature_permissions (user_id, feature_key, level, updated_at) VALUES (?, ?, ?, ?)',
-        userId, feature.key, normalizedFeatures[feature.key], now,
-      )
-    }
+    writeAdminPermissions(userId, normalized.pages, normalized.features, Date.now())
     db.exec('COMMIT')
   } catch (error) {
     db.exec('ROLLBACK')
     throw error
   }
   return getAdminUserById(userId) as AdminUser
+}
+
+export function updateAdminPermissionsBatch(
+  userIds: number[],
+  pageInput: Record<string, unknown>,
+  featureInput: Record<string, unknown>,
+): AdminUser[] {
+  const targets = userIds.map((userId) => {
+    const current = getAdminUserById(userId)
+    if (!current) throw createError({ statusCode: 404, statusMessage: `后台用户不存在：${userId}` })
+    if (current.isOwner) throw createError({ statusCode: 400, statusMessage: '初始所有者始终拥有全部权限' })
+    return {
+      userId,
+      normalized: normalizeAdminPermissions(
+        pageInput,
+        featureInput,
+        current.permissions,
+        current.featurePermissions,
+      ),
+    }
+  })
+
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    const now = Date.now()
+    for (const target of targets) {
+      writeAdminPermissions(target.userId, target.normalized.pages, target.normalized.features, now)
+    }
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+  return targets.map((target) => getAdminUserById(target.userId) as AdminUser)
 }
 
 function getAdminUserById(id: number): AdminUser | undefined {
@@ -980,6 +1200,7 @@ export function updateAdminUser(userId: number, changes: { password?: unknown; a
       run('UPDATE admin_users SET is_active = ?, updated_at = ? WHERE id = ?', active ? 1 : 0, Date.now(), userId)
       if (!active) run('DELETE FROM sessions WHERE user_id = ?', userId)
     }
+    if (password !== undefined || active === false) run('DELETE FROM admin_login_takeovers WHERE user_id = ?', userId)
     db.exec('COMMIT')
   } catch (error) {
     db.exec('ROLLBACK')
@@ -996,8 +1217,10 @@ export function deleteAdminUser(userId: number): void {
     throw createError({ statusCode: 400, statusMessage: '至少需要保留一个启用的后台用户' })
   }
   run('DELETE FROM sessions WHERE user_id = ?', userId)
+  run('DELETE FROM admin_login_takeovers WHERE user_id = ?', userId)
   run('DELETE FROM admin_page_permissions WHERE user_id = ?', userId)
   run('DELETE FROM admin_feature_permissions WHERE user_id = ?', userId)
+  run('DELETE FROM domain_mail_reads WHERE user_id = ?', userId)
   run('DELETE FROM admin_users WHERE id = ?', userId)
 }
 
@@ -1075,16 +1298,37 @@ export function getAdminUserForLogin(usernameValue: unknown, password: string): 
   return mapAdminUser(row)
 }
 
+interface LoginClientInfo {
+  browser: string
+  os: string
+  device: string
+}
+
+export interface AdminLoginSessionState {
+  hasSession: boolean
+  online: boolean
+  sessionCount: number
+  latest: {
+    createdAt: number
+    lastSeenAt: number
+    ip: string
+    browser: string
+    os: string
+    device: string
+  } | null
+}
+
 export function hasSession(token: string): boolean {
   return Boolean(getSessionUser(token))
 }
 
 function getSessionUser(token: string): AdminUser | undefined {
   const digest = tokenDigest(token)
-  const row = get('SELECT time, user_id FROM sessions WHERE token = ?', digest)
+  const row = get('SELECT time, user_id, last_seen FROM sessions WHERE token = ?', digest)
   if (!row) return undefined
+  const now = Date.now()
   const createdAt = Number(row.time)
-  if (!Number.isFinite(createdAt) || createdAt + ADMIN_SESSION_TTL_MS <= Date.now()) {
+  if (!Number.isFinite(createdAt) || createdAt + ADMIN_SESSION_TTL_MS <= now) {
     deleteSession(token)
     return undefined
   }
@@ -1094,11 +1338,99 @@ function getSessionUser(token: string): AdminUser | undefined {
     deleteSession(token)
     return undefined
   }
+  if (Number(row.last_seen ?? 0) < now - 30_000) {
+    run('UPDATE sessions SET last_seen = ? WHERE token = ?', now, digest)
+  }
   return user
 }
 
-export function createSession(token: string, userId: number) {
-  run('INSERT INTO sessions (token, time, user_id) VALUES (?, ?, ?)', tokenDigest(token), Date.now(), userId)
+export function createSession(token: string, userId: number, ip: string, client: LoginClientInfo) {
+  const now = Date.now()
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    run('DELETE FROM sessions WHERE user_id = ?', userId)
+    run('DELETE FROM admin_login_takeovers WHERE user_id = ?', userId)
+    run(
+      'INSERT INTO sessions (token, time, user_id, last_seen, ip, browser, os, device) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      tokenDigest(token), now, userId, now, ip, client.browser, client.os, client.device,
+    )
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+}
+
+export function getAdminLoginSessionState(userId: number): AdminLoginSessionState {
+  const now = Date.now()
+  run('DELETE FROM sessions WHERE time <= ?', now - ADMIN_SESSION_TTL_MS)
+  const rows = all(`
+    SELECT time, last_seen, ip, browser, os, device
+    FROM sessions
+    WHERE user_id = ?
+    ORDER BY last_seen DESC, time DESC
+  `, userId)
+  const latestRow = rows[0]
+  const latest = latestRow
+    ? {
+        createdAt: Number(latestRow.time ?? 0),
+        lastSeenAt: Math.max(Number(latestRow.last_seen ?? 0), Number(latestRow.time ?? 0)),
+        ip: String(latestRow.ip ?? ''),
+        browser: String(latestRow.browser ?? ''),
+        os: String(latestRow.os ?? ''),
+        device: String(latestRow.device ?? ''),
+      }
+    : null
+  return {
+    hasSession: rows.length > 0,
+    online: rows.some((row) => Math.max(Number(row.last_seen ?? 0), Number(row.time ?? 0)) >= now - ADMIN_ONLINE_WINDOW_MS),
+    sessionCount: rows.length,
+    latest,
+  }
+}
+
+export function createAdminLoginTakeover(userId: number, ip: string, client: LoginClientInfo) {
+  const token = randomBytes(32).toString('hex')
+  const now = Date.now()
+  const expiresAt = now + ADMIN_LOGIN_TAKEOVER_TTL_MS
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    run('DELETE FROM admin_login_takeovers WHERE expires_at <= ? OR user_id = ?', now, userId)
+    run(
+      'INSERT INTO admin_login_takeovers (token, user_id, ip, browser, os, device, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      tokenDigest(token), userId, ip, client.browser, client.os, client.device, now, expiresAt,
+    )
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+  return { token, expiresAt }
+}
+
+export function consumeAdminLoginTakeover(tokenValue: unknown, ip: string, client: LoginClientInfo): AdminUser {
+  const token = String(tokenValue ?? '').trim()
+  if (!/^[a-f0-9]{64}$/i.test(token)) {
+    throw createError({ statusCode: 401, statusMessage: '挤下线确认已失效，请重新登录' })
+  }
+  const row = get(`
+    DELETE FROM admin_login_takeovers
+    WHERE token = ?
+    RETURNING user_id, ip, browser, os, device, expires_at
+  `, tokenDigest(token))
+  const clientMatches = row
+    && String(row.ip ?? '') === ip
+    && String(row.browser ?? '') === client.browser
+    && String(row.os ?? '') === client.os
+    && String(row.device ?? '') === client.device
+  if (!row || Number(row.expires_at ?? 0) <= Date.now() || !clientMatches) {
+    throw createError({ statusCode: 401, statusMessage: '挤下线确认已失效，请重新登录' })
+  }
+  const user = getAdminUserById(Number(row.user_id))
+  if (!user || !user.isActive) {
+    throw createError({ statusCode: 401, statusMessage: '账户已失效，请重新登录' })
+  }
+  return user
 }
 
 export function deleteSession(token: string) {
@@ -1127,22 +1459,16 @@ export function requireAuth(event: H3Event): AdminUser {
   return user
 }
 
-interface LoginClientInfo {
-  browser: string
-  os: string
-  device: string
-}
-
-export function pushLogin(ip: string, time: number, client: LoginClientInfo, username = '') {
+export function pushLogin(ip: string, time: number, client: LoginClientInfo, username = '', userId?: number) {
   run(
-    'INSERT INTO login_history (ip, time, username, browser, os, device) VALUES (?, ?, ?, ?, ?, ?)',
-    ip, time, username, client.browser, client.os, client.device,
+    'INSERT INTO login_history (user_id, ip, time, username, browser, os, device) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    userId ?? null, ip, time, username, client.browser, client.os, client.device,
   )
-  run('DELETE FROM login_history WHERE id NOT IN (SELECT id FROM login_history ORDER BY id DESC LIMIT 10)')
+  run('DELETE FROM login_history WHERE id NOT IN (SELECT id FROM login_history ORDER BY id DESC LIMIT 5000)')
 }
 
 export function listLogins(): Array<{ ip: string; time: number; username: string; browser: string; os: string; device: string }> {
-  return all('SELECT ip, time, username, browser, os, device FROM login_history ORDER BY id DESC') as Array<{
+  return all('SELECT ip, time, username, browser, os, device FROM login_history ORDER BY id DESC LIMIT 100') as Array<{
     ip: string
     time: number
     username: string
@@ -1150,6 +1476,100 @@ export function listLogins(): Array<{ ip: string; time: number; username: string
     os: string
     device: string
   }>
+}
+
+export function listAdminAccountDevices(event: H3Event, user: AdminUser) {
+  const cookie = getCookie(event, ADMIN_COOKIE_NAME)
+  const header = getHeader(event, 'authorization')?.replace(/^Bearer\s+/i, '')
+  const currentToken = cookie || header || ''
+  const currentSessionDigest = currentToken ? tokenDigest(currentToken) : ''
+  const now = Date.now()
+  const historyRows = all(`
+    SELECT id, ip, time, browser, os, device
+    FROM login_history
+    WHERE user_id = ? OR (user_id IS NULL AND username = ? COLLATE NOCASE)
+    ORDER BY id DESC
+    LIMIT 1000
+  `, user.id, user.username)
+  const sessionRows = all(`
+    SELECT token, ip, time, last_seen, browser, os, device
+    FROM sessions
+    WHERE user_id = ?
+    ORDER BY last_seen DESC, time DESC
+  `, user.id)
+
+  const keyFor = (row: Record<string, unknown>) => [
+    String(row.device ?? '').trim().toLocaleLowerCase('zh-CN'),
+    String(row.browser ?? '').trim().toLocaleLowerCase('en-US'),
+    String(row.os ?? '').trim().toLocaleLowerCase('en-US'),
+    String(row.ip ?? '').trim(),
+  ].join('\u0000')
+  const devices = new Map<string, {
+    id: string
+    device: string
+    browser: string
+    os: string
+    ip: string
+    lastLoginAt: number
+    loginCount: number
+    isCurrent: boolean
+    online: boolean
+    lastSeenAt: number | null
+  }>()
+
+  for (const row of historyRows) {
+    const key = keyFor(row)
+    const time = Number(row.time ?? 0)
+    const existing = devices.get(key)
+    if (existing) {
+      existing.loginCount += 1
+      existing.lastLoginAt = Math.max(existing.lastLoginAt, time)
+      continue
+    }
+    devices.set(key, {
+      id: `login-device-${Number(row.id)}`,
+      device: String(row.device ?? ''),
+      browser: String(row.browser ?? ''),
+      os: String(row.os ?? ''),
+      ip: String(row.ip ?? ''),
+      lastLoginAt: time,
+      loginCount: 1,
+      isCurrent: false,
+      online: false,
+      lastSeenAt: null,
+    })
+  }
+
+  for (const row of sessionRows) {
+    const key = keyFor(row)
+    const createdAt = Number(row.time ?? 0)
+    const lastSeenAt = Math.max(Number(row.last_seen ?? 0), createdAt)
+    const isCurrent = String(row.token ?? '') === currentSessionDigest
+    const existing = devices.get(key)
+    if (existing) {
+      existing.isCurrent ||= isCurrent
+      existing.online ||= isCurrent && lastSeenAt >= now - ADMIN_ONLINE_WINDOW_MS
+      existing.lastSeenAt = Math.max(existing.lastSeenAt || 0, lastSeenAt)
+      existing.lastLoginAt = Math.max(existing.lastLoginAt, createdAt)
+      continue
+    }
+    devices.set(key, {
+      id: `current-session-${user.id}`,
+      device: String(row.device ?? ''),
+      browser: String(row.browser ?? ''),
+      os: String(row.os ?? ''),
+      ip: String(row.ip ?? ''),
+      lastLoginAt: createdAt,
+      loginCount: 1,
+      isCurrent,
+      online: isCurrent && lastSeenAt >= now - ADMIN_ONLINE_WINDOW_MS,
+      lastSeenAt,
+    })
+  }
+
+  return [...devices.values()]
+    .sort((left, right) => Number(right.isCurrent) - Number(left.isCurrent) || right.lastLoginAt - left.lastLoginAt)
+    .slice(0, 20)
 }
 
 export function recordAudit(event: H3Event, user: AdminUser, action = '') {
@@ -1166,6 +1586,170 @@ export function listAuditLogs(limit = 300) {
   const normalizedLimit = Number.isFinite(limit) ? Math.trunc(limit) : 300
   const safeLimit = Math.min(1000, Math.max(1, normalizedLimit))
   return all(`SELECT id, username, action, method, path, ip, time FROM audit_logs ORDER BY id DESC LIMIT ${safeLimit}`)
+}
+
+export function getAuditLogOverview(event: H3Event, currentUser: AdminUser, limit = 500) {
+  const normalizedLimit = Number.isFinite(limit) ? Math.trunc(limit) : 500
+  const safeLimit = Math.min(1000, Math.max(1, normalizedLimit))
+  const now = Date.now()
+  const cookie = getCookie(event, ADMIN_COOKIE_NAME)
+  const header = getHeader(event, 'authorization')?.replace(/^Bearer\s+/i, '')
+  const currentToken = cookie || header || ''
+  const currentSessionDigest = currentToken ? tokenDigest(currentToken) : ''
+
+  run('DELETE FROM sessions WHERE time <= ?', now - ADMIN_SESSION_TTL_MS)
+
+  const memberRows = all(`
+    SELECT id, username, avatar, full_name, is_owner, is_active, created_at
+    FROM admin_users
+    ORDER BY is_owner DESC, username COLLATE NOCASE
+  `)
+  const sessionRows = all(`
+    SELECT token, user_id, time, last_seen, ip, browser, os, device
+    FROM sessions
+    WHERE user_id IS NOT NULL
+    ORDER BY last_seen DESC, time DESC
+  `)
+  const loginRows = all(`
+    SELECT id, user_id, username, ip, time, browser, os, device
+    FROM login_history
+    ORDER BY id DESC
+    LIMIT ${safeLimit}
+  `)
+  const auditRows = all(`
+    SELECT id, user_id, username, action, method, path, ip, time
+    FROM audit_logs
+    WHERE action <> '登录后台'
+    ORDER BY id DESC
+    LIMIT ${safeLimit}
+  `)
+
+  const userIdByUsername = new Map<string, number>()
+  for (const row of memberRows) userIdByUsername.set(String(row.username ?? '').toLocaleLowerCase('en-US'), Number(row.id))
+
+  const sessionsByUser = new Map<number, Array<Record<string, unknown>>>()
+  for (const row of sessionRows) {
+    const userId = Number(row.user_id)
+    if (!Number.isInteger(userId)) continue
+    const sessions = sessionsByUser.get(userId) || []
+    sessions.push(row)
+    sessionsByUser.set(userId, sessions)
+  }
+
+  const latestLoginByUser = new Map<number, Record<string, unknown>>()
+  for (const row of loginRows) {
+    const username = String(row.username ?? '')
+    const storedUserId = Number(row.user_id)
+    const userId = Number.isInteger(storedUserId) && storedUserId > 0
+      ? storedUserId
+      : userIdByUsername.get(username.toLocaleLowerCase('en-US'))
+    if (userId && !latestLoginByUser.has(userId)) latestLoginByUser.set(userId, row)
+  }
+
+  const toSession = (row: Record<string, unknown>) => ({
+    createdAt: Number(row.time ?? 0),
+    lastSeenAt: Math.max(Number(row.last_seen ?? 0), Number(row.time ?? 0)),
+    ip: String(row.ip ?? ''),
+    browser: String(row.browser ?? ''),
+    os: String(row.os ?? ''),
+    device: String(row.device ?? ''),
+    isCurrent: String(row.token ?? '') === currentSessionDigest,
+  })
+
+  const members = memberRows.map((row) => {
+    const id = Number(row.id)
+    const sessions = (sessionsByUser.get(id) || []).map(toSession)
+    const latestLogin = latestLoginByUser.get(id)
+    const lastConnection = sessions[0] || (latestLogin
+      ? {
+          createdAt: Number(latestLogin.time ?? 0),
+          lastSeenAt: Number(latestLogin.time ?? 0),
+          ip: String(latestLogin.ip ?? ''),
+          browser: String(latestLogin.browser ?? ''),
+          os: String(latestLogin.os ?? ''),
+          device: String(latestLogin.device ?? ''),
+          isCurrent: false,
+        }
+      : null)
+    const lastSeenAt = Math.max(
+      sessions.reduce((latest, session) => Math.max(latest, session.lastSeenAt), 0),
+      Number(latestLogin?.time ?? 0),
+    )
+    return {
+      id,
+      username: String(row.username ?? ''),
+      avatar: String(row.avatar ?? ''),
+      fullName: String(row.full_name ?? ''),
+      isOwner: Number(row.is_owner ?? 0) === 1,
+      isActive: Number(row.is_active ?? 0) === 1,
+      createdAt: Number(row.created_at ?? 0),
+      isCurrent: id === currentUser.id,
+      loggedIn: sessions.length > 0,
+      online: sessions.some((session) => session.lastSeenAt >= now - ADMIN_ONLINE_WINDOW_MS),
+      sessionCount: sessions.length,
+      lastSeenAt: lastSeenAt || null,
+      lastConnection,
+    }
+  })
+
+  const records = [
+    ...auditRows.map((row) => {
+      const username = String(row.username ?? '')
+      const storedUserId = Number(row.user_id)
+      const userId = Number.isInteger(storedUserId) && storedUserId > 0
+        ? storedUserId
+        : userIdByUsername.get(username.toLocaleLowerCase('en-US')) || null
+      const action = String(row.action ?? '')
+      return {
+        id: `audit-${Number(row.id)}`,
+        kind: action === '登出后台' ? 'logout' : 'action',
+        userId,
+        username,
+        action,
+        method: String(row.method ?? ''),
+        path: String(row.path ?? ''),
+        ip: String(row.ip ?? ''),
+        time: Number(row.time ?? 0),
+        browser: '',
+        os: '',
+        device: '',
+      }
+    }),
+    ...loginRows.map((row) => {
+      const username = String(row.username ?? '')
+      const storedUserId = Number(row.user_id)
+      const userId = Number.isInteger(storedUserId) && storedUserId > 0
+        ? storedUserId
+        : userIdByUsername.get(username.toLocaleLowerCase('en-US')) || null
+      return {
+        id: `login-${Number(row.id)}`,
+        kind: 'login',
+        userId,
+        username,
+        action: '连接后台',
+        method: 'POST',
+        path: '/api/auth/login',
+        ip: String(row.ip ?? ''),
+        time: Number(row.time ?? 0),
+        browser: String(row.browser ?? ''),
+        os: String(row.os ?? ''),
+        device: String(row.device ?? ''),
+      }
+    }),
+  ].sort((left, right) => right.time - left.time).slice(0, safeLimit)
+
+  const currentAccount = members.find((member) => member.id === currentUser.id)
+  const currentSession = (sessionsByUser.get(currentUser.id) || [])
+    .map(toSession)
+    .find((session) => session.isCurrent) || null
+
+  return {
+    generatedAt: now,
+    onlineWindowMs: ADMIN_ONLINE_WINDOW_MS,
+    currentAccount: currentAccount ? { ...currentAccount, currentSession } : null,
+    members,
+    records,
+  }
 }
 
 interface Activity {
@@ -2059,11 +2643,304 @@ export function upsertGameAccount(account: GameAccount) {
 export function deleteGameAccount(username: string): boolean {
   const key = username.trim().toLocaleLowerCase('en-US')
   const result = run('DELETE FROM game_accounts WHERE username_lower = ?', key)
+  run('DELETE FROM game_player_title_grants WHERE username_lower = ?', key)
+  run('DELETE FROM game_player_title_selection WHERE username_lower = ?', key)
   run('DELETE FROM game_sessions WHERE username_lower = ?', key)
   run('DELETE FROM game_registration_sessions WHERE username_lower = ?', key)
   run('DELETE FROM game_password_reset_sessions WHERE username_lower = ?', key)
   run('DELETE FROM game_email_change_sessions WHERE username_lower = ?', key)
   return Number(result.changes ?? 0) > 0
+}
+
+export type GameTitleRenderType = 'text' | 'texture' | 'text_texture'
+
+export interface GameTitle {
+  id: string
+  displayName: string
+  renderType: GameTitleRenderType
+  textContent: string
+  textColor: string
+  bold: boolean
+  italic: boolean
+  textureKey: string
+  fontId: string
+  glyph: string
+  enabled: boolean
+  sortOrder: number
+  systemManaged: boolean
+  createdAt: number
+  updatedAt: number
+}
+
+export interface GameTitleGrant {
+  titleId: string
+  source: 'registration' | 'manual' | 'permission'
+  sourceKey: string
+  grantedBy: string
+  createdAt: number
+}
+
+export interface GamePlayerTitleSnapshot {
+  username: string
+  usernameLower: string
+  uuid: string | null
+  ownedTitleIds: string[]
+  equippedTitleId: string | null
+  grants: GameTitleGrant[]
+}
+
+function mapGameTitle(row: Record<string, unknown>): GameTitle {
+  return {
+    id: String(row.id ?? ''),
+    displayName: String(row.display_name ?? ''),
+    renderType: String(row.render_type ?? 'text') as GameTitleRenderType,
+    textContent: String(row.text_content ?? ''),
+    textColor: String(row.text_color ?? '#FFFFFF'),
+    bold: Number(row.bold ?? 0) === 1,
+    italic: Number(row.italic ?? 0) === 1,
+    textureKey: String(row.texture_key ?? ''),
+    fontId: String(row.font_id ?? 'youzaiworldcore:title'),
+    glyph: String(row.glyph ?? ''),
+    enabled: Number(row.enabled ?? 0) === 1,
+    sortOrder: Number(row.sort_order ?? 0),
+    systemManaged: Number(row.system_managed ?? 0) === 1,
+    createdAt: Number(row.created_at ?? 0),
+    updatedAt: Number(row.updated_at ?? 0),
+  }
+}
+
+export function gameTitleWire(title: GameTitle) {
+  return {
+    id: title.id,
+    display_name: title.displayName,
+    render_type: title.renderType,
+    text_content: title.textContent,
+    text_color: title.textColor,
+    bold: title.bold,
+    italic: title.italic,
+    texture_key: title.textureKey,
+    font_id: title.fontId,
+    glyph: title.glyph,
+    enabled: title.enabled,
+    sort_order: title.sortOrder,
+    system_managed: title.systemManaged,
+    created_at: title.createdAt,
+    updated_at: title.updatedAt,
+  }
+}
+
+export function gamePlayerTitleSnapshotWire(snapshot: GamePlayerTitleSnapshot) {
+  return {
+    username: snapshot.username,
+    username_lower: snapshot.usernameLower,
+    uuid: snapshot.uuid,
+    owned_title_ids: snapshot.ownedTitleIds,
+    equipped_title_id: snapshot.equippedTitleId,
+    grants: snapshot.grants.map((grant) => ({
+      title_id: grant.titleId,
+      source: grant.source,
+      source_key: grant.sourceKey,
+      granted_by: grant.grantedBy,
+      created_at: grant.createdAt,
+    })),
+  }
+}
+
+export function listGameTitles(includeDisabled = true): GameTitle[] {
+  const condition = includeDisabled ? '' : 'WHERE enabled = 1'
+  return all(`SELECT * FROM game_titles ${condition} ORDER BY sort_order, id`).map(mapGameTitle)
+}
+
+export function getGameTitle(idValue: unknown): GameTitle | undefined {
+  const id = String(idValue ?? '').trim().toLocaleLowerCase('en-US')
+  const row = get('SELECT * FROM game_titles WHERE id = ?', id)
+  return row ? mapGameTitle(row) : undefined
+}
+
+export function saveGameTitle(input: Partial<GameTitle> & Pick<GameTitle, 'id' | 'displayName'>): GameTitle {
+  const id = input.id.trim().toLocaleLowerCase('en-US')
+  if (!/^[a-z0-9_]{2,64}$/.test(id)) {
+    throw createError({ statusCode: 400, statusMessage: '称号 ID 只能包含小写字母、数字和下划线' })
+  }
+  const displayName = input.displayName.trim()
+  if (displayName.length < 1 || displayName.length > 32) {
+    throw createError({ statusCode: 400, statusMessage: '称号名称长度需要为 1 至 32 个字符' })
+  }
+  const existing = getGameTitle(id)
+  const renderType = input.renderType ?? existing?.renderType ?? 'text'
+  if (!['text', 'texture', 'text_texture'].includes(renderType)) {
+    throw createError({ statusCode: 400, statusMessage: '称号渲染类型不正确' })
+  }
+  const textContent = String(input.textContent ?? existing?.textContent ?? displayName).trim().slice(0, 64)
+  const textColor = String(input.textColor ?? existing?.textColor ?? '#FFFFFF').trim().toUpperCase()
+  if (!/^#[0-9A-F]{6}$/.test(textColor)) {
+    throw createError({ statusCode: 400, statusMessage: '称号颜色必须使用 #RRGGBB 格式' })
+  }
+  const textureKey = String(input.textureKey ?? existing?.textureKey ?? '').trim()
+  if (textureKey && !/^[a-z0-9_./-]{1,128}$/.test(textureKey)) {
+    throw createError({ statusCode: 400, statusMessage: '贴图资源标识格式不正确' })
+  }
+  const fontId = String(input.fontId ?? existing?.fontId ?? 'youzaiworldcore:title').trim()
+  if (!/^[a-z0-9_.-]+:[a-z0-9_./-]+$/.test(fontId)) {
+    throw createError({ statusCode: 400, statusMessage: '字体资源标识格式不正确' })
+  }
+  const glyph = String(input.glyph ?? existing?.glyph ?? '').slice(0, 8)
+  if ((renderType === 'texture' || renderType === 'text_texture') && (!textureKey || !glyph)) {
+    throw createError({ statusCode: 400, statusMessage: '贴图称号必须填写贴图标识和字体字符' })
+  }
+  const now = Date.now()
+  run(`INSERT INTO game_titles
+      (id, display_name, render_type, text_content, text_color, bold, italic, texture_key,
+       font_id, glyph, enabled, sort_order, system_managed, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        display_name = excluded.display_name,
+        render_type = excluded.render_type,
+        text_content = excluded.text_content,
+        text_color = excluded.text_color,
+        bold = excluded.bold,
+        italic = excluded.italic,
+        texture_key = excluded.texture_key,
+        font_id = excluded.font_id,
+        glyph = excluded.glyph,
+        enabled = excluded.enabled,
+        sort_order = excluded.sort_order,
+        updated_at = excluded.updated_at`,
+    id, displayName, renderType, textContent, textColor,
+    (input.bold ?? existing?.bold ?? false) ? 1 : 0,
+    (input.italic ?? existing?.italic ?? false) ? 1 : 0,
+    textureKey, fontId, glyph,
+    (input.enabled ?? existing?.enabled ?? true) ? 1 : 0,
+    Math.max(-100_000, Math.min(100_000, Math.trunc(input.sortOrder ?? existing?.sortOrder ?? 0))),
+    (existing?.systemManaged ?? input.systemManaged ?? false) ? 1 : 0,
+    existing?.createdAt ?? now, now)
+  if (input.enabled === false) {
+    run('DELETE FROM game_player_title_selection WHERE title_id = ?', id)
+  }
+  return getGameTitle(id)!
+}
+
+function titleGrantRows(usernameLower: string): GameTitleGrant[] {
+  return all(`SELECT title_id, source, source_key, granted_by, created_at
+              FROM game_player_title_grants
+              WHERE username_lower = ?
+              ORDER BY created_at, title_id`, usernameLower).map((row) => ({
+    titleId: String(row.title_id ?? ''),
+    source: String(row.source ?? 'manual') as GameTitleGrant['source'],
+    sourceKey: String(row.source_key ?? ''),
+    grantedBy: String(row.granted_by ?? ''),
+    createdAt: Number(row.created_at ?? 0),
+  }))
+}
+
+function clearInvalidGameTitleSelection(usernameLower: string): void {
+  run(`DELETE FROM game_player_title_selection
+       WHERE username_lower = ?
+         AND NOT EXISTS (
+           SELECT 1
+           FROM game_player_title_grants AS grant_row
+           JOIN game_titles AS title ON title.id = grant_row.title_id AND title.enabled = 1
+           WHERE grant_row.username_lower = game_player_title_selection.username_lower
+             AND grant_row.title_id = game_player_title_selection.title_id
+         )`, usernameLower)
+}
+
+export function getGamePlayerTitleSnapshot(usernameValue: unknown): GamePlayerTitleSnapshot {
+  const account = getGameAccount(String(usernameValue ?? ''))
+  if (!account) throw createError({ statusCode: 404, statusMessage: '游戏账户不存在' })
+  clearInvalidGameTitleSelection(account.usernameLower)
+  const grants = titleGrantRows(account.usernameLower)
+  const enabledTitleIds = new Set(listGameTitles(false).map((title) => title.id))
+  const ownedTitleIds = [...new Set(grants.map((grant) => grant.titleId).filter((id) => enabledTitleIds.has(id)))]
+  const selected = get('SELECT title_id FROM game_player_title_selection WHERE username_lower = ?', account.usernameLower)
+  const equippedTitleId = selected && ownedTitleIds.includes(String(selected.title_id ?? ''))
+    ? String(selected.title_id)
+    : null
+  return {
+    username: account.username,
+    usernameLower: account.usernameLower,
+    uuid: account.uuid,
+    ownedTitleIds,
+    equippedTitleId,
+    grants,
+  }
+}
+
+export function listGamePlayerTitleSnapshots(): GamePlayerTitleSnapshot[] {
+  return listGameAccounts().map((account) => getGamePlayerTitleSnapshot(account.username))
+}
+
+const PERMISSION_GAME_TITLE_IDS = new Set(['admin_junior', 'admin_middle', 'admin_senior'])
+
+export function syncPermissionGameTitles(players: Array<{ username: string, titleIds: string[] }>): GamePlayerTitleSnapshot[] {
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    const snapshots: GamePlayerTitleSnapshot[] = []
+    for (const player of players) {
+      const account = getGameAccount(player.username)
+      if (!account) continue
+      const titleIds = [...new Set(player.titleIds
+        .map((id) => String(id).trim().toLocaleLowerCase('en-US'))
+        .filter((id) => PERMISSION_GAME_TITLE_IDS.has(id)))]
+      run(`DELETE FROM game_player_title_grants
+           WHERE username_lower = ? AND source = 'permission'`, account.usernameLower)
+      for (const titleId of titleIds) {
+        run(`INSERT OR IGNORE INTO game_player_title_grants
+             (username_lower, title_id, source, source_key, granted_by, created_at)
+             VALUES (?, ?, 'permission', ?, 'minecraft_server', ?)`,
+        account.usernameLower, titleId, titleId, Date.now())
+      }
+      clearInvalidGameTitleSelection(account.usernameLower)
+      snapshots.push(getGamePlayerTitleSnapshot(account.username))
+    }
+    db.exec('COMMIT')
+    return snapshots
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+}
+
+export function setGamePlayerEquippedTitle(usernameValue: unknown, titleIdValue: unknown): GamePlayerTitleSnapshot {
+  const account = getGameAccount(String(usernameValue ?? ''))
+  if (!account) throw createError({ statusCode: 404, statusMessage: '游戏账户不存在' })
+  const titleId = String(titleIdValue ?? '').trim().toLocaleLowerCase('en-US')
+  if (!titleId) {
+    run('DELETE FROM game_player_title_selection WHERE username_lower = ?', account.usernameLower)
+    return getGamePlayerTitleSnapshot(account.username)
+  }
+  const owned = get(`SELECT 1
+                     FROM game_player_title_grants AS grant_row
+                     JOIN game_titles AS title ON title.id = grant_row.title_id AND title.enabled = 1
+                     WHERE grant_row.username_lower = ? AND grant_row.title_id = ?
+                     LIMIT 1`, account.usernameLower, titleId)
+  if (!owned) throw createError({ statusCode: 403, statusMessage: '玩家尚未拥有此称号' })
+  run(`INSERT INTO game_player_title_selection (username_lower, title_id, updated_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(username_lower) DO UPDATE SET title_id = excluded.title_id, updated_at = excluded.updated_at`,
+  account.usernameLower, titleId, Date.now())
+  return getGamePlayerTitleSnapshot(account.username)
+}
+
+export function grantGameTitleManually(usernameValue: unknown, titleIdValue: unknown, grantedBy: string): GamePlayerTitleSnapshot {
+  const account = getGameAccount(String(usernameValue ?? ''))
+  if (!account) throw createError({ statusCode: 404, statusMessage: '游戏账户不存在' })
+  const title = getGameTitle(titleIdValue)
+  if (!title) throw createError({ statusCode: 404, statusMessage: '称号不存在' })
+  run(`INSERT OR IGNORE INTO game_player_title_grants
+       (username_lower, title_id, source, source_key, granted_by, created_at)
+       VALUES (?, ?, 'manual', 'admin', ?, ?)`, account.usernameLower, title.id, grantedBy.slice(0, 64), Date.now())
+  return getGamePlayerTitleSnapshot(account.username)
+}
+
+export function revokeEditableGameTitleGrants(usernameValue: unknown, titleIdValue: unknown): GamePlayerTitleSnapshot {
+  const account = getGameAccount(String(usernameValue ?? ''))
+  if (!account) throw createError({ statusCode: 404, statusMessage: '游戏账户不存在' })
+  const titleId = String(titleIdValue ?? '').trim().toLocaleLowerCase('en-US')
+  run(`DELETE FROM game_player_title_grants
+       WHERE username_lower = ? AND title_id = ? AND source <> 'permission'`, account.usernameLower, titleId)
+  clearInvalidGameTitleSelection(account.usernameLower)
+  return getGamePlayerTitleSnapshot(account.username)
 }
 
 export function createGameSession(username: string, expiresAt: number | null = null): string {
@@ -3104,6 +3981,7 @@ export function updateAdminPassword(user: AdminUser, oldPassword: string, newPas
   run('UPDATE admin_users SET password_hash = ?, updated_at = ? WHERE id = ?', hashAdminPassword(password), Date.now(), user.id)
   if (user.isOwner) deleteSetting(ADMIN_PASSWORD_SETTING)
   run('DELETE FROM sessions WHERE user_id = ?', user.id)
+  run('DELETE FROM admin_login_takeovers WHERE user_id = ?', user.id)
 }
 
 export function verifyUserPassword(username: string, password: string): boolean {
@@ -3896,6 +4774,8 @@ export interface DomainMailSummary {
   hasHtml: boolean
   attachmentCount: number
   attachmentBytes: number
+  /** 当前后台用户尚未查看这封邮件。 */
+  unread: boolean
 }
 
 export interface DomainMailDetail extends DomainMailSummary {
@@ -3915,7 +4795,10 @@ const DOMAIN_MAIL_SUMMARY_SQL = `
          m.raw_size, m.spf, m.dkim, m.dmarc, m.truncated,
          length(m.text_body) AS text_len, length(m.html_body) AS html_len,
          COUNT(a.id) AS attachment_count,
-         COALESCE(SUM(a.size), 0) AS attachment_bytes
+         COALESCE(SUM(a.size), 0) AS attachment_bytes,
+         CASE WHEN EXISTS (
+           SELECT 1 FROM domain_mail_reads r WHERE r.user_id = ? AND r.mail_id = m.id
+         ) THEN 0 ELSE 1 END AS unread
   FROM domain_mails m
   LEFT JOIN domain_mail_attachments a ON a.mail_id = m.id
 `
@@ -3941,16 +4824,17 @@ function mapDomainMailSummary(row: Record<string, unknown>): DomainMailSummary {
     hasHtml: Number(row.html_len ?? 0) > 0,
     attachmentCount: Number(row.attachment_count ?? 0),
     attachmentBytes: Number(row.attachment_bytes ?? 0),
+    unread: Number(row.unread ?? 0) === 1,
   }
 }
 
-export function listDomainMails(): DomainMailSummary[] {
-  return all(`${DOMAIN_MAIL_SUMMARY_SQL} GROUP BY m.id ORDER BY m.received_time DESC, m.id`)
+export function listDomainMails(userId: number): DomainMailSummary[] {
+  return all(`${DOMAIN_MAIL_SUMMARY_SQL} GROUP BY m.id ORDER BY m.received_time DESC, m.id`, userId)
     .map(mapDomainMailSummary)
 }
 
-export function getDomainMailDetail(id: string): DomainMailDetail | undefined {
-  const row = get(`${DOMAIN_MAIL_SUMMARY_SQL} WHERE m.id = ? GROUP BY m.id`, id)
+export function getDomainMailDetail(id: string, userId = -1): DomainMailDetail | undefined {
+  const row = get(`${DOMAIN_MAIL_SUMMARY_SQL} WHERE m.id = ? GROUP BY m.id`, userId, id)
   if (!row) return undefined
   const bodies = get('SELECT to_addresses, cc_addresses, reply_to, text_body, html_body FROM domain_mails WHERE id = ?', id)
   const attachments = all(`SELECT id, position, filename, mime_type, disposition, content_id, size, sha256,
@@ -3976,6 +4860,53 @@ export function getDomainMailDetail(id: string): DomainMailDetail | undefined {
     htmlBody: String(bodies?.html_body ?? ''),
     attachments,
   }
+}
+
+export function getUnreadDomainMailCount(userId: number): number {
+  const row = get(`SELECT COUNT(*) AS count
+                   FROM domain_mails m
+                   WHERE NOT EXISTS (
+                     SELECT 1 FROM domain_mail_reads r
+                     WHERE r.user_id = ? AND r.mail_id = m.id
+                   )`, userId)
+  return Number(row?.count ?? 0)
+}
+
+/** 只有邮件确实存在时才写入记录；重复查看保持第一次阅读时间。 */
+export function markDomainMailRead(userId: number, mailId: string): boolean {
+  const result = run(`INSERT INTO domain_mail_reads (user_id, mail_id, read_at)
+                      SELECT ?, id, ? FROM domain_mails WHERE id = ?
+                      ON CONFLICT(user_id, mail_id) DO NOTHING`,
+    userId, Date.now(), mailId)
+  return Number(result.changes) > 0
+}
+
+export interface DomainMailReader {
+  id: number
+  username: string
+  avatar: string
+  fullName: string
+  isOwner: boolean
+  isActive: boolean
+  readAt: number
+}
+
+/** 返回仍存在的后台用户及其首次阅读时间，最近阅读的用户排在前面。 */
+export function listDomainMailReaders(mailId: string): DomainMailReader[] {
+  return all(`SELECT u.id, u.username, u.avatar, u.full_name, u.is_owner, u.is_active, r.read_at
+              FROM domain_mail_reads r
+              INNER JOIN admin_users u ON u.id = r.user_id
+              WHERE r.mail_id = ?
+              ORDER BY r.read_at DESC, u.id`, mailId)
+    .map((row) => ({
+      id: Number(row.id),
+      username: String(row.username ?? ''),
+      avatar: String(row.avatar ?? ''),
+      fullName: String(row.full_name ?? ''),
+      isOwner: Number(row.is_owner ?? 0) === 1,
+      isActive: Number(row.is_active ?? 0) === 1,
+      readAt: Number(row.read_at ?? 0),
+    }))
 }
 
 export function getDomainMailAttachment(mailId: string, attachmentId: string): {
@@ -4093,6 +5024,7 @@ function pruneDomainMails(): void {
                      LIMIT -1 OFFSET ${DOMAIN_MAIL_RETENTION_ROWS}`)
   for (const row of stale) {
     const staleId = String(row.id)
+    run('DELETE FROM domain_mail_reads WHERE mail_id = ?', staleId)
     run('DELETE FROM domain_mail_attachments WHERE mail_id = ?', staleId)
     run('DELETE FROM domain_mails WHERE id = ?', staleId)
   }
@@ -4101,6 +5033,7 @@ function pruneDomainMails(): void {
 export function deleteDomainMail(id: string): boolean {
   db.exec('BEGIN IMMEDIATE')
   try {
+    run('DELETE FROM domain_mail_reads WHERE mail_id = ?', id)
     run('DELETE FROM domain_mail_attachments WHERE mail_id = ?', id)
     const result = run('DELETE FROM domain_mails WHERE id = ?', id)
     db.exec('COMMIT')

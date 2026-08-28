@@ -2,13 +2,13 @@ import {
   chatIpHash,
   insertChatMessage,
   recordAudit,
-  requireAuth,
+  requireFeaturePermission,
   requireChatContent,
 } from '../../utils/db'
 import { resolveIpLocation } from '../../utils/ip-location'
 
 export default defineEventHandler(async (event) => {
-  const user = requireAuth(event)
+  const user = requireFeaturePermission(event, 'chat-send', 'edit')
   const body = await readBody<{ content?: string }>(event)
 
   const content = requireChatContent(body?.content)

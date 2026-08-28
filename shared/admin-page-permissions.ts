@@ -8,6 +8,7 @@ export interface AdminPageDefinition {
   route: string
   icon: string
   defaultLevel: AdminPagePermissionLevel
+  readOnly?: boolean
   maxNonOwnerLevel?: Exclude<AdminPagePermissionLevel, 'edit'>
 }
 
@@ -30,9 +31,19 @@ export const ADMIN_PAGE_DEFINITIONS: AdminPageDefinition[] = [
     route: '/',
     icon: 'dashboard',
     defaultLevel: 'view',
+    readOnly: true,
     maxNonOwnerLevel: 'view',
   },
   { key: 'activity', label: '服务器动态', route: '/activity', icon: 'monitoring', defaultLevel: 'edit' },
+  {
+    key: 'status',
+    label: '服务器状态',
+    route: '/status',
+    icon: 'monitor_heart',
+    defaultLevel: 'view',
+    readOnly: true,
+    maxNonOwnerLevel: 'view',
+  },
   { key: 'chat', label: '聊天区', route: '/chat', icon: 'forum', defaultLevel: 'edit' },
   { key: 'donors', label: '捐赠列表', route: '/donors', icon: 'redeem', defaultLevel: 'edit' },
   { key: 'bans', label: '封禁列表', route: '/bans', icon: 'gavel', defaultLevel: 'edit' },
@@ -46,6 +57,7 @@ export const ADMIN_PAGE_DEFINITIONS: AdminPageDefinition[] = [
   { key: 'server-files', label: '服务器文件', route: '/server-files', icon: 'folder', defaultLevel: 'hidden' },
   { key: 'game-accounts', label: '游戏账户', route: '/game-accounts', icon: 'manage_accounts', defaultLevel: 'edit' },
   { key: 'game-cosmetics', label: '账户装扮', route: '/game-cosmetics', icon: 'checkroom', defaultLevel: 'edit' },
+  { key: 'game-titles', label: '玩家称号', route: '/game-titles', icon: 'military_tech', defaultLevel: 'edit' },
   { key: 'mail', label: '服内邮件', route: '/mail', icon: 'mail', defaultLevel: 'edit' },
   { key: 'domain-mail', label: '域名邮件', route: '/domain-mail', icon: 'alternate_email', defaultLevel: 'edit' },
   {
@@ -54,6 +66,7 @@ export const ADMIN_PAGE_DEFINITIONS: AdminPageDefinition[] = [
     route: '/audit-logs',
     icon: 'history',
     defaultLevel: 'view',
+    readOnly: true,
     maxNonOwnerLevel: 'view',
   },
   { key: 'settings', label: '站点设置', route: '/settings', icon: 'settings', defaultLevel: 'view' },
@@ -100,6 +113,146 @@ export const ADMIN_FEATURE_DEFINITIONS: AdminFeatureDefinition[] = [
     icon: 'account_circle',
     description: '允许账户上传、移除或恢复自己的头像。',
     parentKey: 'account',
+    defaultLevel: 'edit',
+    availableLevels: ['hidden', 'edit'],
+  },
+  {
+    key: 'chat-send',
+    label: '聊天区：发布消息',
+    icon: 'send',
+    description: '允许使用后台账户身份向官网聊天区发布消息。',
+    parentKey: 'chat',
+    pageKey: 'chat',
+    defaultLevel: 'edit',
+    availableLevels: ['hidden', 'edit'],
+  },
+  {
+    key: 'chat-moderate',
+    label: '聊天区：管理消息',
+    icon: 'delete_sweep',
+    description: '允许删除单条消息或清空聊天区。',
+    parentKey: 'chat',
+    pageKey: 'chat',
+    defaultLevel: 'edit',
+    availableLevels: ['hidden', 'edit'],
+  },
+  {
+    key: 'game-accounts-manage',
+    label: '游戏账户：管理账户',
+    icon: 'manage_accounts',
+    description: '允许创建、解锁、重置密码和注销游戏账户。',
+    parentKey: 'game-accounts',
+    pageKey: 'game-accounts',
+    defaultLevel: 'edit',
+    availableLevels: ['hidden', 'edit'],
+  },
+  {
+    key: 'game-accounts-settings',
+    label: '游戏账户：修改登录与邮件设置',
+    icon: 'settings',
+    description: '允许修改登录冷却、注册邮箱验证和 SMTP 配置。',
+    parentKey: 'game-accounts',
+    pageKey: 'game-accounts',
+    defaultLevel: 'edit',
+    availableLevels: ['hidden', 'edit'],
+  },
+  {
+    key: 'game-accounts-email-templates',
+    label: '游戏账户：修改验证码邮件模板',
+    icon: 'edit_note',
+    description: '允许修改注册、找回密码与换绑邮箱的验证码邮件模板。',
+    parentKey: 'game-accounts',
+    pageKey: 'game-accounts',
+    defaultLevel: 'edit',
+    availableLevels: ['hidden', 'edit'],
+  },
+  {
+    key: 'game-cosmetics-refresh',
+    label: '账户装扮：刷新正版档案',
+    icon: 'cloud_sync',
+    description: '允许绕过缓存重新向 Mojang 查询正版账户外观。',
+    parentKey: 'game-cosmetics',
+    pageKey: 'game-cosmetics',
+    defaultLevel: 'edit',
+    availableLevels: ['hidden', 'edit'],
+  },
+  {
+    key: 'game-titles-catalog',
+    label: '玩家称号：管理称号目录',
+    icon: 'workspace_premium',
+    description: '允许创建、修改、启用和停用称号定义。',
+    parentKey: 'game-titles',
+    pageKey: 'game-titles',
+    defaultLevel: 'edit',
+    availableLevels: ['hidden', 'edit'],
+  },
+  {
+    key: 'game-titles-grants',
+    label: '玩家称号：管理玩家授权',
+    icon: 'person_edit',
+    description: '允许手动给予、回收称号，并修改玩家正在佩戴的称号。',
+    parentKey: 'game-titles',
+    pageKey: 'game-titles',
+    defaultLevel: 'edit',
+    availableLevels: ['hidden', 'edit'],
+  },
+  {
+    key: 'mail-publish',
+    label: '服内邮件：发布公告与通知',
+    icon: 'outgoing_mail',
+    description: '允许通过后台向全体或指定玩家发布服内公告和通知。',
+    parentKey: 'mail',
+    pageKey: 'mail',
+    defaultLevel: 'edit',
+    availableLevels: ['hidden', 'edit'],
+  },
+  {
+    key: 'domain-mail-send',
+    label: '域名邮件：发送邮件',
+    icon: 'send',
+    description: '允许使用后台账户对应的域名邮箱发送邮件。',
+    parentKey: 'domain-mail',
+    pageKey: 'domain-mail',
+    defaultLevel: 'edit',
+    availableLevels: ['hidden', 'edit'],
+  },
+  {
+    key: 'domain-mail-delete',
+    label: '域名邮件：删除邮件',
+    icon: 'delete',
+    description: '允许永久删除收到的域名邮件及其附件。',
+    parentKey: 'domain-mail',
+    pageKey: 'domain-mail',
+    defaultLevel: 'edit',
+    availableLevels: ['hidden', 'edit'],
+  },
+  {
+    key: 'server-files-edit',
+    label: '服务器文件：修改文件',
+    icon: 'edit_document',
+    description: '允许编辑、新建、重命名、复制、移动、压缩和解压实例文件。',
+    parentKey: 'server-files',
+    pageKey: 'server-files',
+    defaultLevel: 'edit',
+    availableLevels: ['hidden', 'edit'],
+  },
+  {
+    key: 'server-files-upload',
+    label: '服务器文件：上传文件',
+    icon: 'upload_file',
+    description: '允许向实例目录上传文件。',
+    parentKey: 'server-files',
+    pageKey: 'server-files',
+    defaultLevel: 'edit',
+    availableLevels: ['hidden', 'edit'],
+  },
+  {
+    key: 'server-files-delete',
+    label: '服务器文件：删除文件',
+    icon: 'delete_forever',
+    description: '允许永久删除实例文件和目录。',
+    parentKey: 'server-files',
+    pageKey: 'server-files',
     defaultLevel: 'edit',
     availableLevels: ['hidden', 'edit'],
   },
@@ -206,7 +359,7 @@ export function defaultAdminPagePermissions(): Record<string, AdminPagePermissio
 }
 
 export function ownerAdminPagePermissions(): Record<string, AdminPagePermissionLevel> {
-  return Object.fromEntries(ADMIN_PAGE_DEFINITIONS.map((page) => [page.key, 'edit']))
+  return Object.fromEntries(ADMIN_PAGE_DEFINITIONS.map((page) => [page.key, page.readOnly ? 'view' : 'edit']))
 }
 
 export function defaultAdminFeaturePermissions(): Record<string, AdminFeaturePermissionLevel> {
@@ -236,4 +389,38 @@ export function permissionAllows(
 ): boolean {
   const rank: Record<AdminPagePermissionLevel, number> = { hidden: 0, view: 1, edit: 2 }
   return rank[actual || 'hidden'] >= rank[required]
+}
+
+export function adminPagePermissionNotice(
+  pageKey: string | undefined,
+  pageLevel: AdminPagePermissionLevel,
+  featurePermissions: Record<string, AdminFeaturePermissionLevel> = {},
+): { icon: string; text: string } | null {
+  const page = ADMIN_PAGE_DEFINITIONS.find((item) => item.key === pageKey)
+  if (!page || page.readOnly) return null
+
+  if (pageLevel === 'view') {
+    return {
+      icon: 'visibility',
+      text: '当前账户对此页面仅有查看权限，修改操作已禁用。',
+    }
+  }
+  if (pageLevel !== 'edit') return null
+
+  const features = ADMIN_FEATURE_DEFINITIONS.filter((feature) => feature.pageKey === page.key)
+  if (!features.length) return null
+  const editableFeatures = features.filter((feature) => featurePermissions[feature.key] === 'edit')
+  if (editableFeatures.length === features.length) return null
+  if (!editableFeatures.length) {
+    return {
+      icon: 'visibility',
+      text: '当前账户未获授此页面的可编辑功能，修改操作已禁用。',
+    }
+  }
+
+  const labels = editableFeatures.map((feature) => feature.label.replace(`${page.label}：`, ''))
+  return {
+    icon: 'edit_note',
+    text: `当前账户可编辑此页面的部分功能：${labels.join('、')}。`,
+  }
 }

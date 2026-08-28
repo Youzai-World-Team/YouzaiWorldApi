@@ -631,14 +631,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="page">
     <div class="page-heading">
-      <div>
-        <h1 class="page-title">服务器管理</h1>
-        <p class="page-subtitle">
-          通过 MCSManager 面板管理 Minecraft 服务器实例：查看运行状态与控制台输出、发送命令、
-          启动停止重启，以及把世界存档打包成备份。面板 ApiKey 只保存在本服务端，
-          浏览器不会拿到它，所有面板调用都由本服务端代为发起。
-        </p>
-      </div>
+      <h1 class="page-title">服务器管理</h1>
       <div class="heading-actions">
         <md-icon-button aria-label="刷新" title="刷新" :disabled="loading" @click="loadInstances">
           <md-icon>refresh</md-icon>
@@ -650,10 +643,7 @@ onBeforeUnmount(() => {
 
     <section v-else-if="!configured" class="card">
       <h2 class="card-title">尚未连接 MCSM 面板</h2>
-      <p class="card-note">
-        请先到「站点设置」页填写 MCSManager 的面板地址与 ApiKey。
-        ApiKey 在面板右上角的用户信息页生成，权限与该面板账户完全一致，请当作密码保管。
-      </p>
+      <p class="card-note">请在「站点设置」填写面板地址与 ApiKey；ApiKey 权限等同面板账户，请妥善保管。</p>
       <div class="form-actions">
         <md-filled-button @click="goToSettings">
           <md-icon slot="icon">settings</md-icon>
@@ -793,19 +783,13 @@ onBeforeUnmount(() => {
           </div>
 
           <pre ref="consoleBox" class="console">{{ logText || (logLoading ? '加载中…' : liveMode && liveState !== 'closed' ? '正在连接实时控制台…' : '（暂无输出）') }}</pre>
-          <p class="card-note">
-            实时输出由本服务端连到守护进程后转发，新日志会即时推过来，不是定时轮询。
-            关掉「实时输出」会停在当前快照上，改用手动刷新。
-            面板开启了伪终端，输出按终端宽度硬折行，这一点和面板自带的控制台一致；服务端已去掉 ANSI 转义序列。
-          </p>
-
           <h3 class="section-title">发送命令</h3>
           <p v-if="!canCommand" class="card-note">当前账户没有「发送命令」权限，输入框已禁用。</p>
           <div class="command-row">
             <md-outlined-text-field
               class="command-input"
               label="服务器命令"
-              supporting-text="回车发送，↑ ↓ 翻历史。不需要前置斜杠，一次只能发一条命令。"
+              supporting-text="无需前置斜杠，一次一条命令"
               autocomplete="off"
               spellcheck="false"
               :disabled="!canCommand || !running"
@@ -839,14 +823,8 @@ onBeforeUnmount(() => {
           </div>
 
           <p class="card-note">
-            备份是由面板的文件接口把选中的目录压缩成 zip，放在实例目录下的
-            <code>{{ backupDir }}</code>（可在站点设置里改）。
-            大世界压缩耗时较长，请求可能先超时，压缩任务仍在面板侧继续，稍后刷新即可看到。
-            恢复会把压缩包解压回实例根目录并覆盖同名文件，因此只允许在实例已停止时执行。
-          </p>
-          <p class="card-note">
-            服务器运行时会占着部分文件的句柄，压缩 <code>mods</code> 这类目录会失败；
-            世界存档可以正常备份，要整机备份请先停服。
+            大世界压缩可能先超时；任务仍会在面板侧继续。恢复会覆盖同名文件，只能在实例停止时执行。
+            运行中被占用的文件无法压缩，整机备份前请停服。
           </p>
           <p v-if="!canBackup" class="card-note">当前账户没有「备份管理」权限，只能查看列表。</p>
 
@@ -910,10 +888,6 @@ onBeforeUnmount(() => {
       <md-icon slot="icon">backup</md-icon>
       <div slot="headline">创建备份</div>
       <div slot="content" class="create-content">
-        <p class="card-note">
-          勾选要打包的目录，压缩包会存到 <code>{{ backupDir }}</code>。
-          只列出实例根目录下的一级目录，备份目录自身不能选。
-        </p>
         <p v-if="!selectableDirectories.length" class="empty">没有可备份的目录</p>
         <div v-else class="target-list">
           <label v-for="name in selectableDirectories" :key="name" class="switch-row">
@@ -946,10 +920,7 @@ onBeforeUnmount(() => {
       <md-icon slot="icon">download</md-icon>
       <div slot="headline">下载备份 {{ downloadName }}</div>
       <div slot="content" class="download-content">
-        <p class="card-note">
-          面板给出的是一次性下载地址，直连守护进程（节点），不经过本服务端。
-          如果节点地址是内网域名或浏览器拦下了不安全下载，请改用面板自带的文件管理下载。
-        </p>
+        <p class="card-note">若节点地址为内网域名或浏览器拦截不安全下载，请改用面板文件管理。</p>
         <p class="mono download-url">{{ downloadUrl }}</p>
       </div>
       <div slot="actions">
@@ -1012,7 +983,6 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .page-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
-.page-subtitle { margin: -12px 0 20px; color: var(--md-sys-color-on-surface-variant); font-size: 13px; max-width: 820px; line-height: 1.7; }
 .heading-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .card + .card { margin-top: 20px; }
 .card-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
@@ -1073,5 +1043,10 @@ onBeforeUnmount(() => {
 @media (max-width: 720px) {
   .panel-meta { text-align: left; }
   .console { height: 320px; }
+  .instance-select { min-width: 0; flex-basis: 100%; }
+  .size-select { width: 100%; min-width: 0; }
+  .create-content,
+  .download-content { width: 100%; min-width: 0; }
+  .command-row md-filled-button { width: 100%; }
 }
 </style>

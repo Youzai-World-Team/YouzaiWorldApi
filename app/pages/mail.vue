@@ -84,7 +84,8 @@ const submitting = ref(false)
 
 const { showToast } = useToast()
 const access = useAdminAccess()
-const canEdit = computed(() => access.levelForKey('mail') === 'edit')
+const canPublish = computed(() => access.levelForKey('mail') === 'edit'
+  && access.featureLevelForKey('mail-publish') === 'edit')
 const { apply: applyDialogAnimation } = useDialogAnimation()
 
 const filtered = computed(() => {
@@ -158,6 +159,7 @@ async function loadAccounts() {
 }
 
 function openCompose() {
+  if (!canPublish.value) return
   composeType.value = 'ANNOUNCEMENT'
   composeTitle.value = ''
   composeBody.value = ''
@@ -194,6 +196,7 @@ function togglePlayer(name: string) {
 }
 
 async function submitCompose() {
+  if (!canPublish.value) return
   if (!composeTitle.value.trim()) {
     showToast('主题不能为空', 'error')
     return
@@ -256,12 +259,9 @@ function attachmentDetail(attachment: MailAttachment) {
 <template>
   <div class="page">
     <div class="page-heading">
-      <div>
-        <h1 class="page-title">服内邮件</h1>
-        <p class="page-subtitle">查看游戏内已发布的服务器邮件与每位收件人的阅读、领取状态。后台可发布公告与通知；奖励邮件、编辑与撤回仍在游戏内进行。</p>
-      </div>
+      <h1 class="page-title">服内邮件</h1>
       <div class="heading-actions">
-        <md-filled-button v-if="canEdit" @click="openCompose">
+        <md-filled-button v-if="canPublish" @click="openCompose">
           <md-icon slot="icon">edit_note</md-icon>
           发布公告 / 通知
         </md-filled-button>
@@ -357,16 +357,18 @@ function attachmentDetail(attachment: MailAttachment) {
           </ul>
 
           <h3 class="section-title">附件（{{ detail.attachments.length }}）</h3>
-          <table v-if="detail.attachments.length" class="data-table inner-table">
-            <thead><tr><th>类型</th><th>数量</th><th>内容</th></tr></thead>
-            <tbody>
-              <tr v-for="(attachment, index) in detail.attachments" :key="index">
-                <td>{{ attachmentLabel(attachment.type) }}</td>
-                <td>{{ attachment.amount }}</td>
-                <td class="mono nbt-cell" :title="attachmentDetail(attachment)">{{ attachmentDetail(attachment) }}</td>
-              </tr>
-            </tbody>
-          </table>
+          <div v-if="detail.attachments.length" class="inner-table-wrap">
+            <table class="data-table inner-table">
+              <thead><tr><th>类型</th><th>数量</th><th>内容</th></tr></thead>
+              <tbody>
+                <tr v-for="(attachment, index) in detail.attachments" :key="index">
+                  <td>{{ attachmentLabel(attachment.type) }}</td>
+                  <td>{{ attachment.amount }}</td>
+                  <td class="mono nbt-cell" :title="attachmentDetail(attachment)">{{ attachmentDetail(attachment) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
           <p v-else class="empty inner-empty">无附件</p>
 
           <h3 class="section-title">收件人（{{ detail.recipients.length }}）</h3>
@@ -398,7 +400,7 @@ function attachmentDetail(attachment: MailAttachment) {
       <div slot="headline">发布公告 / 通知</div>
       <div slot="content">
         <div class="dialog-form">
-          <p class="form-hint">发件人取当前后台账户。收件人打开信箱即可看到；未读红点由服务端周期刷新（约 2.5 分钟内）点亮。</p>
+          <p class="form-hint">发件人使用当前后台账户。</p>
 
           <md-outlined-select label="类型" @change="onComposeTypeChange">
             <md-select-option value="ANNOUNCEMENT" :selected="composeType === 'ANNOUNCEMENT'">
@@ -479,7 +481,6 @@ function attachmentDetail(attachment: MailAttachment) {
 
 <style scoped>
 .page-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
-.page-subtitle { margin: -12px 0 20px; color: var(--md-sys-color-on-surface-variant); font-size: 13px; max-width: 720px; }
 .toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
 .search { min-width: 280px; flex: 1 1 280px; }
 .count { color: var(--md-sys-color-on-surface-variant); font-size: 13px; }
@@ -497,7 +498,7 @@ function attachmentDetail(attachment: MailAttachment) {
 .badge-announcement { background: var(--md-sys-color-primary-container); color: var(--md-sys-color-on-primary-container); }
 .badge-expired { margin-left: 6px; background: var(--md-sys-color-error-container); color: var(--md-sys-color-on-error-container); }
 .badge-hidden { margin-left: 6px; }
-.detail { display: flex; flex-direction: column; gap: 4px; min-width: min(680px, 76vw); }
+.detail { width: min(680px, 100%); min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px 20px; margin: 0 0 8px; }
 .meta dt { color: var(--md-sys-color-on-surface-variant); font-size: 12px; }
 .meta dd { margin: 2px 0 0; font-size: 14px; word-break: break-all; }
@@ -506,11 +507,12 @@ function attachmentDetail(attachment: MailAttachment) {
 .target-list { margin: 0; padding-left: 20px; font-size: 14px; }
 .target-args { word-break: break-all; }
 .inner-table th, .inner-table td { padding: 8px; font-size: 13px; }
+.inner-table-wrap { width: 100%; max-width: 100%; overflow-x: auto; }
 .inner-empty { padding: 8px 0; font-size: 13px; }
 .nbt-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
-.recipient-wrap { max-height: 320px; overflow: auto; }
+.recipient-wrap { width: 100%; max-width: 100%; max-height: 320px; overflow: auto; }
 .heading-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-.dialog-form { display: flex; flex-direction: column; gap: 16px; min-width: min(520px, 74vw); }
+.dialog-form { width: min(520px, 100%); min-width: 0; display: flex; flex-direction: column; gap: 16px; }
 .dialog-form md-outlined-select, .dialog-form md-outlined-text-field { width: 100%; }
 .form-hint { margin: 0; font-size: 12px; color: var(--md-sys-color-on-surface-variant); }
 .field-group { display: flex; flex-direction: column; gap: 6px; }
@@ -520,4 +522,12 @@ function attachmentDetail(attachment: MailAttachment) {
 .picker-count { margin: 0; font-size: 12px; color: var(--md-sys-color-on-surface-variant); }
 .picker-list { max-height: 220px; overflow: auto; padding: 4px 8px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 8px; }
 .picker-row { padding: 2px 0; }
+@media (max-width: 640px) {
+  .page-heading { align-items: stretch; flex-direction: column; }
+  .heading-actions { width: 100%; flex-wrap: wrap; }
+  .heading-actions md-filled-button { flex: 1 1 auto; }
+  .search { width: 100%; min-width: 0; flex-basis: 100%; }
+  .meta { grid-template-columns: minmax(0, 1fr); }
+  .inner-table { min-width: 440px; }
+}
 </style>

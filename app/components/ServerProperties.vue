@@ -152,8 +152,7 @@ watch(() => [props.uuid, props.daemonId], () => {
     </div>
 
     <p class="card-note">
-      直接编辑实例的 <code>{{ fileName || 'server.properties' }}</code>。
-      Minecraft 只在启动时读这个文件，**改完要重启服务器才生效**。
+      修改 <code>{{ fileName || 'server.properties' }}</code> 后需重启服务器生效。
       <span v-if="!canEdit">当前账户没有「服务器设置」的修改权限，只能查看。</span>
     </p>
 

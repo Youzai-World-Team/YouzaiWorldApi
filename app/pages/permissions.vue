@@ -9,6 +9,8 @@ import type {
 
 useHead({ title: '权限管理' })
 
+type DraftPermissionLevel = AdminPagePermissionLevel | 'unchanged'
+
 interface PermissionUser {
   id: number
   username: string
@@ -31,54 +33,126 @@ const { showToast } = useToast()
 const pages = ref<AdminPageDefinition[]>([])
 const features = ref<AdminFeatureDefinition[]>([])
 const users = ref<PermissionUser[]>([])
-const selectedUserId = ref<number | null>(null)
-const drafts = ref<Record<string, AdminPagePermissionLevel>>({})
-const featureDrafts = ref<Record<string, AdminFeaturePermissionLevel>>({})
+const selectedUserIds = ref<number[]>([])
+const drafts = ref<Record<string, DraftPermissionLevel>>({})
+const featureDrafts = ref<Record<string, DraftPermissionLevel>>({})
 const expandedParents = ref<Set<string>>(new Set())
 const loading = ref(true)
 const saving = ref(false)
 
-const selectedUser = computed(() => users.value.find((user) => user.id === selectedUserId.value) || null)
+const selectedUsers = computed(() => users.value.filter((user) => selectedUserIds.value.includes(user.id)))
+const selectedUser = computed(() => selectedUsers.value.length === 1 ? selectedUsers.value[0]! : null)
+const bulkMode = computed(() => selectedUsers.value.length > 1)
+const ownerSelected = computed(() => selectedUsers.value.some((user) => user.isOwner))
 const canManage = computed(() => access.user.value?.isOwner === true)
+const canEditSelection = computed(() => canManage.value && selectedUsers.value.length > 0 && !ownerSelected.value)
 const accountFeatures = computed(() => features.value.filter((feature) => feature.parentKey === 'account'))
+const panelTitle = computed(() => bulkMode.value
+  ? `${selectedUsers.value.length} 位后台用户`
+  : selectedUser.value?.fullName || selectedUser.value?.username || '')
+const hasDraftChanges = computed(() => {
+  if (!canEditSelection.value) return false
+  if (bulkMode.value) {
+    return Object.values(drafts.value).some((level) => level !== 'unchanged')
+      || Object.values(featureDrafts.value).some((level) => level !== 'unchanged')
+  }
+  const user = selectedUser.value
+  if (!user) return false
+  return pages.value.some((page) => drafts.value[page.key] !== user.permissions[page.key])
+    || features.value.some((feature) => featureDrafts.value[feature.key] !== user.featurePermissions[feature.key])
+})
 
-function selectUser(user: PermissionUser) {
-  selectedUserId.value = user.id
-  drafts.value = { ...user.permissions }
-  featureDrafts.value = { ...user.featurePermissions }
+function resetDrafts() {
+  const user = selectedUser.value
+  if (user) {
+    drafts.value = { ...user.permissions }
+    featureDrafts.value = { ...user.featurePermissions }
+    return
+  }
+  if (bulkMode.value) {
+    drafts.value = Object.fromEntries(pages.value.map((page) => [page.key, 'unchanged']))
+    featureDrafts.value = Object.fromEntries(features.value.map((feature) => [feature.key, 'unchanged']))
+    return
+  }
+  drafts.value = {}
+  featureDrafts.value = {}
 }
 
-function setPermission(page: AdminPageDefinition, level: AdminPagePermissionLevel) {
-  if (!canManage.value || selectedUser.value?.isOwner) return
-  const nextLevel = page.maxNonOwnerLevel === 'hidden'
-    ? 'hidden'
-    : page.maxNonOwnerLevel === 'view' && level === 'edit'
-      ? 'view'
-      : level
-  drafts.value[page.key] = nextLevel
+function isSelected(user: PermissionUser) {
+  return selectedUserIds.value.includes(user.id)
+}
+
+function toggleUser(user: PermissionUser) {
+  if (user.isOwner) {
+    selectedUserIds.value = [user.id]
+    resetDrafts()
+    return
+  }
+  const current = selectedUserIds.value
+  const currentHasOwner = selectedUsers.value.some((item) => item.isOwner)
+  if (currentHasOwner) selectedUserIds.value = [user.id]
+  else if (current.includes(user.id)) {
+    if (current.length === 1) return
+    selectedUserIds.value = current.filter((id) => id !== user.id)
+  } else selectedUserIds.value = [...current, user.id]
+  resetDrafts()
+}
+
+function pageOptions(page: AdminPageDefinition): DraftPermissionLevel[] {
+  if (ownerSelected.value) return [page.readOnly ? 'view' : 'edit']
+  const options: AdminPagePermissionLevel[] = page.maxNonOwnerLevel === 'hidden'
+    ? ['hidden']
+    : page.maxNonOwnerLevel === 'view' || page.readOnly
+      ? ['hidden', 'view']
+      : ['hidden', 'view', 'edit']
+  return bulkMode.value ? ['unchanged', ...options] : options
+}
+
+function setPermission(page: AdminPageDefinition, level: DraftPermissionLevel) {
+  if (!canEditSelection.value || !pageOptions(page).includes(level)) return
+  drafts.value[page.key] = level
   for (const feature of features.value) {
     if (feature.pageKey !== page.key) continue
-    if (nextLevel === 'hidden') featureDrafts.value[feature.key] = 'hidden'
-    else if (nextLevel === 'view' && featureDrafts.value[feature.key] === 'edit') featureDrafts.value[feature.key] = 'view'
+    const options = featureOptions(feature)
+    if (options.includes(featureDrafts.value[feature.key] || 'hidden')) continue
+    featureDrafts.value[feature.key] = bulkMode.value
+      ? 'unchanged'
+      : options.includes('view')
+        ? 'view'
+        : options.includes('hidden')
+          ? 'hidden'
+          : (options[0] || 'hidden')
   }
 }
 
-function featureOptions(feature: AdminFeatureDefinition): AdminFeaturePermissionLevel[] {
-  if (selectedUser.value?.isOwner) return ['edit']
-  const options = feature.availableLevels || ['hidden', 'view', 'edit']
-  const pageLevel = feature.pageKey ? drafts.value[feature.pageKey] || 'hidden' : 'edit'
-  if (pageLevel === 'hidden') return ['hidden']
-  if (pageLevel === 'view') return options.filter((level) => level !== 'edit')
-  return feature.maxNonOwnerLevel === 'hidden'
-    ? ['hidden']
-    : feature.maxNonOwnerLevel === 'view'
-      ? options.filter((level) => level !== 'edit')
-      : options
+function featureOptions(feature: AdminFeatureDefinition): DraftPermissionLevel[] {
+  if (ownerSelected.value) return ['edit']
+  let options = feature.availableLevels || ['hidden', 'view', 'edit']
+  if (feature.maxNonOwnerLevel === 'hidden') options = ['hidden']
+  else if (feature.maxNonOwnerLevel === 'view') options = options.filter((level) => level !== 'edit')
+
+  if (feature.pageKey) {
+    const draftPageLevel = drafts.value[feature.pageKey] || 'hidden'
+    if (draftPageLevel === 'hidden') options = ['hidden']
+    else if (draftPageLevel === 'view') options = options.filter((level) => level !== 'edit')
+    else if (draftPageLevel === 'unchanged') {
+      const allCanEditPage = selectedUsers.value.every((user) => user.permissions[feature.pageKey!] === 'edit')
+      if (!allCanEditPage) options = options.filter((level) => level !== 'edit')
+    }
+  }
+  return bulkMode.value ? ['unchanged', ...options] : options
 }
 
-function setFeaturePermission(feature: AdminFeatureDefinition, level: AdminFeaturePermissionLevel) {
-  if (!canManage.value || selectedUser.value?.isOwner || !featureOptions(feature).includes(level)) return
+function setFeaturePermission(feature: AdminFeatureDefinition, level: DraftPermissionLevel) {
+  if (!canEditSelection.value || !featureOptions(feature).includes(level)) return
   featureDrafts.value[feature.key] = level
+}
+
+function permissionLabel(level: DraftPermissionLevel, feature = false) {
+  if (level === 'unchanged') return '保持不变'
+  if (level === 'hidden') return '隐藏'
+  if (level === 'view') return '查看'
+  return feature ? '修改' : '编辑'
 }
 
 function featuresForParent(parentKey: string) {
@@ -96,6 +170,11 @@ function toggleParent(parentKey: string) {
   expandedParents.value = next
 }
 
+function replaceUsers(updatedUsers: PermissionUser[]) {
+  const byId = new Map(updatedUsers.map((user) => [user.id, user]))
+  users.value = users.value.map((user) => byId.get(user.id) || user)
+}
+
 async function loadPermissions() {
   loading.value = true
   try {
@@ -103,10 +182,13 @@ async function loadPermissions() {
     pages.value = result.pages
     features.value = result.features
     users.value = result.users
-    const next = result.users.find((user) => user.id === selectedUserId.value)
-      || result.users.find((user) => !user.isOwner)
-      || result.users[0]
-    if (next) selectUser(next)
+    const availableIds = new Set(result.users.map((user) => user.id))
+    selectedUserIds.value = selectedUserIds.value.filter((id) => availableIds.has(id))
+    if (!selectedUserIds.value.length) {
+      const first = result.users.find((user) => !user.isOwner) || result.users[0]
+      selectedUserIds.value = first ? [first.id] : []
+    }
+    resetDrafts()
   } catch (error: any) {
     showToast(error?.data?.statusMessage || '权限配置加载失败', 'error')
   } finally {
@@ -115,21 +197,29 @@ async function loadPermissions() {
 }
 
 async function savePermissions() {
-  const user = selectedUser.value
-  if (!user || user.isOwner || !canManage.value || saving.value) return
+  if (!canEditSelection.value || !hasDraftChanges.value || saving.value) return
   saving.value = true
   try {
+    if (bulkMode.value) {
+      const permissions = Object.fromEntries(Object.entries(drafts.value).filter(([, level]) => level !== 'unchanged'))
+      const featurePermissions = Object.fromEntries(Object.entries(featureDrafts.value).filter(([, level]) => level !== 'unchanged'))
+      const result = await $fetch<{ users: PermissionUser[] }>('/api/admin/permissions', {
+        method: 'PATCH',
+        body: { userIds: selectedUserIds.value, permissions, featurePermissions },
+      })
+      replaceUsers(result.users)
+      resetDrafts()
+      showToast(`已保存 ${result.users.length} 位用户的权限`)
+      return
+    }
+
+    const user = selectedUser.value!
     const updated = await $fetch<PermissionUser>(`/api/admin/permissions/${user.id}`, {
       method: 'PATCH',
-      body: {
-        permissions: drafts.value,
-        featurePermissions: featureDrafts.value,
-      },
+      body: { permissions: drafts.value, featurePermissions: featureDrafts.value },
     })
-    const index = users.value.findIndex((item) => item.id === updated.id)
-    if (index >= 0) users.value[index] = updated
-    drafts.value = { ...updated.permissions }
-    featureDrafts.value = { ...updated.featurePermissions }
+    replaceUsers([updated])
+    resetDrafts()
     showToast(`已保存 ${updated.fullName || updated.username} 的权限`)
   } catch (error: any) {
     showToast(error?.data?.statusMessage || '权限保存失败', 'error')
@@ -144,10 +234,7 @@ onMounted(loadPermissions)
 <template>
   <div class="page permissions-page">
     <div class="page-heading">
-      <div>
-        <h1 class="page-title">权限管理</h1>
-        <p class="page-subtitle">为每个后台账户设置页面权限与敏感区域权限。</p>
-      </div>
+      <h1 class="page-title">权限管理</h1>
       <md-icon-button aria-label="刷新" title="刷新" :disabled="loading" @click="loadPermissions">
         <md-icon>refresh</md-icon>
       </md-icon-button>
@@ -162,8 +249,9 @@ onMounted(loadPermissions)
             :key="user.id"
             type="button"
             class="user-option"
-            :class="{ 'user-option--active': user.id === selectedUserId }"
-            @click="selectUser(user)"
+            :class="{ 'user-option--active': isSelected(user) }"
+            :aria-pressed="isSelected(user)"
+            @click="toggleUser(user)"
           >
             <img v-if="user.avatar" :src="user.avatar" alt="" />
             <md-icon v-else>account_circle</md-icon>
@@ -171,27 +259,29 @@ onMounted(loadPermissions)
               <strong>{{ user.fullName || user.username }}</strong>
               <small>{{ user.username }}</small>
             </span>
+            <md-icon v-if="user.isOwner" class="user-selection" title="初始所有者">verified_user</md-icon>
+            <md-checkbox v-else class="user-selection" :checked="isSelected(user)" tabindex="-1"></md-checkbox>
           </button>
         </aside>
 
-        <section v-if="selectedUser" class="card permission-panel">
+        <section v-if="selectedUsers.length" class="card permission-panel">
           <div class="permission-heading">
             <div>
-              <h2 class="card-title">{{ selectedUser.fullName || selectedUser.username }}</h2>
-              <p>{{ selectedUser.isOwner ? '初始所有者始终拥有全部编辑权限。' : '权限修改在保存后生效。' }}</p>
+              <h2 class="card-title">{{ panelTitle }}</h2>
+              <p v-if="ownerSelected">初始所有者始终拥有全部可用权限。</p>
+              <p v-else-if="bulkMode">未调整的项目将保持各用户原有权限。</p>
             </div>
             <md-filled-button
-              v-if="canManage && !selectedUser.isOwner"
-              :disabled="saving"
+              v-if="canEditSelection"
+              :disabled="saving || !hasDraftChanges"
               @click="savePermissions"
             >
               <md-icon slot="icon">save</md-icon>
-              {{ saving ? '保存中…' : '保存权限' }}
+              {{ saving ? '保存中…' : bulkMode ? `保存 ${selectedUsers.length} 位用户` : '保存权限' }}
             </md-filled-button>
           </div>
 
           <h3 class="permission-section-title">页面权限</h3>
-          <p class="permission-section-note">父页面右侧的细分按钮可展开区域权限；页面权限会限制其区域权限上限。</p>
           <div class="permission-list">
             <div v-if="accountFeatures.length" class="permission-parent">
               <div class="permission-row">
@@ -223,8 +313,8 @@ onMounted(loadPermissions)
                       </span>
                     </div>
                     <div class="permission-options" role="group" :aria-label="`${feature.label}权限`">
-                      <button v-for="option in featureOptions(feature)" :key="option" type="button" :class="{ 'permission-option--active': (selectedUser.isOwner ? 'edit' : featureDrafts[feature.key]) === option }" :disabled="!canManage || selectedUser.isOwner" @click="setFeaturePermission(feature, option)">
-                        {{ option === 'hidden' ? '隐藏' : option === 'view' ? '查看' : '修改' }}
+                      <button v-for="option in featureOptions(feature)" :key="option" type="button" :class="{ 'permission-option--active': (ownerSelected ? 'edit' : featureDrafts[feature.key]) === option }" :disabled="!canEditSelection" @click="setFeaturePermission(feature, option)">
+                        {{ permissionLabel(option, true) }}
                       </button>
                     </div>
                   </div>
@@ -238,7 +328,8 @@ onMounted(loadPermissions)
                   <md-icon>{{ page.icon }}</md-icon>
                   <span>
                     <strong>{{ page.label }}</strong>
-                    <small v-if="page.key === 'settings'">新账户默认可查看</small>
+                    <small v-if="page.readOnly">此页面无修改操作</small>
+                    <small v-else-if="page.key === 'settings'">新账户默认可查看</small>
                     <small v-else-if="page.maxNonOwnerLevel === 'hidden'">仅初始账户可查看和编辑</small>
                     <small v-else-if="page.key === 'permissions'">新账户默认隐藏，非所有者最多可查看</small>
                     <small v-else-if="page.key === 'server-manage'">新账户默认只可查看，细分权限需单独放开</small>
@@ -258,8 +349,8 @@ onMounted(loadPermissions)
                     </Transition>
                   </md-icon-button>
                   <div class="permission-options" role="group" :aria-label="`${page.label}权限`">
-                    <button v-for="option in (selectedUser.isOwner ? ['edit'] : page.maxNonOwnerLevel === 'hidden' ? ['hidden'] : page.maxNonOwnerLevel === 'view' ? ['hidden', 'view'] : ['hidden', 'view', 'edit'])" :key="option" type="button" :class="{ 'permission-option--active': (selectedUser.isOwner ? 'edit' : drafts[page.key]) === option }" :disabled="!canManage || selectedUser.isOwner" @click="setPermission(page, option as AdminPagePermissionLevel)">
-                      {{ option === 'hidden' ? '隐藏' : option === 'view' ? '查看' : '编辑' }}
+                    <button v-for="option in pageOptions(page)" :key="option" type="button" :class="{ 'permission-option--active': (ownerSelected ? (page.readOnly ? 'view' : 'edit') : drafts[page.key]) === option }" :disabled="!canEditSelection" @click="setPermission(page, option)">
+                      {{ permissionLabel(option) }}
                     </button>
                   </div>
                 </div>
@@ -275,8 +366,8 @@ onMounted(loadPermissions)
                       </span>
                     </div>
                     <div class="permission-options" role="group" :aria-label="`${feature.label}权限`">
-                      <button v-for="option in featureOptions(feature)" :key="option" type="button" :class="{ 'permission-option--active': (selectedUser.isOwner ? 'edit' : featureDrafts[feature.key]) === option }" :disabled="!canManage || selectedUser.isOwner" @click="setFeaturePermission(feature, option)">
-                        {{ option === 'hidden' ? '隐藏' : option === 'view' ? '查看' : '修改' }}
+                      <button v-for="option in featureOptions(feature)" :key="option" type="button" :class="{ 'permission-option--active': (ownerSelected ? 'edit' : featureDrafts[feature.key]) === option }" :disabled="!canEditSelection" @click="setFeaturePermission(feature, option)">
+                        {{ permissionLabel(option, true) }}
                       </button>
                     </div>
                   </div>
@@ -299,7 +390,6 @@ onMounted(loadPermissions)
   gap: 16px;
 }
 
-.page-subtitle,
 .permission-heading p {
   margin: -12px 0 20px;
   color: var(--md-sys-color-on-surface-variant);
@@ -323,7 +413,7 @@ onMounted(loadPermissions)
   width: 100%;
   min-height: 52px;
   display: grid;
-  grid-template-columns: 32px minmax(0, 1fr);
+  grid-template-columns: 32px minmax(0, 1fr) 40px;
   align-items: center;
   gap: 10px;
   border: 0;
@@ -346,6 +436,15 @@ onMounted(loadPermissions)
   height: 32px;
   border-radius: 50%;
   object-fit: cover;
+}
+
+.user-option .user-selection {
+  justify-self: end;
+  pointer-events: none;
+}
+
+.user-option > md-icon.user-selection {
+  color: var(--md-sys-color-primary);
 }
 
 .user-option span,
@@ -542,6 +641,32 @@ onMounted(loadPermissions)
 
   .permission-heading md-filled-button {
     width: 100%;
+  }
+}
+
+@media (max-width: 480px) {
+  .user-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .permission-row-actions {
+    align-items: flex-start;
+  }
+
+  .permission-options {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-auto-flow: row;
+    grid-auto-columns: auto;
+    gap: 1px;
+    background: var(--md-sys-color-outline-variant);
+  }
+
+  .permission-options button,
+  .permission-options button:last-child {
+    min-width: 0;
+    border: 0;
+    background: var(--md-sys-color-surface-container);
+    padding: 0 8px;
   }
 }
 

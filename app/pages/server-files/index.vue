@@ -39,7 +39,10 @@ type SortField = 'name' | 'size' | 'time'
 
 const { showToast } = useToast()
 const access = useAdminAccess()
-const canEdit = computed(() => access.levelForKey('server-files') === 'edit')
+const canEditPage = computed(() => access.levelForKey('server-files') === 'edit')
+const canModifyFiles = computed(() => canEditPage.value && access.featureLevelForKey('server-files-edit') === 'edit')
+const canUploadFiles = computed(() => canEditPage.value && access.featureLevelForKey('server-files-upload') === 'edit')
+const canDeleteFiles = computed(() => canEditPage.value && access.featureLevelForKey('server-files-delete') === 'edit')
 const { apply: applyDialogAnimation } = useDialogAnimation()
 
 const loading = ref(true)
@@ -259,7 +262,7 @@ function savePreviewFile() {
 function onSaveShortcut(event: KeyboardEvent) {
   if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 's') return
   if (!previewOpen.value && !previewFullscreen.value) return
-  if (!previewTarget.value?.editable || !canEdit.value) return
+  if (!previewTarget.value?.editable || !canModifyFiles.value) return
   event.preventDefault()
   savePreviewFile()
 }
@@ -311,7 +314,7 @@ function onFullscreenKeydown(event: KeyboardEvent) {
 // ===== 增删改 =====
 
 function openCreate(kind: 'directory' | 'file') {
-  if (!canEdit.value) return
+  if (!canModifyFiles.value) return
   createKind.value = kind
   createName.value = ''
   createOpen.value = true
@@ -319,7 +322,7 @@ function openCreate(kind: 'directory' | 'file') {
 }
 
 async function submitCreate() {
-  if (!canEdit.value || createBusy.value || !createName.value.trim()) return
+  if (!canModifyFiles.value || createBusy.value || !createName.value.trim()) return
   createBusy.value = true
   try {
     await $fetch('/api/admin/mcsm/files/create', {
@@ -337,7 +340,7 @@ async function submitCreate() {
 }
 
 function openRename(entry: FileEntry) {
-  if (!canEdit.value) return
+  if (!canModifyFiles.value) return
   renameTarget.value = entry
   renameName.value = entry.name
   applyDialogAnimation(renameDialog.value)
@@ -345,7 +348,7 @@ function openRename(entry: FileEntry) {
 
 async function submitRename() {
   const target = renameTarget.value
-  if (!target || !canEdit.value || renameBusy.value) return
+  if (!target || !canModifyFiles.value || renameBusy.value) return
   const name = renameName.value.trim()
   if (!name || name === target.name) {
     renameTarget.value = null
@@ -368,7 +371,7 @@ async function submitRename() {
 }
 
 function openTransfer(mode: 'copy' | 'move') {
-  if (!canEdit.value || !selectedEntries.value.length) return
+  if (!canModifyFiles.value || !selectedEntries.value.length) return
   transferMode.value = mode
   transferDir.value = path.value
   transferBrowsePath.value = '/'
@@ -401,7 +404,7 @@ function selectTransferDir(dirName: string) {
 
 async function submitTransfer() {
   const mode = transferMode.value
-  if (!mode || !canEdit.value || transferBusy.value) return
+  if (!mode || !canModifyFiles.value || transferBusy.value) return
   transferBusy.value = true
   try {
     const result = await $fetch<{ count: number }>('/api/admin/mcsm/files/transfer', {
@@ -425,7 +428,7 @@ async function submitTransfer() {
 }
 
 function openCompress() {
-  if (!canEdit.value || !selectedEntries.value.length) return
+  if (!canModifyFiles.value || !selectedEntries.value.length) return
   const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '')
   compressName.value = `archive-${stamp}.zip`
   compressOpen.value = true
@@ -451,25 +454,25 @@ function downloadSelected() {
 }
 
 function copySingle(entry: FileEntry) {
-  if (!canEdit.value) return
+  if (!canModifyFiles.value) return
   selectedNames.value = [entry.name]
   openTransfer('copy')
 }
 
 function moveSingle(entry: FileEntry) {
-  if (!canEdit.value) return
+  if (!canModifyFiles.value) return
   selectedNames.value = [entry.name]
   openTransfer('move')
 }
 
 function deleteSingle(entry: FileEntry) {
-  if (!canEdit.value) return
+  if (!canDeleteFiles.value) return
   selectedNames.value = [entry.name]
   deleteOpen.value = true
 }
 
 async function submitCompress() {
-  if (!canEdit.value || compressBusy.value || !compressName.value.trim()) return
+  if (!canModifyFiles.value || compressBusy.value || !compressName.value.trim()) return
   compressBusy.value = true
   try {
     await $fetch('/api/admin/mcsm/files/archive', {
@@ -495,7 +498,7 @@ async function submitCompress() {
 
 async function confirmExtract() {
   const target = extractTarget.value
-  if (!target || !canEdit.value || extractBusy.value) return
+  if (!target || !canModifyFiles.value || extractBusy.value) return
 
   // 如果选择创建文件夹模式，需要检查文件夹名
   if (extractMode.value === 'folder' && !extractFolderName.value.trim()) {
@@ -527,6 +530,7 @@ async function confirmExtract() {
 }
 
 function openExtract(entry: FileEntry) {
+  if (!canModifyFiles.value) return
   extractTarget.value = entry
   extractMode.value = 'folder'
   // 默认文件夹名为去掉 .zip 扩展名
@@ -536,7 +540,7 @@ function openExtract(entry: FileEntry) {
 }
 
 async function confirmDelete() {
-  if (!canEdit.value || deleteBusy.value || !selectedEntries.value.length) return
+  if (!canDeleteFiles.value || deleteBusy.value || !selectedEntries.value.length) return
   deleteBusy.value = true
   try {
     const result = await $fetch<{ count: number }>('/api/admin/mcsm/files/delete', {
@@ -557,7 +561,7 @@ async function confirmDelete() {
 // ===== 上传 =====
 
 function pickFiles() {
-  if (!canEdit.value) return
+  if (!canUploadFiles.value) return
   fileInput.value?.click()
 }
 
@@ -570,7 +574,7 @@ function onFilePicked(event: Event) {
 
 function onDrop(event: DragEvent) {
   dragOver.value = false
-  if (!canEdit.value) return
+  if (!canUploadFiles.value) return
   const files = [...(event.dataTransfer?.files || [])]
   if (files.length) void uploadFiles(files)
 }
@@ -580,7 +584,7 @@ function onDrop(event: DragEvent) {
  * 每个请求体保持很小，服务端在全部分块收到后再拼成 multipart 转发给守护进程。
  */
 async function uploadFiles(files: File[]) {
-  if (!canEdit.value || !files.length || uploading.value) return
+  if (!canUploadFiles.value || !files.length || uploading.value) return
   const oversized = files.find((file) => file.size > UPLOAD_MAX_BYTES)
   if (oversized) {
     showToast(`${oversized.name} 超过 256 MiB，无法上传`, 'error')
@@ -701,13 +705,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="page">
     <div class="page-heading">
-      <div>
-        <h1 class="page-title">服务器文件</h1>
-        <p class="page-subtitle">
-          浏览、上传、编辑与整理实例目录里的文件。文本文件用代码编辑器打开并带语法高亮，
-          图片与音视频可以直接在页面里预览——文件字节由本服务端同源转发，浏览器不会直连节点。
-        </p>
-      </div>
+      <h1 class="page-title">服务器文件</h1>
       <md-icon-button aria-label="刷新" title="刷新" :disabled="listLoading" @click="loadList()">
         <md-icon>refresh</md-icon>
       </md-icon-button>
@@ -752,7 +750,7 @@ onBeforeUnmount(() => {
         v-if="instance"
         class="card browser"
         :class="{ 'browser--drag': dragOver }"
-        @dragover.prevent="dragOver = canEdit"
+        @dragover.prevent="dragOver = canUploadFiles"
         @dragleave="dragOver = false"
         @drop.prevent="onDrop"
       >
@@ -788,11 +786,11 @@ onBeforeUnmount(() => {
             <md-icon-button aria-label="刷新" title="刷新" @click="loadList(path)">
               <md-icon>refresh</md-icon>
             </md-icon-button>
-            <template v-if="canEdit">
-              <md-filled-button :disabled="uploading" @click="pickFiles">
-                <md-icon slot="icon">upload</md-icon>
-                上传
-              </md-filled-button>
+            <md-filled-button v-if="canUploadFiles" :disabled="uploading" @click="pickFiles">
+              <md-icon slot="icon">upload</md-icon>
+              上传
+            </md-filled-button>
+            <template v-if="canModifyFiles">
               <md-outlined-button @click="openCreate('directory')">
                 <md-icon slot="icon">create_new_folder</md-icon>
                 新建目录
@@ -813,11 +811,8 @@ onBeforeUnmount(() => {
           @change="onFilePicked"
         />
 
-        <p v-if="!canEdit" class="card-note">当前账户对本页只有查看权限，上传与修改已禁用。</p>
-        <p v-if="canEdit" class="card-note">
-          可以把文件拖进这个区域上传。压缩运行中的服务器正在占用的文件（如 mods 里的 jar）会失败；
-          删除没有回收站，请谨慎操作。
-        </p>
+        <p v-if="canModifyFiles" class="card-note">运行中被占用的文件无法压缩。</p>
+        <p v-if="canDeleteFiles" class="card-note">删除没有回收站。</p>
 
         <div v-if="uploading" class="upload-bar">
           <span class="upload-name">正在上传 {{ uploadName }}</span>
@@ -833,19 +828,19 @@ onBeforeUnmount(() => {
               <md-icon slot="icon">download</md-icon>
               下载
             </md-text-button>
-            <md-text-button v-if="canEdit" @click="openTransfer('copy')">
+            <md-text-button v-if="canModifyFiles" @click="openTransfer('copy')">
               <md-icon slot="icon">content_copy</md-icon>
               复制到...
             </md-text-button>
-            <md-text-button v-if="canEdit" @click="openTransfer('move')">
+            <md-text-button v-if="canModifyFiles" @click="openTransfer('move')">
               <md-icon slot="icon">drive_file_move</md-icon>
               移动到...
             </md-text-button>
-            <md-text-button v-if="canEdit" @click="openCompress">
+            <md-text-button v-if="canModifyFiles" @click="openCompress">
               <md-icon slot="icon">folder_zip</md-icon>
               压缩
             </md-text-button>
-            <md-text-button v-if="canEdit" class="danger" @click="deleteOpen = true">
+            <md-text-button v-if="canDeleteFiles" class="danger" @click="deleteOpen = true">
               <md-icon slot="icon">delete</md-icon>
               删除
             </md-text-button>
@@ -910,7 +905,7 @@ onBeforeUnmount(() => {
                   <div class="cell-actions-content desktop-actions">
                     <div class="actions-left">
                       <md-icon-button
-                        v-if="canEdit && entry.kind === 'archive' && entry.name.toLowerCase().endsWith('.zip')"
+                        v-if="canModifyFiles && entry.kind === 'archive' && entry.name.toLowerCase().endsWith('.zip')"
                         aria-label="解压"
                         title="解压"
                         @click="openExtract(entry)"
@@ -921,11 +916,11 @@ onBeforeUnmount(() => {
                     <div class="actions-right">
                       <md-icon-button
                         v-if="entry.kind !== 'directory'"
-                        :aria-label="entry.editable && canEdit ? '编辑' : '预览'"
-                        :title="entry.editable && canEdit ? '编辑' : '预览'"
+                        :aria-label="entry.editable && canModifyFiles ? '编辑' : '预览'"
+                        :title="entry.editable && canModifyFiles ? '编辑' : '预览'"
                         @click="openPreview(entry)"
                       >
-                        <md-icon>{{ entry.editable && canEdit ? 'edit' : 'visibility' }}</md-icon>
+                        <md-icon>{{ entry.editable && canModifyFiles ? 'edit' : 'visibility' }}</md-icon>
                       </md-icon-button>
                       <md-icon-button
                         v-if="entry.kind !== 'directory'"
@@ -936,7 +931,7 @@ onBeforeUnmount(() => {
                         <md-icon>download</md-icon>
                       </md-icon-button>
                       <md-icon-button
-                        v-if="canEdit"
+                        v-if="canModifyFiles"
                         aria-label="复制到..."
                         title="复制到..."
                         @click="copySingle(entry)"
@@ -944,22 +939,22 @@ onBeforeUnmount(() => {
                         <md-icon>content_copy</md-icon>
                       </md-icon-button>
                       <md-icon-button
-                        v-if="canEdit"
+                        v-if="canModifyFiles"
                         aria-label="移动到..."
                         title="移动到..."
                         @click="moveSingle(entry)"
                       >
                         <md-icon>drive_file_move</md-icon>
                       </md-icon-button>
-                      <md-icon-button v-if="canEdit" aria-label="重命名" title="重命名" @click="openRename(entry)">
+                      <md-icon-button v-if="canModifyFiles" aria-label="重命名" title="重命名" @click="openRename(entry)">
                         <md-icon>drive_file_rename_outline</md-icon>
                       </md-icon-button>
-                      <md-icon-button v-if="canEdit" aria-label="删除" title="删除" @click="deleteSingle(entry)">
+                      <md-icon-button v-if="canDeleteFiles" aria-label="删除" title="删除" @click="deleteSingle(entry)">
                         <md-icon>delete</md-icon>
                       </md-icon-button>
                     </div>
                   </div>
-                  <div v-if="entry.kind !== 'directory' || canEdit" class="mobile-actions">
+                  <div v-if="entry.kind !== 'directory' || canModifyFiles || canDeleteFiles" class="mobile-actions">
                     <md-icon-button
                       :id="mobileActionId(entryIndex)"
                       aria-label="更多操作"
@@ -977,33 +972,33 @@ onBeforeUnmount(() => {
                       @closed="closeMobileMenu(entry)"
                     >
                       <md-menu-item
-                        v-if="canEdit && entry.kind === 'archive' && entry.name.toLowerCase().endsWith('.zip')"
+                        v-if="canModifyFiles && entry.kind === 'archive' && entry.name.toLowerCase().endsWith('.zip')"
                         @click="openExtract(entry)"
                       >
                         <md-icon slot="start">unarchive</md-icon>
                         <span slot="headline">解压</span>
                       </md-menu-item>
                       <md-menu-item v-if="entry.kind !== 'directory'" @click="openPreview(entry)">
-                        <md-icon slot="start">{{ entry.editable && canEdit ? 'edit' : 'visibility' }}</md-icon>
-                        <span slot="headline">{{ entry.editable && canEdit ? '编辑' : '预览' }}</span>
+                        <md-icon slot="start">{{ entry.editable && canModifyFiles ? 'edit' : 'visibility' }}</md-icon>
+                        <span slot="headline">{{ entry.editable && canModifyFiles ? '编辑' : '预览' }}</span>
                       </md-menu-item>
                       <md-menu-item v-if="entry.kind !== 'directory'" type="link" :href="downloadUrl(entry)">
                         <md-icon slot="start">download</md-icon>
                         <span slot="headline">下载</span>
                       </md-menu-item>
-                      <md-menu-item v-if="canEdit" @click="copySingle(entry)">
+                      <md-menu-item v-if="canModifyFiles" @click="copySingle(entry)">
                         <md-icon slot="start">content_copy</md-icon>
                         <span slot="headline">复制到...</span>
                       </md-menu-item>
-                      <md-menu-item v-if="canEdit" @click="moveSingle(entry)">
+                      <md-menu-item v-if="canModifyFiles" @click="moveSingle(entry)">
                         <md-icon slot="start">drive_file_move</md-icon>
                         <span slot="headline">移动到...</span>
                       </md-menu-item>
-                      <md-menu-item v-if="canEdit" @click="openRename(entry)">
+                      <md-menu-item v-if="canModifyFiles" @click="openRename(entry)">
                         <md-icon slot="start">drive_file_rename_outline</md-icon>
                         <span slot="headline">重命名</span>
                       </md-menu-item>
-                      <md-menu-item v-if="canEdit" @click="deleteSingle(entry)">
+                      <md-menu-item v-if="canDeleteFiles" @click="deleteSingle(entry)">
                         <md-icon slot="start">delete</md-icon>
                         <span slot="headline">删除</span>
                       </md-menu-item>
@@ -1050,13 +1045,13 @@ onBeforeUnmount(() => {
           :path="fullPath(previewTarget.name)"
           :kind="previewTarget.kind"
           :size="previewTarget.size"
-          :can-edit="canEdit"
+          :can-edit="canModifyFiles"
           @saved="loadList()"
         />
       </div>
       <div slot="actions">
         <md-filled-button
-          v-if="previewTarget?.editable && canEdit"
+          v-if="previewTarget?.editable && canModifyFiles"
           :disabled="!previewRef?.dirty"
           @click="savePreviewFile"
         >
@@ -1075,7 +1070,7 @@ onBeforeUnmount(() => {
         <md-icon class="type-icon">{{ KIND_ICONS[previewTarget.kind] || 'draft' }}</md-icon>
         <span class="fullscreen-name">{{ fullPath(previewTarget.name) }}</span>
         <md-filled-button
-          v-if="previewTarget.editable && canEdit"
+          v-if="previewTarget.editable && canModifyFiles"
           :disabled="!previewRef?.dirty"
           @click="savePreviewFile"
         >
@@ -1104,7 +1099,7 @@ onBeforeUnmount(() => {
           :path="fullPath(previewTarget.name)"
           :kind="previewTarget.kind"
           :size="previewTarget.size"
-          :can-edit="canEdit"
+          :can-edit="canModifyFiles"
           editor-height="calc(100vh - 190px)"
           @saved="loadList()"
         />
@@ -1154,13 +1149,9 @@ onBeforeUnmount(() => {
       <md-icon slot="icon">{{ transferMode === 'copy' ? 'content_copy' : 'drive_file_move' }}</md-icon>
       <div slot="headline">{{ transferMode === 'copy' ? '复制到' : '移动到' }}</div>
       <div slot="content" class="dialog-form">
-        <p class="card-note">
-          将 {{ selectedEntries.length }} 项{{ transferMode === 'copy' ? '复制' : '移动' }}到下面选择的目录。
-          同名文件会被覆盖。
-        </p>
+        <p class="card-note">同名文件会被覆盖。</p>
         <md-outlined-text-field
           label="目标目录"
-          supporting-text="点击下方目录浏览器选择，或手动输入路径"
           :value="transferDir"
           @input="transferDir = ($event.target as HTMLInputElement).value"
         ></md-outlined-text-field>
@@ -1246,10 +1237,7 @@ onBeforeUnmount(() => {
       <md-icon slot="icon">folder_zip</md-icon>
       <div slot="headline">压缩为 zip</div>
       <div slot="content" class="dialog-form">
-        <p class="card-note">
-          把选中的 {{ selectedEntries.length }} 项压缩成一个 zip，放在 <code>{{ path }}</code> 下。
-          大目录耗时较长，请求可能先超时，面板侧仍在继续，稍后刷新即可看到。
-        </p>
+        <p class="card-note">大目录压缩可能先超时；任务仍会在面板侧继续，稍后刷新查看。</p>
         <md-outlined-text-field
           label="压缩包名"
           supporting-text="必须以 .zip 结尾"
@@ -1311,10 +1299,7 @@ onBeforeUnmount(() => {
             <div class="extract-option-content">
               <div class="extract-option-title">
                 <md-icon>create_new_folder</md-icon>
-                <span>创建文件夹后解压（推荐）</span>
-              </div>
-              <div class="extract-option-desc">
-                先创建一个文件夹，再把文件解压到里面，结构更清晰
+                <span>创建文件夹后解压</span>
               </div>
             </div>
           </label>
@@ -1344,7 +1329,6 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .page-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
-.page-subtitle { margin: -12px 0 20px; color: var(--md-sys-color-on-surface-variant); font-size: 13px; max-width: 820px; line-height: 1.7; }
 .card + .card { margin-top: 20px; }
 .card-note { margin: 8px 0 0; font-size: 13px; line-height: 1.7; color: var(--md-sys-color-on-surface-variant); }
 .card-note code { padding: 1px 5px; border-radius: 4px; background: var(--md-sys-color-surface); font-family: 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
@@ -1439,8 +1423,9 @@ onBeforeUnmount(() => {
 .extract-option--selected .extract-option-desc { color: var(--md-sys-color-on-primary-container); }
 
 @media (max-width: 720px) {
+  .instance-select { width: 100%; min-width: 0; }
   .tools { width: 100%; }
-  .search { flex: 1 1 100%; }
+  .search { width: 100%; min-width: 0; flex: 1 1 100%; }
   .preview-body { min-width: 0; }
   .col-time { display: none; }
   .data-table { min-width: 640px; }

@@ -393,7 +393,7 @@ watch(() => [props.path, props.kind], () => {
         ></audio>
       </div>
       <p v-if="kind !== 'image'" class="hint">
-        守护进程不支持分段请求，音视频只能顺序播放，拖动进度条通常无效。
+        音视频仅支持顺序播放，拖动进度条可能无效。
       </p>
     </template>
 
@@ -504,7 +504,7 @@ watch(() => [props.path, props.kind], () => {
 .empty { padding: 24px 0; text-align: center; color: var(--md-sys-color-on-surface-variant); font-size: 14px; }
 .text-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .meta { font-size: 12px; color: var(--md-sys-color-on-surface-variant); }
-.text-actions { display: flex; gap: 10px; }
+.text-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 .media-stage { display: flex; align-items: center; justify-content: center; min-height: 200px; padding: 12px; border-radius: 8px; background: var(--md-sys-color-surface-variant); overflow: auto; }
 .media-image { max-width: 100%; max-height: min(68vh, 720px); object-fit: contain; image-rendering: pixelated; }
 .media-video { max-width: 100%; max-height: min(68vh, 720px); }
@@ -540,7 +540,7 @@ watch(() => [props.path, props.kind], () => {
 .zip-crumb-btn md-icon { --md-icon-size: 18px; }
 .zip-crumb-sep { color: var(--md-sys-color-on-surface-variant); font-size: 13px; }
 .zip-meta { font-size: 12px; color: var(--md-sys-color-on-surface-variant); white-space: nowrap; }
-.zip-table-wrap { max-height: 500px; overflow-y: auto; }
+.zip-table-wrap { width: 100%; max-width: 100%; max-height: 500px; overflow: auto; }
 .zip-table { width: 100%; border-collapse: collapse; }
 .zip-table td { padding: 8px 10px; border-bottom: 1px solid var(--md-sys-color-outline-variant); vertical-align: middle; }
 .zip-row { transition: background 120ms; }
@@ -552,11 +552,19 @@ watch(() => [props.path, props.kind], () => {
 .zip-up-btn:hover { background: var(--md-sys-color-surface-variant); }
 .zip-up-btn md-icon { --md-icon-size: 18px; }
 .zip-name-cell { padding: 0 !important; width: 100%; }
-.zip-name-content { display: flex; align-items: center; gap: 8px; padding: 8px 10px; }
+.zip-name-content { min-width: 0; display: flex; align-items: center; gap: 8px; padding: 8px 10px; }
 .zip-type-icon { --md-icon-size: 20px; color: var(--md-sys-color-on-surface-variant); flex-shrink: 0; }
 .zip-type-icon--dir { color: var(--md-sys-color-primary); }
-.zip-name { font-family: 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; word-break: break-word; }
+.zip-name { min-width: 0; font-family: 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; overflow-wrap: anywhere; }
 .zip-actions { width: 48px; text-align: right; }
 .zip-actions md-icon { --md-icon-size: 20px; color: var(--md-sys-color-on-surface-variant); }
 .xlsx-preview { display: flex; flex-direction: column; gap: 20px; }
+@media (max-width: 640px) {
+  .media-stage { min-height: 140px; padding: 8px; }
+  .markdown-preview,
+  .document-preview { padding: 12px; }
+  .zip-toolbar { align-items: flex-start; padding: 8px 10px; }
+  .zip-meta { white-space: normal; overflow-wrap: anywhere; }
+  .zip-table { min-width: 420px; }
+}
 </style>

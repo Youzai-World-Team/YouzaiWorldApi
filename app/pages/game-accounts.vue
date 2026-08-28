@@ -4,7 +4,10 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 useHead({ title: '游戏账户' })
 
 const access = useAdminAccess()
-const canEdit = computed(() => access.levelForKey('game-accounts') === 'edit')
+const canEditPage = computed(() => access.levelForKey('game-accounts') === 'edit')
+const canManageAccounts = computed(() => canEditPage.value && access.featureLevelForKey('game-accounts-manage') === 'edit')
+const canEditSettings = computed(() => canEditPage.value && access.featureLevelForKey('game-accounts-settings') === 'edit')
+const canEditTemplates = computed(() => canEditPage.value && access.featureLevelForKey('game-accounts-email-templates') === 'edit')
 
 interface GameAccount {
   username: string
@@ -108,6 +111,7 @@ async function loadAccounts() {
 }
 
 async function createAccount() {
+  if (!canManageAccounts.value) return
   if (!/^[A-Za-z0-9_]{1,16}$/.test(username.value.trim()) || password.value.length < 4 || password.value.length > 128) {
     showToast('请输入玩家代号和 4 至 128 位密码', 'error')
     return
@@ -129,6 +133,7 @@ async function createAccount() {
 }
 
 async function resetAccountPassword() {
+  if (!canManageAccounts.value) return
   if (!resetTarget.value) return
   if (resetPassword.value.length < 4 || resetPassword.value.length > 128) {
     showToast('密码需要为 4 至 128 位', 'error')
@@ -148,6 +153,7 @@ async function resetAccountPassword() {
 }
 
 function deleteAccount(account: GameAccount) {
+  if (!canManageAccounts.value) return
   deleteTarget.value = account
 }
 
@@ -158,7 +164,7 @@ function openCosmetics(account: GameAccount) {
 
 async function confirmDeleteAccount() {
   const account = deleteTarget.value
-  if (!account || deletingAccount.value) return
+  if (!canManageAccounts.value || !account || deletingAccount.value) return
   deletingAccount.value = true
   try {
     await $fetch(`/api/admin/game-accounts/${encodeURIComponent(account.username)}`, { method: 'DELETE' })
@@ -173,6 +179,7 @@ async function confirmDeleteAccount() {
 }
 
 async function unlockAccount(account: GameAccount) {
+  if (!canManageAccounts.value) return
   try {
     await $fetch(`/api/admin/game-accounts/${encodeURIComponent(account.username)}`, {
       method: 'PATCH', body: { unlock: true },
@@ -185,6 +192,7 @@ async function unlockAccount(account: GameAccount) {
 }
 
 async function saveSettings() {
+  if (!canEditSettings.value) return
   settings.value.loginCooldown = Math.min(86400, Math.max(-1, Math.trunc(settings.value.loginCooldown)))
   savingSettings.value = true
   try {
@@ -211,6 +219,7 @@ function fillSmtpForm() {
 }
 
 function openSmtpDialog(enableAfterSave = false) {
+  if (!canEditSettings.value) return
   fillSmtpForm()
   enableEmailVerificationAfterSave.value = enableAfterSave
   showSmtpSettings.value = true
@@ -231,6 +240,7 @@ async function onEmailVerificationChange(event: Event) {
   const checkbox = event.target as HTMLInputElement
   const requested = checkbox.checked
   checkbox.checked = settings.value.emailVerificationRequired
+  if (!canEditSettings.value) return
   if (requested) {
     openSmtpDialog(true)
     return
@@ -250,6 +260,7 @@ async function onEmailVerificationChange(event: Event) {
 }
 
 async function saveSmtpSettings() {
+  if (!canEditSettings.value) return
   const host = smtpHost.value.trim()
   const fromAddress = smtpFromAddress.value.trim()
   const username = smtpUsername.value.trim()
@@ -342,16 +353,16 @@ onUnmounted(() => {
       </div>
       <div class="heading-actions">
         <md-icon-button aria-label="刷新" :disabled="loading" @click="loadAccounts"><md-icon :class="{ 'refresh-icon--loading': loading }">refresh</md-icon></md-icon-button>
-        <md-filled-button v-if="canEdit" @click="showCreate = true"><md-icon slot="icon">person_add</md-icon>新建账户</md-filled-button>
+        <md-filled-button v-if="canManageAccounts" @click="showCreate = true"><md-icon slot="icon">person_add</md-icon>新建账户</md-filled-button>
       </div>
     </div>
 
     <div class="settings-grid">
       <div class="card setting-card">
         <h2>登录失败冷却</h2>
-        <md-outlined-text-field type="number" min="-1" max="86400" step="1" label="冷却时间（秒）" :readonly="!canEdit" :value="String(settings.loginCooldown)" @input="settings.loginCooldown = Math.min(86400, Math.max(-1, Math.trunc(Number(($event.target as HTMLInputElement).value) || 0)))"></md-outlined-text-field>
+        <md-outlined-text-field type="number" min="-1" max="86400" step="1" label="冷却时间（秒）" :readonly="!canEditSettings" :value="String(settings.loginCooldown)" @input="settings.loginCooldown = Math.min(86400, Math.max(-1, Math.trunc(Number(($event.target as HTMLInputElement).value) || 0)))"></md-outlined-text-field>
         <div class="setting-action">
-          <md-filled-button v-if="canEdit" :disabled="savingSettings" @click="saveSettings">
+          <md-filled-button v-if="canEditSettings" :disabled="savingSettings" @click="saveSettings">
             {{ savingSettings ? '保存中…' : '保存冷却设置' }}
           </md-filled-button>
         </div>
@@ -362,22 +373,21 @@ onUnmounted(() => {
         <label class="email-verification-row">
           <md-checkbox
             :checked="settings.emailVerificationRequired"
-            :disabled="loading || savingEmailSettings || !canEdit"
+            :disabled="loading || savingEmailSettings || !canEditSettings"
             @change="onEmailVerificationChange"
           ></md-checkbox>
           <span>
             <strong>注册需邮箱验证</strong>
-            <small>玩家注册前必须通过邮箱验证码。</small>
           </span>
         </label>
         <div class="setting-action">
-          <md-text-button v-if="canEdit" :disabled="loading || savingEmailSettings" @click="openSmtpDialog(false)">
+          <md-text-button v-if="canEditSettings" :disabled="loading || savingEmailSettings" @click="openSmtpDialog(false)">
             <md-icon slot="icon">mail</md-icon>
             配置 SMTP
           </md-text-button>
           <md-text-button :disabled="loading || savingEmailSettings" @click="navigateTo('/game-account-email-templates')">
             <md-icon slot="icon">edit_note</md-icon>
-            {{ canEdit ? '编辑邮件模板' : '查看邮件模板' }}
+            {{ canEditTemplates ? '编辑邮件模板' : '查看邮件模板' }}
           </md-text-button>
         </div>
         <p class="smtp-status" :class="{ 'smtp-status--ready': settings.smtpConfigured }">
@@ -411,7 +421,7 @@ onUnmounted(() => {
               <td class="mono email-cell" :title="account.email || undefined">{{ account.email || '未绑定' }}</td>
               <td class="mono">{{ account.last_login_ip || '暂无记录' }}</td>
               <td>{{ formatAuthenticationDate(account.last_authenticated_date) }}</td>
-              <td class="actions"><md-icon-button v-if="canEdit && isAccountLocked(account)" aria-label="解除登录锁定" title="解除登录锁定" @click="unlockAccount(account)"><md-icon>lock_open</md-icon></md-icon-button><md-icon-button aria-label="查看皮肤与披风" title="查看皮肤与披风" @click="openCosmetics(account)"><md-icon>checkroom</md-icon></md-icon-button><md-icon-button v-if="canEdit" aria-label="重置密码" @click="resetTarget = account"><md-icon>key</md-icon></md-icon-button><md-icon-button v-if="canEdit" aria-label="注销账户" @click="deleteAccount(account)"><md-icon>delete</md-icon></md-icon-button></td>
+              <td class="actions"><md-icon-button v-if="canManageAccounts && isAccountLocked(account)" aria-label="解除登录锁定" title="解除登录锁定" @click="unlockAccount(account)"><md-icon>lock_open</md-icon></md-icon-button><md-icon-button aria-label="查看皮肤与披风" title="查看皮肤与披风" @click="openCosmetics(account)"><md-icon>checkroom</md-icon></md-icon-button><md-icon-button v-if="canManageAccounts" aria-label="重置密码" @click="resetTarget = account"><md-icon>key</md-icon></md-icon-button><md-icon-button v-if="canManageAccounts" aria-label="注销账户" @click="deleteAccount(account)"><md-icon>delete</md-icon></md-icon-button></td>
             </tr>
           </tbody>
         </table>
@@ -587,7 +597,6 @@ onUnmounted(() => {
   font-weight: 500;
 }
 
-.email-verification-row small,
 .smtp-status {
   color: var(--md-sys-color-on-surface-variant);
   font-size: 12px;

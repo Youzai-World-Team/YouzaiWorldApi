@@ -1,4 +1,3 @@
-import { randomBytes } from 'node:crypto'
 import { once } from 'node:events'
 import { createConnection, isIP, type Socket } from 'node:net'
 import { hostname } from 'node:os'
@@ -12,6 +11,9 @@ import {
   replaceVerificationEmailHtmlPlaceholders,
   VERIFICATION_EMAIL_LOGO_URL,
 } from './email-template-renderer'
+import { buildSmtpMessage, type HtmlEmailAttachment } from './smtp-message'
+
+export type { HtmlEmailAttachment } from './smtp-message'
 
 const SMTP_TIMEOUT_MS = 15_000
 
@@ -143,14 +145,6 @@ function authCapabilities(response: SmtpResponse): string[] {
   return authLine ? authLine.replace(/^AUTH[ =]/i, '').trim().toUpperCase().split(/\s+/) : []
 }
 
-function encodeHeader(value: string): string {
-  return `=?UTF-8?B?${Buffer.from(value, 'utf8').toString('base64')}?=`
-}
-
-function wrapBase64(value: string): string {
-  return value.match(/.{1,76}/g)?.join('\r\n') || ''
-}
-
 export function buildVerificationEmailFromTemplate(
   template: VerificationEmailTemplate,
   username: string,
@@ -198,40 +192,32 @@ export function buildVerificationEmailText(
   ]
 }
 
-function buildMessage(
+/**
+ * Send an arbitrary HTML message through the configured SMTP transport.
+ * The optional sender override is used by the domain-mail composer; callers
+ * must validate the address before reaching this low-level function.
+ */
+export async function sendHtmlEmail(
   settings: SmtpTransportSettings,
   recipient: string,
-  subjectText: string,
-  contentLines: string[],
+  subject: string,
   htmlContent: string,
-): string {
-  const fromName = encodeHeader(settings.fromName || '悠哉世界')
-  const subject = encodeHeader(subjectText)
-  const domain = settings.fromAddress.split('@')[1] || 'localhost'
-  const messageId = `${randomBytes(16).toString('hex')}@${domain}`
-  const content = contentLines.join('\r\n')
-  const boundary = `=_YouzaiWorld_${randomBytes(12).toString('hex')}`
-  return [
-    `Date: ${new Date().toUTCString()}`,
-    `Message-ID: <${messageId}>`,
-    `From: ${fromName} <${settings.fromAddress}>`,
-    `To: <${recipient}>`,
-    `Subject: ${subject}`,
-    'MIME-Version: 1.0',
-    `Content-Type: multipart/alternative; boundary="${boundary}"`,
-    '',
-    `--${boundary}`,
-    'Content-Type: text/plain; charset=UTF-8',
-    'Content-Transfer-Encoding: base64',
-    '',
-    wrapBase64(Buffer.from(content, 'utf8').toString('base64')),
-    `--${boundary}`,
-    'Content-Type: text/html; charset=UTF-8',
-    'Content-Transfer-Encoding: base64',
-    '',
-    wrapBase64(Buffer.from(htmlContent, 'utf8').toString('base64')),
-    `--${boundary}--`,
-  ].join('\r\n')
+  textContent = '',
+  sender?: { address: string; name?: string },
+  attachments: HtmlEmailAttachment[] = [],
+): Promise<void> {
+  const effectiveSettings: SmtpTransportSettings = sender?.address
+    ? { ...settings, fromAddress: sender.address, fromName: sender.name ?? settings.fromName }
+    : settings
+  const message = buildSmtpMessage(
+    effectiveSettings,
+    recipient,
+    subject,
+    textContent ? textContent.split(/\r?\n/) : [''],
+    htmlContent,
+    attachments,
+  )
+  return sendMessage(effectiveSettings, recipient, message)
 }
 
 function dotStuff(message: string): string {

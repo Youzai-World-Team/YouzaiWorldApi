@@ -6,17 +6,13 @@ const newPassword = ref('')
 const confirmPassword = ref('')
 const updating = ref(false)
 
-const entryInput = ref('')
-const currentEntry = ref('')
-const savingEntry = ref(false)
-
 const fileInput = ref<HTMLInputElement | null>(null)
 const uploadingAvatar = ref(false)
 const fullNameInput = ref('')
 const savingFullName = ref(false)
 
 const { showToast } = useToast()
-const { entry: entryState, load: loadEntry } = useEntry()
+const { load: loadEntry } = useEntry()
 const access = useAdminAccess()
 interface CurrentUser {
   username: string
@@ -25,7 +21,35 @@ interface CurrentUser {
   isOwner: boolean
 }
 
+interface AccountDevice {
+  id: string
+  device: string
+  browser: string
+  os: string
+  ip: string
+  location: string
+  lastLoginAt: number
+  loginCount: number
+  isCurrent: boolean
+  online: boolean
+  lastSeenAt: number | null
+}
+
+interface AppInfo {
+  version: string
+  deployedAt: number
+  contributors: string[]
+  repository: {
+    name: string
+    url: string
+  }
+}
+
 const currentUser = ref<CurrentUser | null>(null)
+const devices = ref<AccountDevice[]>([])
+const devicesLoading = ref(false)
+const appInfo = ref<AppInfo | null>(null)
+const appInfoLoading = ref(false)
 const displayName = computed(() => currentUser.value?.fullName || currentUser.value?.username || '账户')
 const canChangePassword = computed(() => access.featureLevelForKey('account-password') === 'edit')
 const canChangeFullName = computed(() => access.featureLevelForKey('account-full-name') === 'edit')
@@ -39,8 +63,7 @@ onMounted(async () => {
     access.updateProfile(result.user)
     fullNameInput.value = result.user.fullName || ''
   } catch {}
-  currentEntry.value = await loadEntry()
-  entryInput.value = currentEntry.value
+  await Promise.all([loadDevices(), loadAppInfo()])
 })
 
 function onInput(field: 'old' | 'new' | 'confirm', e: Event) {
@@ -71,33 +94,41 @@ async function updatePassword() {
   }
 }
 
-async function saveEntry() {
-  if (savingEntry.value) return
-  const val = entryInput.value.trim().replace(/^\/+|\/+$/g, '')
-  if (!val) {
-    showToast('入口不能为空', 'error')
-    return
-  }
-  savingEntry.value = true
-  try {
-    const res = await $fetch<{ entry: string }>('/api/auth/entry', {
-      method: 'POST',
-      body: { entry: val }
-    })
-    currentEntry.value = res.entry
-    entryInput.value = res.entry
-    entryState.value = res.entry
-    showToast(`安全入口已更新为 /${res.entry}`)
-  } catch (e: any) {
-    showToast(e?.data?.statusMessage || '保存失败', 'error')
-  } finally {
-    savingEntry.value = false
-  }
-}
-
 function pickAvatar() {
   if (!canChangeAvatar.value) return
   fileInput.value?.click()
+}
+
+async function loadDevices() {
+  if (devicesLoading.value) return
+  devicesLoading.value = true
+  try {
+    devices.value = await $fetch<AccountDevice[]>('/api/auth/devices')
+  } catch (e: any) {
+    showToast(e?.data?.statusMessage || '登录设备加载失败', 'error')
+  } finally {
+    devicesLoading.value = false
+  }
+}
+
+function formatDeviceClient(device: AccountDevice) {
+  return [device.browser, device.os].filter(Boolean).join(' · ') || '未知客户端'
+}
+
+function formatDeviceTime(value: number | null) {
+  return value ? new Date(value).toLocaleString('zh-CN') : '暂无记录'
+}
+
+async function loadAppInfo() {
+  if (appInfoLoading.value) return
+  appInfoLoading.value = true
+  try {
+    appInfo.value = await $fetch<AppInfo>('/api/auth/app-info')
+  } catch {
+    appInfo.value = null
+  } finally {
+    appInfoLoading.value = false
+  }
 }
 
 async function saveFullName() {
@@ -240,7 +271,7 @@ async function logout() {
       <div v-if="canChangeFullName" class="full-name-form">
         <md-outlined-text-field
           label="全名"
-          supporting-text="作为对外显示的名称；留空时显示用户名"
+          supporting-text="留空时显示用户名"
           maxlength="64"
           :value="fullNameInput"
           @input="fullNameInput = ($event.target as HTMLInputElement).value"
@@ -279,19 +310,40 @@ async function logout() {
       </div>
     </section>
 
-    <section v-if="currentUser?.isOwner" class="card account-card">
-      <h2 class="card-title">安全入口</h2>
-      <p class="entry-hint">登录页只能通过该入口访问。当前入口：<code class="entry-code">/{{ currentEntry || '…' }}</code></p>
-      <div class="form">
-        <md-outlined-text-field
-          label="安全入口"
-          :value="entryInput"
-          @input="entryInput = ($event.target as HTMLInputElement).value"
-        ></md-outlined-text-field>
-        <md-filled-button :disabled="savingEntry" @click="saveEntry">
-          {{ savingEntry ? '保存中…' : '保存入口' }}
-        </md-filled-button>
+    <section class="card account-card devices-card">
+      <div class="card-heading-row">
+        <div><h2 class="card-title">登录设备</h2><span>{{ devices.length }} 个设备记录</span></div>
+        <md-icon-button aria-label="刷新登录设备" title="刷新" :disabled="devicesLoading" @click="loadDevices">
+          <md-icon :class="{ 'refresh-icon--active': devicesLoading }">refresh</md-icon>
+        </md-icon-button>
       </div>
+      <div v-if="devicesLoading && !devices.length" class="devices-loading"><md-circular-progress indeterminate></md-circular-progress></div>
+      <div v-else-if="devices.length" class="device-list">
+        <article v-for="device in devices" :key="device.id" class="device-item">
+          <span
+            class="device-icon"
+            :class="{ 'device-icon--current': device.isCurrent }"
+          ><DeviceClientIcon :client="device" /></span>
+          <div class="device-copy">
+            <div class="device-title-row">
+              <strong>{{ device.device || '未知设备' }}</strong>
+              <span v-if="device.isCurrent" class="device-status device-status--current">当前设备</span>
+              <span v-if="device.online" class="device-status device-status--online"><i></i>在线</span>
+            </div>
+            <span>{{ formatDeviceClient(device) }}</span>
+            <div class="device-meta">
+              <code>{{ device.ip || '未知 IP' }}</code>
+              <span v-if="device.location" class="device-location"><md-icon>location_on</md-icon>{{ device.location }}</span>
+              <span>登录 {{ device.loginCount }} 次</span>
+            </div>
+          </div>
+          <time :datetime="new Date(device.lastLoginAt).toISOString()" :title="formatDeviceTime(device.lastSeenAt || device.lastLoginAt)">
+            <span>{{ device.isCurrent ? '最近活动' : '最近登录' }}</span>
+            <strong>{{ formatDeviceTime(device.lastSeenAt || device.lastLoginAt) }}</strong>
+          </time>
+        </article>
+      </div>
+      <div v-else class="devices-empty"><md-icon>devices</md-icon><span>暂无登录设备记录</span></div>
     </section>
 
     <section class="card account-card">
@@ -300,6 +352,42 @@ async function logout() {
         <md-icon slot="icon">logout</md-icon>
         登出账户
       </md-text-button>
+    </section>
+
+    <section class="card account-card app-info-card">
+      <div class="card-heading-row">
+        <h2 class="card-title">关于YouzaiWorld API</h2>
+        <md-icon-button aria-label="刷新服务端信息" title="刷新" :disabled="appInfoLoading" @click="loadAppInfo">
+          <md-icon :class="{ 'refresh-icon--active': appInfoLoading }">refresh</md-icon>
+        </md-icon-button>
+      </div>
+      <dl class="app-info-list">
+        <div>
+          <dt><md-icon>deployed_code</md-icon><span>版本</span></dt>
+          <dd>{{ appInfo?.version || 'Beta 2.5.4' }}</dd>
+        </div>
+        <div>
+          <dt><md-icon>schedule</md-icon><span>上一次部署</span></dt>
+          <dd>{{ appInfo ? formatDeviceTime(appInfo.deployedAt) : (appInfoLoading ? '正在读取…' : '暂时无法获取') }}</dd>
+        </div>
+        <div>
+          <dt><md-icon>group</md-icon><span>贡献者</span></dt>
+          <dd>{{ appInfo?.contributors.join('、') || 'a彬彬a、Csituka_D' }}</dd>
+        </div>
+        <div>
+          <dt><md-icon>code</md-icon><span>开源仓库</span></dt>
+          <dd>
+            <a
+              :href="appInfo?.repository.url || 'https://github.com/Youzai-World-Team/YouzaiWorldApi'"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              {{ appInfo?.repository.name || 'YouzaiWorldApi' }}
+              <md-icon>open_in_new</md-icon>
+            </a>
+          </dd>
+        </div>
+      </dl>
     </section>
     </div>
   </div>
@@ -404,18 +492,42 @@ async function logout() {
   color: var(--md-sys-color-error);
 }
 
-.entry-hint {
-  margin: 0 0 16px;
-  font-size: 14px;
-  color: var(--md-sys-color-on-surface-variant);
-}
-
-.entry-code {
-  font-family: 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 13px;
-  color: var(--md-sys-color-primary);
-  overflow-wrap: anywhere;
-}
+.card-heading-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.card-heading-row > div { min-width: 0; display: grid; gap: 3px; }
+.card-heading-row .card-title { margin-bottom: 0; }
+.card-heading-row span { color: var(--md-sys-color-on-surface-variant); font-size: 11px; }
+.device-list { display: grid; margin-top: 16px; }
+.device-item { min-width: 0; display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 13px 0; border-top: 1px solid var(--md-sys-color-outline-variant); }
+.device-icon { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 8px; color: var(--md-sys-color-on-surface-variant); background: var(--md-sys-color-surface-container-high); }
+.device-icon md-icon { --md-icon-size: 21px; }
+.device-icon--current { color: var(--md-sys-color-on-primary-container); background: var(--md-sys-color-primary-container); }
+.device-copy { min-width: 0; display: grid; gap: 5px; }
+.device-title-row { min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.device-title-row strong { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.device-copy > span { overflow: hidden; color: var(--md-sys-color-on-surface-variant); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.device-status { display: inline-flex; align-items: center; gap: 4px; padding: 3px 6px; border-radius: 4px; font-size: 8px; font-weight: 700; }
+.device-status--current { color: var(--md-sys-color-on-primary-container); background: var(--md-sys-color-primary-container); }
+.device-status--online { color: var(--act-success); background: color-mix(in srgb, var(--act-success) 10%, transparent); }
+.device-status--online i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.device-meta { min-width: 0; display: flex; flex-wrap: wrap; gap: 8px; color: var(--md-sys-color-on-surface-variant); font-size: 10px; }
+.device-meta code { font: 10px 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, monospace; }
+.device-location { display: inline-flex; align-items: center; gap: 2px; }
+.device-location md-icon { --md-icon-size: 12px; }
+.device-item time { display: grid; justify-items: end; gap: 4px; white-space: nowrap; }
+.device-item time span { color: var(--md-sys-color-on-surface-variant); font-size: 9px; }
+.device-item time strong { font-size: 10px; font-weight: 600; }
+.devices-loading, .devices-empty { min-height: 100px; display: grid; place-items: center; align-content: center; gap: 8px; color: var(--md-sys-color-on-surface-variant); font-size: 12px; }
+.devices-empty md-icon { --md-icon-size: 28px; }
+.app-info-list { display: grid; margin: 16px 0 0; }
+.app-info-list > div { min-width: 0; display: grid; grid-template-columns: minmax(120px, 0.8fr) minmax(0, 1.2fr); align-items: center; gap: 16px; padding: 12px 0; border-top: 1px solid var(--md-sys-color-outline-variant); }
+.app-info-list dt { display: flex; align-items: center; gap: 8px; color: var(--md-sys-color-on-surface-variant); font-size: 12px; }
+.app-info-list dt md-icon { flex: 0 0 auto; --md-icon-size: 19px; }
+.app-info-list dd { min-width: 0; margin: 0; font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.app-info-list a { display: inline-flex; max-width: 100%; align-items: center; gap: 5px; color: var(--md-sys-color-primary); text-decoration: none; overflow-wrap: anywhere; }
+.app-info-list a:hover { text-decoration: underline; }
+.app-info-list a md-icon { flex: 0 0 auto; --md-icon-size: 16px; }
+.refresh-icon--active { animation: device-refresh 900ms linear infinite; }
+@keyframes device-refresh { to { transform: rotate(360deg); } }
 
 @media (max-width: 480px) {
   .account-stack {
@@ -442,5 +554,17 @@ async function logout() {
   .full-name-form md-filled-button {
     width: 100%;
   }
+
+  .device-item { grid-template-columns: 38px minmax(0, 1fr); }
+  .device-item time { grid-column: 2; justify-items: start; }
+
+  .app-info-list > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 5px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .refresh-icon--active { animation: none; }
 }
 </style>

@@ -1,4 +1,4 @@
-import { getHeader, type H3Event } from 'h3'
+import { getHeader, getRequestIP, type H3Event } from 'h3'
 import { chatIpHash, getCachedIpLocation, setCachedIpLocation } from './db'
 
 // 第三方中文 IP 库：HTTPS、免密钥，返回省市级归属地。
@@ -27,11 +27,12 @@ interface IpDataResponse {
 }
 
 function isPrivateAddress(ip: string): boolean {
-  if (ip === '::1' || ip === 'localhost') return true
+  const address = ip.replace(/^::ffff:/i, '')
+  if (address === '::1' || address === 'localhost') return true
   // IPv6 唯一本地地址与链路本地地址
-  if (/^f[cd][0-9a-f]{2}:/i.test(ip) || /^fe80:/i.test(ip)) return true
+  if (/^f[cd][0-9a-f]{2}:/i.test(address) || /^fe80:/i.test(address)) return true
 
-  const parts = ip.split('.')
+  const parts = address.split('.')
   if (parts.length !== 4) return false
   const octets = parts.map((part) => Number(part))
   if (octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) return false
@@ -83,6 +84,10 @@ function locationFromCloudflare(event: H3Event): string {
   return normalizeLocation([countryName, region, city].filter(Boolean).join(' '))
 }
 
+function currentRequestIp(event: H3Event): string {
+  return String(getHeader(event, 'cf-connecting-ip') || getRequestIP(event) || '').trim()
+}
+
 /**
  * 解析 IP 归属地，任何失败都退化成可展示的文本，绝不让发消息因此失败。
  * 顺序：私有网段 → 缓存 → 第三方省市级库（写缓存）→ Cloudflare 请求头（不写缓存）→ 未知
@@ -102,6 +107,37 @@ export async function resolveIpLocation(ip: string, event: H3Event): Promise<str
     return resolved
   }
 
+  // Cloudflare 请求头只描述当前请求，查询历史 IP 时不能拿它兜底。
   // 兜底结果粒度粗（多数只有国家），不写入缓存，以免占住 7 天 TTL。
-  return locationFromCloudflare(event) || '未知'
+  return address === currentRequestIp(event) ? locationFromCloudflare(event) || '未知' : '未知'
+}
+
+/**
+ * 批量解析展示用归属地：私有地址与缓存不占外部查询额度，未命中的地址按传入顺序限量补查。
+ */
+export async function resolveIpLocations(
+  ips: Array<string | null | undefined>,
+  event: H3Event,
+  maxLookups = 24,
+): Promise<Map<string, string>> {
+  const uniqueIps = [...new Set(ips.map((ip) => String(ip || '').trim()).filter((ip) => ip && ip !== 'unknown'))]
+  const locations = new Map<string, string>()
+  const unresolved: string[] = []
+
+  for (const ip of uniqueIps) {
+    if (isPrivateAddress(ip)) {
+      locations.set(ip, '局域网')
+      continue
+    }
+    const cached = getCachedIpLocation(chatIpHash(ip))
+    if (cached) locations.set(ip, cached)
+    else unresolved.push(ip)
+  }
+
+  const lookupLimit = Number.isFinite(maxLookups) ? Math.max(0, Math.trunc(maxLookups)) : 24
+  const resolved = await Promise.all(unresolved.slice(0, lookupLimit).map(async (ip) => [ip, await resolveIpLocation(ip, event)] as const))
+  for (const [ip, location] of resolved) {
+    if (location && location !== '未知') locations.set(ip, location)
+  }
+  return locations
 }

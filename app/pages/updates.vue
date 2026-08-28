@@ -238,13 +238,11 @@ async function confirmDelete() {
 
 <template>
   <div class="page">
-    <h1 class="page-title">更新服务</h1>
-
-    <div class="endpoint">
-      <span class="endpoint-label">数据 API：</span>
-      <code class="endpoint-url">
-        <a href="/api/update/{key}" @click="onEndpointClick">GET /api/update/{key}</a>
-      </code>
+    <div class="page-heading">
+      <h1 class="page-title">更新服务</h1>
+      <md-icon-button aria-label="打开数据 API" title="打开数据 API" @click="onEndpointClick">
+        <md-icon>api</md-icon>
+      </md-icon-button>
     </div>
 
     <div class="card">
@@ -297,7 +295,7 @@ async function confirmDelete() {
         </table>
       </div>
       <p v-if="loading" class="empty">加载中…</p>
-      <p v-else-if="list.length === 0" class="empty">暂无程序，点击右上角添加</p>
+      <p v-else-if="list.length === 0" class="empty">暂无程序</p>
     </div>
 
     <md-dialog ref="formDialog" :open="formOpen" @closed="onFormClosed">
@@ -311,7 +309,7 @@ async function confirmDelete() {
           ></md-outlined-text-field>
 
           <md-outlined-text-field
-            label="程序标识（用于更新接口 URL）"
+            label="程序标识"
             :value="formKey"
             :disabled="formMode === 'edit'"
             @input="formKey = ($event.target as HTMLInputElement).value"
@@ -367,7 +365,6 @@ async function confirmDelete() {
     <md-dialog ref="apiDialog" :open="apiOpen" @closed="onApiClosed">
       <div slot="headline">选择程序</div>
       <div slot="content">
-        <p class="delete-text">选择要查看更新信息的程序：</p>
         <md-list class="api-list">
           <md-list-item v-for="u in list" :key="u.id" type="button" @click="openPublicEndpoint(u.key)">
             <span slot="headline">{{ u.name }}</span>
@@ -400,30 +397,16 @@ async function confirmDelete() {
 </template>
 
 <style scoped>
-.endpoint {
+.page-heading {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: -6px 0 20px;
-  font-size: 14px;
-  color: var(--md-sys-color-on-surface-variant);
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
 }
 
-.endpoint-url {
-  font-family: 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 13px;
-}
-
-.endpoint-url a {
-  color: var(--md-sys-color-primary);
-  text-decoration: none;
-  border-bottom: 1px dashed currentColor;
-  cursor: pointer;
-}
-
-.endpoint-url a:hover {
-  opacity: 0.8;
+.page-title {
+  margin: 0;
 }
 
 .api-list {
@@ -620,16 +603,6 @@ async function confirmDelete() {
 }
 
 @media (max-width: 640px) {
-  .endpoint {
-    align-items: flex-start;
-    margin-bottom: 16px;
-  }
-
-  .endpoint-url {
-    min-width: 0;
-    overflow-wrap: anywhere;
-  }
-
   .card-head {
     align-items: stretch;
     gap: 12px;

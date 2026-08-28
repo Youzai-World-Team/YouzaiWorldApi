@@ -174,13 +174,11 @@ async function confirmDelete() {
 
 <template>
   <div class="page">
-    <h1 class="page-title">封禁列表</h1>
-
-    <div class="endpoint">
-      <span class="endpoint-label">数据 API：</span>
-      <code class="endpoint-url">
-        <a :href="endpoint" target="_blank" rel="noopener">GET {{ endpoint }}</a>
-      </code>
+    <div class="page-heading">
+      <h1 class="page-title">封禁列表</h1>
+      <md-icon-button :href="endpoint" target="_blank" rel="noopener" aria-label="打开数据 API" title="打开数据 API">
+        <md-icon>api</md-icon>
+      </md-icon-button>
     </div>
 
     <div class="card">
@@ -290,29 +288,16 @@ async function confirmDelete() {
 </template>
 
 <style scoped>
-.endpoint {
+.page-heading {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: -6px 0 20px;
-  font-size: 14px;
-  color: var(--md-sys-color-on-surface-variant);
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
 }
 
-.endpoint-url {
-  font-family: 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 13px;
-}
-
-.endpoint-url a {
-  color: var(--md-sys-color-primary);
-  text-decoration: none;
-  border-bottom: 1px dashed currentColor;
-}
-
-.endpoint-url a:hover {
-  opacity: 0.8;
+.page-title {
+  margin: 0;
 }
 
 .card-head {
@@ -480,16 +465,6 @@ async function confirmDelete() {
 }
 
 @media (max-width: 640px) {
-  .endpoint {
-    align-items: flex-start;
-    margin-bottom: 16px;
-  }
-
-  .endpoint-url {
-    min-width: 0;
-    overflow-wrap: anywhere;
-  }
-
   .card-head {
     align-items: stretch;
     gap: 12px;

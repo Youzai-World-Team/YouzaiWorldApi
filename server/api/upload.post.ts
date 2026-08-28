@@ -1,6 +1,6 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { requireAuth, requireFeaturePermission } from '../utils/db'
+import { requireAuth, requireFeaturePermission, requireOwner, requirePagePermission } from '../utils/db'
 
 const EXT_BY_TYPE: Record<string, string> = {
   'image/png': 'png',
@@ -13,10 +13,18 @@ const EXT_BY_TYPE: Record<string, string> = {
 const MAX_UPLOAD_BYTES = 2 * 1024 * 1024
 
 export default defineEventHandler(async (event) => {
+  requireAuth(event)
   const parts = await readMultipartFormData(event)
-  const purpose = parts?.find((part) => part.name === 'purpose')?.data?.toString('utf8') || ''
-  if (purpose === 'account-avatar') requireFeaturePermission(event, 'account-avatar', 'edit')
-  else requireAuth(event)
+  const purpose = parts?.find((part) => part.name === 'purpose')?.data?.toString('utf8').trim() || ''
+  if (purpose === 'account-avatar') {
+    requireFeaturePermission(event, 'account-avatar', 'edit')
+  } else if (purpose === 'admin-user-avatar') {
+    requireOwner(event)
+  } else if (purpose === 'donor-avatar') {
+    requirePagePermission(event, 'donors', 'edit')
+  } else {
+    throw createError({ statusCode: 400, statusMessage: '上传用途无效' })
+  }
   const file = parts?.find((p) => p.name === 'file' && p.data && p.data.length)
   if (!file) {
     throw createError({ statusCode: 400, statusMessage: '未找到上传文件' })

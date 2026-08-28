@@ -176,6 +176,7 @@ onBeforeUnmount(() => {
       v-if="failed"
       class="monaco-fallback"
       spellcheck="false"
+      wrap="off"
       :readonly="readonly"
       :value="modelValue"
       @input="emit('update:modelValue', ($event.target as HTMLTextAreaElement).value)"
@@ -204,6 +205,6 @@ onBeforeUnmount(() => {
 
 .monaco-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--md-sys-color-on-surface-variant); font-size: 13px; pointer-events: none; }
 .monaco-failed { margin: 0; padding: 8px 12px; color: var(--md-sys-color-error); font-size: 12px; }
-.monaco-fallback { width: 100%; height: calc(100% - 34px); box-sizing: border-box; padding: 12px; border: 0; background: transparent; color: var(--md-sys-color-on-surface); font-family: 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.6; resize: none; }
+.monaco-fallback { width: 100%; height: calc(100% - 34px); box-sizing: border-box; padding: 12px; overflow: auto; border: 0; background: transparent; color: var(--md-sys-color-on-surface); font-family: 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.6; white-space: pre; resize: none; }
 .monaco-fallback:focus { outline: 2px solid var(--md-sys-color-primary); outline-offset: -2px; }
 </style>

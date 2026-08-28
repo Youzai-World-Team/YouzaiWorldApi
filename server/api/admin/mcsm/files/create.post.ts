@@ -1,10 +1,10 @@
-import { recordAudit, requirePagePermission } from '../../../../utils/db'
+import { recordAudit, requireFeaturePermission } from '../../../../utils/db'
 import { assertInstanceAllowed } from '../../../../utils/mcsm'
 import { createEmptyFile, makeDirectory } from '../../../../utils/mcsm-files'
 
 /** 新建目录或空文件。kind 决定走 mkdir 还是 touch。 */
 export default defineEventHandler(async (event) => {
-  const user = requirePagePermission(event, 'server-files', 'edit')
+  const user = requireFeaturePermission(event, 'server-files-edit', 'edit')
   const body = await readBody<{ uuid?: string; daemonId?: string; path?: string; name?: string; kind?: string }>(event)
 
   const uuid = String(body?.uuid || '')

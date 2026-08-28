@@ -137,8 +137,33 @@ const STYLE_VALUE_BLOCKLIST = [
   '<', 'attr(', 'element(', 'image-set(', 'var(',
 ]
 
-/** 只放行内联的 data: 图片；其余（含远程与 cid:）都换成占位提示。 */
+/** 放行内联图片和本站 HTTPS 图片；其余（含其他远程地址与 cid:）换成占位提示。 */
 const DATA_IMAGE_RE = /^data:image\/(?:png|jpe?g|gif|webp|avif|bmp);base64,[A-Za-z0-9+/=\s]+$/i
+
+function isTrustedImageUrl(value: string): boolean {
+  try {
+    const url = new URL(value)
+    const hostname = url.hostname.toLowerCase()
+    return url.protocol === 'https:'
+      && !url.username
+      && !url.password
+      && (!url.port || url.port === '443')
+      && (hostname === 'mcyzw.top' || hostname.endsWith('.mcyzw.top'))
+  } catch {
+    return false
+  }
+}
+
+function isAllowedImageSource(value: string): boolean {
+  return DATA_IMAGE_RE.test(value) || isTrustedImageUrl(value)
+}
+
+/**
+ * 被拦截图片改用本地透明像素作为 src，但继续保留原始 img 标签及其布局属性。
+ * 透明像素本身只有 1×1，避免在邮件没有声明尺寸时凭空制造大块区域；一旦原邮件
+ * 提供 width / height / class / style，浏览器仍会按原规则计算图片盒子。
+ */
+const BLOCKED_IMAGE_SRC = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=='
 
 const MAX_OUTPUT_LENGTH = 512 * 1024
 const MAX_DEPTH = 64
@@ -166,7 +191,7 @@ export interface SanitizedEmailHtml {
   html: string
   /** 从 `<style>` 里净化出来的 CSS，由前端放进沙箱文档的 head。 */
   css: string
-  /** 被拦掉的图片数量（远程 URL 或 cid: 内联附件引用）。 */
+  /** 被拦掉的图片数量（非本站远程 URL 或 cid: 内联附件引用）。 */
   blockedImages: number
   /** 输出被截断（超长或嵌套过深）。 */
   truncated: boolean
@@ -589,17 +614,14 @@ export function sanitizeEmailHtml(input: unknown): SanitizedEmailHtml {
     const attrs = parseAttributes(attrSource)
     const allowedExtra = ALLOWED_TAGS.get(tagName)!
 
-    // <img>：只有内联 data: 图片能留下，其余换成占位提示
+    // <img>：内联图片与本站 HTTPS 图片能留下；其余保留标签和布局属性，只替换 src。
+    let blockedImage = false
     if (tagName === 'img') {
       const srcAttr = attrs.find((attr) => attr.name === 'src')
-      const altAttr = attrs.find((attr) => attr.name === 'alt')
       const rawSrc = decodeBasicEntities(srcAttr?.value ?? '').trim()
-      if (!DATA_IMAGE_RE.test(rawSrc)) {
+      if (!isAllowedImageSource(rawSrc)) {
         blockedImages += 1
-        const label = (altAttr?.value || '').trim()
-        const hint = label ? `图片已拦截：${label}` : '图片已拦截'
-        if (!push(`<span class="yzw-blocked-img">${escapeText(hint)}</span>`)) break
-        continue
+        blockedImage = true
       }
     }
 
@@ -614,6 +636,9 @@ export function sanitizeEmailHtml(input: unknown): SanitizedEmailHtml {
     const emitted = tagName === 'a' ? 'span' : tagName === 'body' ? 'div' : tagName
     let suffix = ''
     const pieces: string[] = []
+    let blockedImageClassAdded = false
+    let blockedImageHasAlt = false
+    let blockedImageHasTitle = false
 
     if (tagName === 'a') {
       const url = displayableUrl(attrs.find((attr) => attr.name === 'href')?.value ?? '')
@@ -627,14 +652,17 @@ export function sanitizeEmailHtml(input: unknown): SanitizedEmailHtml {
         pieces.push('title="已移除不安全链接"')
       }
     }
+    if (blockedImage) pieces.push(`src="${BLOCKED_IMAGE_SRC}"`)
 
     for (const attr of attrs) {
       if (tagName === 'img' && attr.name === 'src') {
-        pieces.push(`src="${escapeAttr(decodeBasicEntities(attr.value).trim())}"`)
+        if (!blockedImage) pieces.push(`src="${escapeAttr(decodeBasicEntities(attr.value).trim())}"`)
         continue
       }
       const allowed = GLOBAL_ATTRS.has(attr.name) || allowedExtra.has(attr.name)
       if (!allowed) continue
+      if (blockedImage && attr.name === 'alt') blockedImageHasAlt = true
+      if (blockedImage && attr.name === 'title') blockedImageHasTitle = true
       // <a> 已经降级并自带 class / title / href，邮件自己的这些属性不再采纳，
       // 以免覆盖或与我们注入的点击行为冲突。
       if (tagName === 'a' && (attr.name === 'title' || attr.name === 'class' || attr.name === 'href')) continue
@@ -650,6 +678,10 @@ export function sanitizeEmailHtml(input: unknown): SanitizedEmailHtml {
         const classes = attr.value.trim().split(/\s+/)
           .filter((token) => CSS_IDENT_RE.test(token) && !/^yzw-/i.test(token))
           .slice(0, 32)
+        if (blockedImage) {
+          classes.push('yzw-blocked-img')
+          blockedImageClassAdded = true
+        }
         if (classes.length) pieces.push(`class="${escapeAttr(classes.join(' '))}"`)
         continue
       }
@@ -714,6 +746,10 @@ export function sanitizeEmailHtml(input: unknown): SanitizedEmailHtml {
       // 其余允许的属性（alt / title / lang）按纯文本处理
       pieces.push(`${attr.name}="${escapeAttr(attr.value)}"`)
     }
+
+    if (blockedImage && !blockedImageClassAdded) pieces.push('class="yzw-blocked-img"')
+    if (blockedImage && !blockedImageHasAlt) pieces.push('alt="图片已拦截"')
+    if (blockedImage && !blockedImageHasTitle) pieces.push('title="图片已拦截，未加载外部资源"')
 
     const openTag = `<${emitted}${pieces.length ? ` ${pieces.join(' ')}` : ''}>`
     if (VOID_TAGS.has(tagName)) {

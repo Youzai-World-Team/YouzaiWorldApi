@@ -181,8 +181,7 @@ watch(() => [props.uuid, props.daemonId], () => void load(), { immediate: true }
     </div>
 
     <p class="card-note">
-      由 MCSM 面板执行的定时任务，常用于定时重启和定时公告。面板对单个实例的任务数量有上限，
-      超出时会直接报错。<span v-if="!canEdit">当前账户没有「计划任务」权限，只能查看。</span>
+      面板限制单个实例的任务数量，超限会报错。<span v-if="!canEdit">当前账户没有「计划任务」权限，只能查看。</span>
     </p>
 
     <div class="table-wrap">

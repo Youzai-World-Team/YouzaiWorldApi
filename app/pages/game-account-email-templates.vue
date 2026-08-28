@@ -45,7 +45,8 @@ let previewRequestId = 0
 let previewTimer: ReturnType<typeof setTimeout> | null = null
 const { showToast } = useToast()
 const access = useAdminAccess()
-const canEdit = computed(() => access.levelForKey('game-accounts') === 'edit')
+const canEdit = computed(() => access.levelForKey('game-accounts') === 'edit'
+  && access.featureLevelForKey('game-accounts-email-templates') === 'edit')
 
 function cloneTemplates(value: Record<EmailTemplateKind, EmailTemplate>) {
   return Object.fromEntries(EMAIL_TEMPLATE_KINDS.map(({ key }) => [
@@ -316,10 +317,7 @@ onBeforeUnmount(() => {
     <div class="page-heading">
       <div class="title-row">
         <md-icon-button aria-label="返回游戏账户" @click="navigateTo('/game-accounts')"><md-icon>arrow_back</md-icon></md-icon-button>
-        <div>
-          <h1 class="page-title">验证码邮件模板</h1>
-          <p class="page-subtitle">直接编辑邮件 HTML 源码，保存后将用于实际发信。</p>
-        </div>
+        <h1 class="page-title">验证码邮件模板</h1>
       </div>
       <div class="heading-actions">
         <md-text-button v-if="canEdit" :disabled="loading || saving || !isDesktop" @click="resetCurrentTemplate">撤销当前修改</md-text-button>
@@ -346,7 +344,7 @@ onBeforeUnmount(() => {
           <span>邮件主题</span>
           <input :value="currentTemplate().subject" maxlength="200" :disabled="!isDesktop || !canEdit" @input="onSubjectInput">
         </label>
-          <p>源码占位符：<code v-pre>{{username}}</code>、<code v-pre>{{code}}</code>、<code v-pre>{{subject}}</code>、<code v-pre>{{logoUrl}}</code>。预览名称使用当前后台账户全名。</p>
+          <p>占位符：<code v-pre>{{username}}</code>、<code v-pre>{{code}}</code>、<code v-pre>{{subject}}</code>、<code v-pre>{{logoUrl}}</code></p>
       </div>
 
       <div v-if="!isDesktop || !canEdit" class="mobile-preview-notice">
@@ -361,10 +359,7 @@ onBeforeUnmount(() => {
           :class="{ 'template-source-panel--fullscreen': editorFullscreen }"
         >
           <div class="panel-heading">
-            <div class="panel-heading-copy">
-              <h2>HTML 源码 · Monaco Editor</h2>
-              <span>支持完整 HTML 文档、语法高亮和代码折叠</span>
-            </div>
+            <h2>HTML 源码</h2>
             <div class="editor-panel-actions">
               <label class="word-wrap-option">
                 <md-checkbox :checked="wordWrapEnabled" @change="onWordWrapChange"></md-checkbox>
@@ -393,10 +388,7 @@ onBeforeUnmount(() => {
 
         <section class="template-preview-panel" :class="{ 'template-preview-panel--mobile': !isDesktop }">
           <div class="panel-heading">
-            <div>
-              <h2>实时预览</h2>
-              <span>预览使用当前后台账户名称和验证码 123456</span>
-            </div>
+            <h2>实时预览</h2>
             <span v-if="previewing" class="source-status">更新中…</span>
           </div>
           <iframe title="验证码邮件实时预览" sandbox="" :srcdoc="previewHtml"></iframe>
@@ -419,13 +411,7 @@ onBeforeUnmount(() => {
 }
 
 .title-row .page-title {
-  margin-bottom: 4px;
-}
-
-.page-subtitle {
   margin: 0;
-  color: var(--md-sys-color-on-surface-variant);
-  font-size: 13px;
 }
 
 .template-loading {
@@ -521,10 +507,6 @@ onBeforeUnmount(() => {
   gap: 12px;
   padding: 14px 16px;
   border-bottom: 1px solid var(--md-sys-color-outline-variant);
-}
-
-.panel-heading-copy {
-  min-width: 0;
 }
 
 .editor-panel-actions {

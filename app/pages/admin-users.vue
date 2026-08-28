@@ -132,6 +132,7 @@ async function createUser() {
     if (createAvatarFile.value) {
       const form = new FormData()
       form.append('file', createAvatarFile.value)
+      form.append('purpose', 'admin-user-avatar')
       const uploaded = await $fetch<{ url: string }>('/api/upload', { method: 'POST', body: form })
       avatar = uploaded.url
     }
@@ -344,5 +345,13 @@ onBeforeUnmount(() => {
 .create-avatar-actions { display: flex; flex-wrap: wrap; gap: 4px; }
 .hidden-input { display: none; }
 .empty { padding: 16px 0; color: var(--md-sys-color-on-surface-variant); }
-@media (max-width: 700px) { .create-dialog-form { min-width: min(360px, calc(100vw - 48px)); } }
+@media (max-width: 640px) {
+  .page-heading { align-items: stretch; flex-direction: column; }
+  .page-heading-actions { align-self: flex-end; }
+  .page-subtitle { margin-bottom: 8px; overflow-wrap: anywhere; }
+  .data-table { min-width: 620px; }
+  .dialog-form,
+  .create-dialog-form { width: 100%; min-width: 0; }
+  .create-avatar-control { align-items: flex-start; }
+}
 </style>

@@ -2,6 +2,8 @@ const TRUSTED_WEB_ORIGINS = new Set(['https://mcyzw.top', 'https://www.mcyzw.top
 const LOCAL_DEVELOPMENT_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1'])
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
 const MCSM_UPLOAD_CHUNK_MAX_BYTES = 128 * 1024
+const DOMAIN_MAIL_PREVIEW_MAX_BYTES = 4 * 1024 * 1024
+const DOMAIN_MAIL_SEND_MAX_BYTES = 18 * 1024 * 1024
 
 function isTrustedWebOrigin(origin: string): boolean {
   if (TRUSTED_WEB_ORIGINS.has(origin)) return true
@@ -23,7 +25,7 @@ export default defineEventHandler((event) => {
       || event.path === '/api/deploy'
       ? 'no-store'
       : 'no-cache',
-    'Content-Security-Policy': "default-src 'self'; base-uri 'self'; connect-src 'self' https://mcyzw.top https://challenges.cloudflare.com; font-src 'self' https://fonts.gstatic.com data:; form-action 'self'; frame-ancestors 'none'; frame-src https://challenges.cloudflare.com; img-src 'self' data: blob:; object-src 'none'; script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    'Content-Security-Policy': "default-src 'self'; base-uri 'self'; connect-src 'self' https://mcyzw.top https://challenges.cloudflare.com; font-src 'self' https://fonts.gstatic.com data:; form-action 'self'; frame-ancestors 'none'; frame-src 'self' https://challenges.cloudflare.com; img-src 'self' data: blob: https://mcyzw.top https://assets.mcyzw.top https://*.mcyzw.top; object-src 'none'; script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     'Cross-Origin-Opener-Policy': 'same-origin',
     'Cross-Origin-Resource-Policy': event.path.startsWith('/api/update/') ? 'cross-origin' : 'same-site',
     'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=()',
@@ -61,7 +63,13 @@ export default defineEventHandler((event) => {
     ? 2 * 1024 * 1024 + 64 * 1024
     : path === '/api/admin/mcsm/files/upload-chunk'
       ? MCSM_UPLOAD_CHUNK_MAX_BYTES
-      : 256 * 1024
+      : path === '/api/admin/domain-mails/send'
+        // Includes up to 10 MiB of attachments after Base64 expansion and escaped HTML.
+        ? DOMAIN_MAIL_SEND_MAX_BYTES
+        : path === '/api/admin/domain-mails/preview'
+          // A 512 KiB string can grow to about 3 MiB when JSON escapes control characters.
+          ? DOMAIN_MAIL_PREVIEW_MAX_BYTES
+        : 256 * 1024
   if (!Number.isFinite(contentLength) || contentLength < 0 || contentLength > maxBytes) {
     throw createError({ statusCode: 413, statusMessage: '请求体过大' })
   }

@@ -1,17 +1,27 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, onMounted, onBeforeUnmount } from 'vue'
+import { adminPageKeyForPath, adminPagePermissionNotice } from '#shared/admin-page-permissions'
 import type { ThemeMode } from '../composables/useThemeTransition'
 
 const route = useRoute()
 
 const access = useAdminAccess()
 const currentUser = access.user
+const domainMailUnread = useDomainMailUnread()
+const hasUnreadDomainMail = computed(() => (domainMailUnread.count.value ?? 0) > 0)
 const accountLabel = computed(() => currentUser.value?.fullName || currentUser.value?.username || '账户')
 const navItems = computed(() => access.pages
   .filter((page) => access.levelForKey(page.key) !== 'hidden')
   .map((page) => ({ ...page, to: page.route })))
-const currentPageLevel = computed(() => access.levelForPath(route.path))
-const pageReadOnly = computed(() => currentPageLevel.value === 'view')
+const currentPageKey = computed(() => adminPageKeyForPath(route.path))
+const permissionNotice = computed(() => {
+  const pageKey = currentPageKey.value
+  return adminPagePermissionNotice(
+    pageKey,
+    access.levelForKey(pageKey),
+    currentUser.value?.featurePermissions,
+  )
+})
 
 const drawerOpen = ref(true)
 const isDesktop = ref(true)
@@ -26,6 +36,7 @@ const mobileNavList = ref<HTMLElement | null>(null)
 const { load: loadEntry } = useEntry()
 
 const mq = typeof window !== 'undefined' ? window.matchMedia('(min-width: 900px)') : null
+let unreadRefreshTimer: ReturnType<typeof setInterval> | undefined
 
 function syncDrawer() {
   isDesktop.value = mq ? mq.matches : true
@@ -52,6 +63,26 @@ function isActive(to: string) {
   return route.path === to
 }
 
+function itemHasUnread(itemKey: string) {
+  return itemKey === 'domain-mail' && hasUnreadDomainMail.value
+}
+
+async function refreshDomainMailUnread() {
+  if (access.levelForKey('domain-mail') === 'hidden') {
+    domainMailUnread.setCount(0)
+    return
+  }
+  try {
+    await domainMailUnread.load(true)
+  } catch {
+    // 导航提醒失败不应影响后台页面本身；下一次轮询或页面刷新会重试。
+  }
+}
+
+function onVisibilityChange() {
+  if (!document.hidden) refreshDomainMailUnread()
+}
+
 function onProfileUpdated(event: Event) {
   const user = (event as CustomEvent<{ username: string }>).detail
   if (user?.username) access.updateProfile(user)
@@ -62,7 +93,13 @@ onMounted(async () => {
   mq?.addEventListener('change', syncDrawer)
   window.addEventListener('admin-profile-updated', onProfileUpdated)
   try {
-    await access.load()
+    // 权限定义可能随版本新增，挂载布局时刷新快照，避免旧 useState 隐藏新页面。
+    await access.load(true)
+    await refreshDomainMailUnread()
+    unreadRefreshTimer = window.setInterval(() => {
+      if (!document.hidden) refreshDomainMailUnread()
+    }, 60_000)
+    document.addEventListener('visibilitychange', onVisibilityChange)
   } catch {
     const entry = await loadEntry()
     await navigateTo('/' + entry)
@@ -72,6 +109,8 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   mq?.removeEventListener('change', syncDrawer)
   window.removeEventListener('admin-profile-updated', onProfileUpdated)
+  document.removeEventListener('visibilitychange', onVisibilityChange)
+  if (unreadRefreshTimer !== undefined) window.clearInterval(unreadRefreshTimer)
 })
 </script>
 
@@ -116,7 +155,15 @@ onBeforeUnmount(() => {
                   @click="onNav($event, item.to)"
                 >
                   <md-icon slot="start" :class="{ 'icon--active': isActive(item.to) }">{{ item.icon }}</md-icon>
-                  <span slot="headline" :class="{ 'label--active': isActive(item.to) }">{{ item.label }}</span>
+                  <span slot="headline" class="nav-item-headline" :class="{ 'label--active': isActive(item.to) }">
+                    {{ item.label }}
+                    <span
+                      v-if="itemHasUnread(item.key)"
+                      class="unread-dot"
+                      title="有未读域名邮件"
+                      aria-label="有未读域名邮件"
+                    ></span>
+                  </span>
                 </md-list-item>
               </md-list>
               <md-list-item
@@ -141,10 +188,16 @@ onBeforeUnmount(() => {
                 :key="item.to"
                 :aria-label="item.label"
                 :title="item.label"
+                class="collapsed-nav-entry"
                 :class="{ 'collapsed-nav-item--active': isActive(item.to) }"
                 @click="onNav($event, item.to)"
               >
                 <md-icon>{{ item.icon }}</md-icon>
+                <span
+                  v-if="itemHasUnread(item.key)"
+                  class="unread-dot unread-dot--collapsed"
+                  aria-hidden="true"
+                ></span>
               </md-icon-button>
             </nav>
             <AppScrollbar :target="collapsedNavList" label="侧边栏滚动条" />
@@ -179,7 +232,15 @@ onBeforeUnmount(() => {
               @click="onNav($event, item.to)"
             >
               <md-icon slot="start" :class="{ 'icon--active': isActive(item.to) }">{{ item.icon }}</md-icon>
-              <span slot="headline" :class="{ 'label--active': isActive(item.to) }">{{ item.label }}</span>
+              <span slot="headline" class="nav-item-headline" :class="{ 'label--active': isActive(item.to) }">
+                {{ item.label }}
+                <span
+                  v-if="itemHasUnread(item.key)"
+                  class="unread-dot"
+                  title="有未读域名邮件"
+                  aria-label="有未读域名邮件"
+                ></span>
+              </span>
             </md-list-item>
           </md-list>
           <md-list-item
@@ -198,9 +259,9 @@ onBeforeUnmount(() => {
       </md-navigation-drawer-modal>
 
       <main class="content">
-        <div v-if="pageReadOnly" class="readonly-notice">
-          <md-icon>visibility</md-icon>
-          <span>当前账户对此页面仅有查看权限，修改操作已禁用。</span>
+        <div v-if="permissionNotice" class="permission-notice">
+          <md-icon>{{ permissionNotice.icon }}</md-icon>
+          <span>{{ permissionNotice.text }}</span>
         </div>
         <slot />
       </main>
@@ -361,6 +422,10 @@ onBeforeUnmount(() => {
   font-variation-settings: 'FILL' 1;
 }
 
+.collapsed-nav-entry {
+  position: relative;
+}
+
 .collapsed-account-avatar {
   width: 24px;
   height: 24px;
@@ -417,6 +482,31 @@ md-navigation-drawer-modal:not(.drawer-modal--open) {
   font-weight: 600;
 }
 
+.nav-item-headline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.unread-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--md-sys-color-error);
+  box-shadow: 0 0 0 2px var(--md-sys-color-surface-container);
+}
+
+.unread-dot--collapsed {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 7px;
+  height: 7px;
+  pointer-events: none;
+}
+
 md-list {
   --md-list-container-color: transparent;
 }
@@ -428,7 +518,7 @@ md-list {
   background: var(--md-sys-color-surface);
 }
 
-.readonly-notice {
+.permission-notice {
   width: min(calc(100% - 32px), 1136px);
   margin: 16px auto 0;
   padding: 10px 14px;
@@ -442,7 +532,7 @@ md-list {
   font-size: 13px;
 }
 
-.readonly-notice md-icon {
+.permission-notice md-icon {
   flex: 0 0 auto;
   --md-icon-size: 20px;
 }
