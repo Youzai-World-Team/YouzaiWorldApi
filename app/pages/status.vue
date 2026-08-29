@@ -131,7 +131,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="page status-page">
+  <div class="page page--wide status-page">
     <div class="status-heading">
       <div>
         <h1 class="page-title">服务器状态</h1>

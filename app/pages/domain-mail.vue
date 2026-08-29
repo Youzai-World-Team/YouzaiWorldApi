@@ -230,6 +230,38 @@ const composePreviewDocument = ref('')
 const composePreviewLoading = ref(false)
 const composePreviewError = ref('')
 const composePreviewBlockedImages = ref(0)
+
+function focusTab(id: string) {
+  void nextTick(() => document.getElementById(id)?.focus())
+}
+
+function onComposeTabKeydown(event: KeyboardEvent) {
+  const modes = ['template', 'source'] as const
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+  event.preventDefault()
+  const current = modes.indexOf(composeMode.value)
+  const index = event.key === 'Home'
+    ? 0
+    : event.key === 'End'
+      ? modes.length - 1
+      : (current + (event.key === 'ArrowRight' ? 1 : -1) + modes.length) % modes.length
+  composeMode.value = modes[index]!
+  focusTab(`compose-${composeMode.value}-tab`)
+}
+
+function onBodyTabKeydown(event: KeyboardEvent) {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+  event.preventDefault()
+  const views: BodyView[] = detail.value?.hasHtml ? ['html', 'text', 'source'] : ['text']
+  const current = Math.max(0, views.indexOf(bodyView.value))
+  const index = event.key === 'Home'
+    ? 0
+    : event.key === 'End'
+      ? views.length - 1
+      : (current + (event.key === 'ArrowRight' ? 1 : -1) + views.length) % views.length
+  bodyView.value = views[index]!
+  focusTab(`mail-${bodyView.value}-tab`)
+}
 const composePreviewTruncated = ref(false)
 let composePreviewTimer: ReturnType<typeof setTimeout> | null = null
 let composePreviewRequest = 0
@@ -860,9 +892,9 @@ function readerInitial(reader: MailReader) {
             <div slot="headline">{{ box }}@</div>
           </md-select-option>
         </md-outlined-select>
-        <div class="read-filter" aria-label="阅读状态">
-          <button type="button" :class="{ 'read-filter--active': readFilter === 'all' }" @click="readFilter = 'all'">全部</button>
-          <button type="button" :class="{ 'read-filter--active': readFilter === 'unread' }" @click="readFilter = 'unread'">
+        <div class="read-filter" role="group" aria-label="阅读状态">
+          <button type="button" :aria-pressed="readFilter === 'all'" :class="{ 'read-filter--active': readFilter === 'all' }" @click="readFilter = 'all'">全部</button>
+          <button type="button" :aria-pressed="readFilter === 'unread'" :class="{ 'read-filter--active': readFilter === 'unread' }" @click="readFilter = 'unread'">
             未读<span v-if="unreadCount">{{ unreadCount }}</span>
           </button>
         </div>
@@ -984,11 +1016,11 @@ function readerInitial(reader: MailReader) {
         </div>
         <div class="compose-workspace">
           <section class="compose-editor">
-            <div class="compose-mode">
-              <button type="button" class="view-tab" :class="{ 'view-tab--active': composeMode === 'template' }" @click="composeMode = 'template'">从模板创建邮件</button>
-              <button type="button" class="view-tab" :class="{ 'view-tab--active': composeMode === 'source' }" @click="composeMode = 'source'">自定义邮件</button>
+            <div class="compose-mode" role="tablist" aria-label="邮件编辑方式">
+              <button id="compose-template-tab" type="button" role="tab" aria-controls="compose-template-panel" :aria-selected="composeMode === 'template'" :tabindex="composeMode === 'template' ? 0 : -1" class="view-tab" :class="{ 'view-tab--active': composeMode === 'template' }" @click="composeMode = 'template'" @keydown="onComposeTabKeydown">从模板创建邮件</button>
+              <button id="compose-source-tab" type="button" role="tab" aria-controls="compose-source-panel" :aria-selected="composeMode === 'source'" :tabindex="composeMode === 'source' ? 0 : -1" class="view-tab" :class="{ 'view-tab--active': composeMode === 'source' }" @click="composeMode = 'source'" @keydown="onComposeTabKeydown">自定义邮件</button>
             </div>
-            <template v-if="composeMode === 'template'">
+            <div v-if="composeMode === 'template'" id="compose-template-panel" class="compose-mode-panel" role="tabpanel" aria-labelledby="compose-template-tab">
               <div class="compose-template-heading-fields">
                 <md-outlined-text-field label="眉题" :value="composeFields.eyebrow" @input="onTemplateField('eyebrow', ($event.target as HTMLInputElement).value)" />
                 <md-outlined-text-field label="标题" :value="composeFields.heading" @input="onTemplateField('heading', ($event.target as HTMLInputElement).value)" />
@@ -999,9 +1031,8 @@ function readerInitial(reader: MailReader) {
                 <md-outlined-text-field label="署名" :value="composeFields.senderName" @input="onTemplateField('senderName', ($event.target as HTMLInputElement).value)" />
                 <md-outlined-text-field label="署名职位" :value="composeFields.senderRole" @input="onTemplateField('senderRole', ($event.target as HTMLInputElement).value)" />
               </div>
-            </template>
-            <template v-else>
-              <section class="compose-source-panel" :class="{ 'compose-source-panel--fullscreen': composeSourceFullscreen }">
+            </div>
+            <section v-else id="compose-source-panel" class="compose-source-panel" role="tabpanel" aria-labelledby="compose-source-tab" :class="{ 'compose-source-panel--fullscreen': composeSourceFullscreen }">
                 <div class="compose-source-toolbar">
                   <div>
                     <md-icon>code</md-icon>
@@ -1033,8 +1064,7 @@ function readerInitial(reader: MailReader) {
                   </md-outlined-button>
                   <span v-if="composeFileName" class="compose-file-name">{{ composeFileName }}</span>
                 </div>
-              </section>
-            </template>
+            </section>
 
             <section class="compose-attachments" aria-labelledby="compose-attachments-title">
               <div class="compose-attachments-heading">
@@ -1179,14 +1209,14 @@ function readerInitial(reader: MailReader) {
 
             <main class="detail-main">
               <div class="reader-toolbar">
-                <div class="view-switch" aria-label="正文视图">
-                  <button v-if="detail.hasHtml" type="button" :class="{ 'view-tab--active': bodyView === 'html' }" @click="bodyView = 'html'">
+                <div class="view-switch" role="tablist" aria-label="正文视图">
+                  <button v-if="detail.hasHtml" id="mail-html-tab" type="button" role="tab" aria-controls="mail-html-panel" :aria-selected="bodyView === 'html'" :tabindex="bodyView === 'html' ? 0 : -1" :class="{ 'view-tab--active': bodyView === 'html' }" @click="bodyView = 'html'" @keydown="onBodyTabKeydown">
                     <md-icon>visibility</md-icon>预览
                   </button>
-                  <button type="button" :class="{ 'view-tab--active': bodyView === 'text' }" @click="bodyView = 'text'">
+                  <button id="mail-text-tab" type="button" role="tab" aria-controls="mail-text-panel" :aria-selected="bodyView === 'text'" :tabindex="bodyView === 'text' ? 0 : -1" :class="{ 'view-tab--active': bodyView === 'text' }" @click="bodyView = 'text'" @keydown="onBodyTabKeydown">
                     <md-icon>notes</md-icon>纯文本
                   </button>
-                  <button v-if="detail.hasHtml" type="button" :class="{ 'view-tab--active': bodyView === 'source' }" @click="bodyView = 'source'">
+                  <button v-if="detail.hasHtml" id="mail-source-tab" type="button" role="tab" aria-controls="mail-source-panel" :aria-selected="bodyView === 'source'" :tabindex="bodyView === 'source' ? 0 : -1" :class="{ 'view-tab--active': bodyView === 'source' }" @click="bodyView = 'source'" @keydown="onBodyTabKeydown">
                     <md-icon>code</md-icon>源码
                   </button>
                 </div>
@@ -1209,7 +1239,7 @@ function readerInitial(reader: MailReader) {
                 <span v-if="detail.htmlSafeTruncated"><md-icon>content_cut</md-icon>预览已截断</span>
               </p>
 
-              <div class="mail-body-viewer">
+              <div :id="`mail-${bodyView}-panel`" class="mail-body-viewer" role="tabpanel" :aria-labelledby="`mail-${bodyView}-tab`">
                 <iframe
                   v-if="bodyView === 'html' && detail.hasHtml"
                   ref="bodyFrame"
@@ -1329,7 +1359,7 @@ function readerInitial(reader: MailReader) {
 .search, .mailbox-select { width: 100%; min-width: 0; }
 .read-filter { height: var(--app-control-height); display: inline-grid; grid-auto-flow: column; grid-auto-columns: max-content; align-items: center; padding: 3px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 7px; background: var(--md-sys-color-surface); }
 .read-filter button { height: 32px; display: inline-flex; align-items: center; gap: 6px; padding: 0 11px; border: 0; border-radius: 5px; color: var(--md-sys-color-on-surface-variant); background: transparent; font-family: inherit; font-size: 11px; font-weight: 500; cursor: pointer; }
-.read-filter button:hover { color: var(--md-sys-color-on-surface); background: var(--md-sys-color-surface-container-high); }
+.read-filter button:hover { color: var(--md-sys-color-on-surface); background: color-mix(in srgb, var(--md-sys-color-on-surface) var(--md-sys-state-hover-state-layer-opacity), transparent); }
 .read-filter button.read-filter--active { color: var(--md-sys-color-on-primary-container); background: var(--md-sys-color-primary-container); }
 .read-filter button span { min-width: 17px; padding: 1px 4px; border-radius: 4px; color: var(--md-sys-color-on-error); background: var(--md-sys-color-error); font-size: 10px; text-align: center; }
 .result-count { color: var(--md-sys-color-on-surface-variant); font-size: 11px; white-space: nowrap; }
@@ -1418,7 +1448,7 @@ function readerInitial(reader: MailReader) {
 .view-switch { display: inline-grid; grid-auto-flow: column; grid-auto-columns: max-content; padding: 3px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 7px; background: var(--md-sys-color-surface-container); }
 .view-switch button, .compose-mode .view-tab { min-height: 32px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 0 10px; border: 0; border-radius: 5px; color: var(--md-sys-color-on-surface-variant); background: transparent; font-family: inherit; font-size: 10px; font-weight: 500; cursor: pointer; }
 .view-switch button md-icon { --md-icon-size: 15px; }
-.view-switch button:hover, .compose-mode .view-tab:hover { color: var(--md-sys-color-on-surface); background: var(--md-sys-color-surface-container-high); }
+.view-switch button:hover, .compose-mode .view-tab:hover { color: var(--md-sys-color-on-surface); background: color-mix(in srgb, var(--md-sys-color-on-surface) var(--md-sys-state-hover-state-layer-opacity), transparent); }
 .view-switch button.view-tab--active, .compose-mode .view-tab--active { color: var(--md-sys-color-on-primary-container); background: var(--md-sys-color-primary-container); font-weight: 700; }
 .reader-actions { display: flex; align-items: center; gap: 2px; }
 .preview-status { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 12px 0; }
@@ -1471,6 +1501,7 @@ function readerInitial(reader: MailReader) {
 .compose-workspace { min-width: 0; display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(380px, .95fr); gap: 14px; align-items: start; }
 .compose-editor { min-width: 0; display: flex; flex-direction: column; gap: 12px; }
 .compose-mode { width: fit-content; display: flex; gap: 2px; padding: 3px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 7px; background: var(--md-sys-color-surface); }
+.compose-mode-panel { min-width: 0; display: grid; gap: 12px; }
 .compose-source-panel { min-width: 0; display: grid; grid-template-rows: auto minmax(0, auto) auto; gap: 10px; }
 .compose-source-toolbar { min-width: 0; min-height: 42px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 2px 4px 2px 10px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 7px; background: var(--md-sys-color-surface-container); }
 .compose-source-toolbar > div { min-width: 0; display: flex; align-items: center; gap: 7px; }
@@ -1517,7 +1548,7 @@ function readerInitial(reader: MailReader) {
 @media (max-width: 1100px) {
   .mail-list-heading, .mail-row { grid-template-columns: minmax(0, 1fr) minmax(150px, .55fr) 80px 154px; gap: 10px; }
   .content-kind { display: none; }
-  .detail-dialog-content { height: auto; max-height: calc(100vh - 2 * (var(--app-bar-height) + 48px)); overflow: auto; }
+  .detail-dialog-content { height: auto; max-height: calc(100vh - 2 * (var(--app-bar-height) + 48px)); max-height: calc(100dvh - 2 * (var(--app-bar-height) + 48px)); overflow: auto; }
   .detail-reader { height: auto; overflow: visible; }
   .detail-workspace { grid-template-columns: minmax(0, 1fr); }
   .detail-sidebar { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); overflow: visible; border-right: 0; border-bottom: 1px solid var(--md-sys-color-outline-variant); }

@@ -5,6 +5,7 @@ import {
   getGameAccountSettings,
   hashGamePassword,
   requireGameApiKey,
+  requireGamePassword,
   upsertGameAccount,
 } from '../../utils/db'
 import { optionalPosition, optionalUuid, requireGameUsername } from '../../utils/game-input'
@@ -40,8 +41,7 @@ export default defineEventHandler(async (event) => {
     if (!current.password && getGameAccountSettings().emailVerificationRequired) {
       throw createError({ statusCode: 409, message: '启用邮箱验证时请通过注册接口完成注册' })
     }
-    const password = String(body.password)
-    if (password.length < 4 || password.length > 128) throw createError({ statusCode: 400, statusMessage: '密码长度不符合要求' })
+    const password = requireGamePassword(body.password)
     if (!current.password) next.registrationDate = new Date().toISOString()
     next.password = hashGamePassword(password)
     next.lastIp = ''

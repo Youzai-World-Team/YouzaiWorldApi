@@ -299,7 +299,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="page">
+  <div class="page page--wide">
     <div class="page-heading">
       <h1 class="page-title">账户装扮</h1>
       <div class="heading-actions">
@@ -649,9 +649,11 @@ onMounted(() => {
 .cosmetic-detail-dialog {
   margin: 76px auto 12px;
   max-height: calc(100vh - 88px);
+  max-height: calc(100dvh - 88px);
   --md-dialog-container-width: min(1040px, calc(100vw - 32px));
   --md-dialog-container-max-width: min(1040px, calc(100vw - 32px));
   --md-dialog-container-max-height: calc(100vh - 88px);
+  --md-dialog-container-max-height: calc(100dvh - 88px);
 }
 .detail { width: min(960px, calc(100vw - 96px)); max-width: 100%; display: flex; flex-direction: column; gap: 16px; }
 .detail-summary { display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(240px, 0.65fr); align-items: center; gap: 16px; padding: 16px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 8px; background: var(--md-sys-color-surface-container); }

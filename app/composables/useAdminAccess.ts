@@ -1,10 +1,13 @@
 import { computed } from 'vue'
+import type { PasswordExpiryStatus } from '#shared/password-policy'
 import {
   ADMIN_FEATURE_DEFINITIONS,
   ADMIN_PAGE_DEFINITIONS,
   adminPageKeyForPath,
   firstVisibleAdminRoute,
+  normalizeAdminNavigationPreferences,
   type AdminFeaturePermissionLevel,
+  type AdminNavigationPreferences,
   type AdminPagePermissionLevel,
 } from '#shared/admin-page-permissions'
 
@@ -16,8 +19,11 @@ export interface AdminAccessUser {
   isOwner: boolean
   isActive: boolean
   createdAt: number
+  passwordChangedAt: number
+  passwordExpiry: PasswordExpiryStatus
   permissions: Record<string, AdminPagePermissionLevel>
   featurePermissions: Record<string, AdminFeaturePermissionLevel>
+  navigationPreferences: AdminNavigationPreferences
 }
 
 let accessLoadPromise: Promise<AdminAccessUser> | null = null
@@ -32,7 +38,12 @@ function normalizeAccessUser(current: AdminAccessUser): AdminAccessUser {
     current.featurePermissions?.[feature.key] ?? (current.isOwner ? 'edit' : feature.defaultLevel),
   ])) as Record<string, AdminFeaturePermissionLevel>
 
-  return { ...current, permissions, featurePermissions }
+  return {
+    ...current,
+    permissions,
+    featurePermissions,
+    navigationPreferences: normalizeAdminNavigationPreferences(current.navigationPreferences),
+  }
 }
 
 export function useAdminAccess() {

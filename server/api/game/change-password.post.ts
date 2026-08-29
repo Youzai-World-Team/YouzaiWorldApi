@@ -1,5 +1,5 @@
 import { getHeader } from 'h3'
-import { deleteGameSessionsForUser, gameAccountWire, hashGamePassword, requireGameApiKey, requireGameSession, upsertGameAccount, verifyGamePassword } from '../../utils/db'
+import { deleteGameSessionsForUser, gameAccountWire, hashGamePassword, requireGameApiKey, requireGamePassword, requireGameSession, upsertGameAccount, verifyGamePassword } from '../../utils/db'
 
 export default defineEventHandler(async (event) => {
   requireGameApiKey(event)
@@ -8,8 +8,7 @@ export default defineEventHandler(async (event) => {
   const account = requireGameSession(token)
   const body = await readBody<{ oldPassword?: string; newPassword?: string }>(event)
   if (!account.password) throw createError({ statusCode: 404, message: '账户不存在' })
-  const newPassword = String(body?.newPassword || '')
-  if (newPassword.length < 4 || newPassword.length > 128) throw createError({ statusCode: 400, message: '新密码长度需要为 4 至 128 位' })
+  const newPassword = requireGamePassword(body?.newPassword, '新密码')
   if (!verifyGamePassword(String(body?.oldPassword || ''), account.password)) {
     throw createError({ statusCode: 401, message: '当前密码错误' })
   }

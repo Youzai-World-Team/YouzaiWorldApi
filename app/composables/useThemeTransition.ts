@@ -8,59 +8,63 @@ const THEME_COLORS = {
 } as const
 
 const THEME_TRANSITION_DURATION = 360
-type ThemeName = 'light' | 'dark'
 type ThemePalette = Record<string, string>
 
-const THEME_PALETTE: Record<ThemeName, ThemePalette> = {
-  light: {
-    '--md-sys-color-primary': '#8bc34a',
-    '--md-sys-color-on-primary': '#1e3300',
-    '--md-sys-color-primary-container': '#d9f2b0',
-    '--md-sys-color-on-primary-container': '#1c3a00',
-    '--md-sys-color-secondary-container': '#d9f2b0',
-    '--md-sys-color-on-secondary-container': '#1c3a00',
-    '--md-sys-color-surface': '#fbfef6',
-    '--md-sys-color-surface-container': '#f0f7e6',
-    '--md-sys-color-surface-container-high': '#eaf0dd',
-    '--md-sys-color-on-surface': '#191d14',
-    '--md-sys-color-on-surface-variant': '#44483b',
-    '--md-sys-color-outline': '#737968',
-    '--md-sys-color-outline-variant': '#c2c9b4',
-    '--md-sys-color-inverse-surface': '#322f35',
-    '--md-sys-color-inverse-on-surface': '#f5eff7',
-    '--md-sys-color-error': '#b3261e',
-    '--md-sys-color-on-error': '#ffffff',
-    '--act-info': '#1a73e8',
-    '--act-success': '#188038',
-    '--act-warning': '#b06000',
-    '--act-error': '#c5221f',
-  },
-  dark: {
-    '--md-sys-color-primary': '#b7e08d',
-    '--md-sys-color-on-primary': '#1d3500',
-    '--md-sys-color-primary-container': '#3a5c00',
-    '--md-sys-color-on-primary-container': '#d4f2a8',
-    '--md-sys-color-secondary-container': '#3a5c00',
-    '--md-sys-color-on-secondary-container': '#d4f2a8',
-    '--md-sys-color-surface': '#101408',
-    '--md-sys-color-surface-container': '#1a1f12',
-    '--md-sys-color-surface-container-high': '#252a1c',
-    '--md-sys-color-on-surface': '#e2e5d5',
-    '--md-sys-color-on-surface-variant': '#c3c9b3',
-    '--md-sys-color-outline': '#8d927e',
-    '--md-sys-color-outline-variant': '#42493a',
-    '--md-sys-color-inverse-surface': '#e6e0e9',
-    '--md-sys-color-inverse-on-surface': '#322f35',
-    '--md-sys-color-error': '#f2b8b5',
-    '--md-sys-color-on-error': '#601410',
-    '--act-info': '#8ab4f8',
-    '--act-success': '#81c995',
-    '--act-warning': '#fdd663',
-    '--act-error': '#f28b82',
-  },
-}
-
-const THEME_VARIABLES = Object.keys(THEME_PALETTE.light)
+const THEME_VARIABLES = [
+  '--md-sys-color-primary',
+  '--md-sys-color-on-primary',
+  '--md-sys-color-primary-container',
+  '--md-sys-color-on-primary-container',
+  '--md-sys-color-primary-fixed',
+  '--md-sys-color-primary-fixed-dim',
+  '--md-sys-color-on-primary-fixed',
+  '--md-sys-color-on-primary-fixed-variant',
+  '--md-sys-color-secondary',
+  '--md-sys-color-on-secondary',
+  '--md-sys-color-secondary-container',
+  '--md-sys-color-on-secondary-container',
+  '--md-sys-color-secondary-fixed',
+  '--md-sys-color-secondary-fixed-dim',
+  '--md-sys-color-on-secondary-fixed',
+  '--md-sys-color-on-secondary-fixed-variant',
+  '--md-sys-color-tertiary',
+  '--md-sys-color-on-tertiary',
+  '--md-sys-color-tertiary-container',
+  '--md-sys-color-on-tertiary-container',
+  '--md-sys-color-tertiary-fixed',
+  '--md-sys-color-tertiary-fixed-dim',
+  '--md-sys-color-on-tertiary-fixed',
+  '--md-sys-color-on-tertiary-fixed-variant',
+  '--md-sys-color-background',
+  '--md-sys-color-on-background',
+  '--md-sys-color-surface',
+  '--md-sys-color-surface-dim',
+  '--md-sys-color-surface-bright',
+  '--md-sys-color-surface-container-lowest',
+  '--md-sys-color-surface-container-low',
+  '--md-sys-color-surface-container',
+  '--md-sys-color-surface-container-high',
+  '--md-sys-color-surface-container-highest',
+  '--md-sys-color-surface-variant',
+  '--md-sys-color-on-surface',
+  '--md-sys-color-on-surface-variant',
+  '--md-sys-color-outline',
+  '--md-sys-color-outline-variant',
+  '--md-sys-color-surface-tint',
+  '--md-sys-color-inverse-surface',
+  '--md-sys-color-inverse-on-surface',
+  '--md-sys-color-inverse-primary',
+  '--md-sys-color-error',
+  '--md-sys-color-on-error',
+  '--md-sys-color-error-container',
+  '--md-sys-color-on-error-container',
+  '--md-sys-color-shadow',
+  '--md-sys-color-scrim',
+  '--act-info',
+  '--act-success',
+  '--act-warning',
+  '--act-error',
+] as const
 
 let transitionRunning = false
 
@@ -110,16 +114,17 @@ export function useThemeTransition(dark: Ref<boolean>, mode: Ref<ThemeMode>) {
     return `rgb(${fromRgb.map((channel, index) => Math.round(channel + (toRgb[index] - channel) * progress)).join(' ')})`
   }
 
-  function animateFallbackTheme(nextMode: ThemeMode, root: HTMLElement, fromName: ThemeName) {
-    const toName: ThemeName = resolveDark(nextMode) ? 'dark' : 'light'
-    const fromPalette = THEME_PALETTE[fromName]
-    const toPalette = THEME_PALETTE[toName]
+  function readThemePalette(root: HTMLElement): ThemePalette {
+    const styles = window.getComputedStyle(root)
+    return Object.fromEntries(THEME_VARIABLES.map((variable) => [variable, styles.getPropertyValue(variable).trim()]))
+  }
 
-    // Keep the old colors as inline values while the data attribute switches;
-    // then interpolate every theme token explicitly. This works on mobile
-    // browsers even when CSS custom-property transitions are unsupported.
-    for (const variable of THEME_VARIABLES) root.style.setProperty(variable, fromPalette[variable]!)
+  function animateFallbackTheme(nextMode: ThemeMode, root: HTMLElement) {
+    const fromPalette = readThemePalette(root)
     applyTheme(nextMode)
+    const toPalette = readThemePalette(root)
+
+    for (const variable of THEME_VARIABLES) root.style.setProperty(variable, fromPalette[variable]!)
 
     return new Promise<void>((resolve) => {
       const startedAt = performance.now()
@@ -146,14 +151,13 @@ export function useThemeTransition(dark: Ref<boolean>, mode: Ref<ThemeMode>) {
 
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
     const root = document.documentElement
-    const fromName: ThemeName = dark.value ? 'dark' : 'light'
     transitionRunning = true
     try {
       if (reduceMotion) {
         applyTheme(nextMode)
       } else {
         root.classList.add('theme-transition-colors')
-        await animateFallbackTheme(nextMode, root, fromName)
+        await animateFallbackTheme(nextMode, root)
       }
     } catch {
       // Always leave the document in the requested theme if animation fails.

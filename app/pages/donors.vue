@@ -199,7 +199,7 @@ async function confirmDelete() {
     <div class="page-heading">
       <h1 class="page-title">捐赠列表</h1>
       <md-icon-button :href="endpoint" target="_blank" rel="noopener" aria-label="打开数据 API" title="打开数据 API">
-        <md-icon>api</md-icon>
+        <md-icon>link</md-icon>
       </md-icon-button>
     </div>
 
@@ -220,7 +220,7 @@ async function confirmDelete() {
             <th>名称</th>
             <th>金额</th>
             <th>介绍</th>
-            <th>操作</th>
+            <th class="cell-actions">操作</th>
           </tr>
         </thead>
         <tbody>

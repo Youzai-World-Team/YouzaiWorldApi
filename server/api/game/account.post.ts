@@ -6,6 +6,7 @@ import {
   getGameAccountSettings,
   hashGamePassword,
   requireGameApiKey,
+  requireGamePassword,
   upsertGameAccount,
 } from '../../utils/db'
 import { offlinePlayerUuid, optionalPosition, optionalUuid, requireGameUsername } from '../../utils/game-input'
@@ -15,9 +16,8 @@ export default defineEventHandler(async (event) => {
   const body = await readBody<any>(event)
   const username = requireGameUsername(body?.username)
   const usernameLower = username.toLocaleLowerCase('en-US')
-  const password = String(body?.password || '')
+  const password = requireGamePassword(body?.password)
   const uuid = optionalUuid(body?.uuid)
-  if (password.length < 4 || password.length > 128) throw createError({ statusCode: 400, statusMessage: '密码长度需要为 4 至 128 位' })
   const current = getGameAccount(username)
   if (current?.password) throw createError({ statusCode: 409, statusMessage: '账户已注册' })
   const lastPosition = body?.last_position == null ? null : optionalPosition(body.last_position)

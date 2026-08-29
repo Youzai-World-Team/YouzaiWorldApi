@@ -400,7 +400,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .email-template-page {
-  max-width: 1600px;
+  width: min(100%, 1600px);
 }
 
 .page-heading {
@@ -510,6 +510,7 @@ onBeforeUnmount(() => {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 16px;
   min-height: min(720px, calc(100vh - 280px));
+  min-height: min(720px, calc(100dvh - 280px));
 }
 
 .template-source-panel,
@@ -581,6 +582,7 @@ onBeforeUnmount(() => {
   inset: 0;
   width: 100vw;
   height: 100vh;
+  height: 100dvh;
   min-height: 0;
   border: 0;
   border-radius: 0;
@@ -596,6 +598,13 @@ onBeforeUnmount(() => {
   min-height: 580px;
   border: 0;
   background: #f3fbf7;
+}
+
+@media (max-width: 1200px) {
+  .email-template-workspace {
+    grid-template-columns: minmax(0, 1fr);
+    min-height: 0;
+  }
 }
 
 @media (max-width: 900px) {
@@ -619,17 +628,13 @@ onBeforeUnmount(() => {
     display: none;
   }
 
-  .email-template-workspace {
-    grid-template-columns: minmax(0, 1fr);
-    min-height: 0;
-  }
-
   .mobile-preview-notice {
     display: flex;
   }
 
   .template-preview-panel--mobile {
     min-height: calc(100vh - 330px);
+    min-height: calc(100dvh - 330px);
   }
 
   .html-source-editor,

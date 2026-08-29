@@ -1,5 +1,17 @@
 <script setup lang="ts">
 import { computed, reactive, ref, onMounted } from 'vue'
+import {
+  DEFAULT_PASSWORD_EXPIRY_POLICY,
+  DEFAULT_PASSWORD_POLICY,
+  MAX_PASSWORD_EXPIRY_DAYS,
+  MIN_PASSWORD_EXPIRY_DAYS,
+  passwordPolicyMinimumLength,
+  passwordPolicyRequirements,
+  passwordStrengthLabel,
+  type PasswordPolicy,
+  type PasswordPolicyMinimumScore,
+  type PasswordExpiryPolicy,
+} from '#shared/password-policy'
 
 useHead({ title: '站点设置' })
 
@@ -7,6 +19,7 @@ type TurnstileScope = 'admin' | 'chat'
 
 interface ScopeState {
   siteKey: string
+  secret: string
   hostnames: string
   secretConfigured: boolean
   inherited?: boolean
@@ -22,6 +35,7 @@ type SettingSource = 'database' | 'env' | 'none'
 interface McsmConfig {
   baseUrl: string
   baseUrlSource: SettingSource
+  apiKey: string
   apiKeyConfigured: boolean
   apiKeySource: SettingSource
   backupDir: string
@@ -60,10 +74,17 @@ const securityEntryInput = ref('')
 const currentSecurityEntry = ref('')
 const securityEntryLoading = ref(true)
 const savingSecurityEntry = ref(false)
+const passwordPolicyLoading = ref(true)
+const savingPasswordPolicy = ref(false)
+const passwordPolicyForm = reactive<PasswordPolicy>({ ...DEFAULT_PASSWORD_POLICY })
+const passwordExpiryLoading = ref(true)
+const savingPasswordExpiry = ref(false)
+const passwordExpiryForm = reactive<PasswordExpiryPolicy>({ ...DEFAULT_PASSWORD_EXPIRY_POLICY })
 const access = useAdminAccess()
 const { entry: entryState } = useEntry()
 const canEditPage = computed(() => access.levelForKey('settings') === 'edit')
 const canManageSecurityEntry = computed(() => access.user.value?.isOwner === true)
+const canManagePasswordExpiry = computed(() => access.user.value?.isOwner === true)
 const gameApiKeyLevel = computed(() => access.featureLevelForKey('settings-game-api-key'))
 const canViewGameApiKey = computed(() => gameApiKeyLevel.value !== 'hidden')
 const canEditGameApiKey = computed(() => canEditPage.value && gameApiKeyLevel.value === 'edit')
@@ -80,21 +101,38 @@ const canViewChatTurnstile = computed(() => chatTurnstileLevel.value !== 'hidden
 const canEditAdminTurnstile = computed(() => canEditPage.value && adminTurnstileLevel.value === 'edit')
 const canEditChatTurnstile = computed(() => canEditPage.value && chatTurnstileLevel.value === 'edit')
 
-// 服务端不回显密钥，密钥框留空即表示「沿用已有密钥」。
+// 密钥只通过受权限保护且禁止缓存的接口回显，编辑后仍需手动保存。
 const forms = reactive<Record<TurnstileScope, { siteKey: string; secret: string; hostnames: string }>>({
   admin: { siteKey: '', secret: '', hostnames: '' },
   chat: { siteKey: '', secret: '', hostnames: '' },
 })
 const state = reactive<Record<TurnstileScope, ScopeState>>({
-  admin: { siteKey: '', hostnames: '', secretConfigured: false },
-  chat: { siteKey: '', hostnames: '', secretConfigured: false, inherited: true },
+  admin: { siteKey: '', secret: '', hostnames: '', secretConfigured: false },
+  chat: { siteKey: '', secret: '', hostnames: '', secretConfigured: false, inherited: true },
 })
 
 const { showToast } = useToast()
+const { apply: applyPasswordPolicy } = usePasswordPolicy()
+const passwordPolicyMinimumLabel = computed(() => passwordStrengthLabel(passwordPolicyForm.minimumScore))
+const passwordPolicyCurrentRequirements = computed(() => {
+  const minimumLength = passwordPolicyForm.enabled
+    ? passwordPolicyMinimumLength(passwordPolicyForm.minimumScore, 12)
+    : 12
+  return [
+    `长度为 ${minimumLength} 至 128 位`,
+    ...(passwordPolicyForm.enabled
+      ? passwordPolicyRequirements('', 12, passwordPolicyForm.minimumScore)
+          .slice(1)
+          .map((requirement) => requirement.label)
+      : []),
+  ].join('、')
+})
 
 onMounted(() => {
   void load()
   void loadSecrets()
+  void loadPasswordPolicySettings()
+  void loadPasswordExpirySettings()
 })
 
 // 三块密钥/凭据都要先拿到最新的功能权限才知道能不能读，所以共用一次 /api/auth/me。
@@ -127,6 +165,96 @@ async function loadSecurityEntry() {
     showToast(e?.data?.statusMessage || '安全入口加载失败', 'error')
   } finally {
     securityEntryLoading.value = false
+  }
+}
+
+async function loadPasswordPolicySettings() {
+  passwordPolicyLoading.value = true
+  try {
+    const policy = await $fetch<PasswordPolicy>('/api/auth/password-policy')
+    Object.assign(passwordPolicyForm, policy)
+    applyPasswordPolicy(policy)
+  } catch (e: any) {
+    showToast(e?.data?.statusMessage || '后台账户密码策略加载失败', 'error')
+  } finally {
+    passwordPolicyLoading.value = false
+  }
+}
+
+async function loadPasswordExpirySettings() {
+  passwordExpiryLoading.value = true
+  try {
+    const policy = await $fetch<PasswordExpiryPolicy>('/api/auth/password-expiry')
+    Object.assign(passwordExpiryForm, policy)
+  } catch (e: any) {
+    showToast(e?.data?.statusMessage || '后台密码有效期加载失败', 'error')
+  } finally {
+    passwordExpiryLoading.value = false
+  }
+}
+
+function onPasswordExpiryToggle(event: Event) {
+  passwordExpiryForm.enabled = Boolean((event.target as HTMLElement & { selected?: boolean }).selected)
+}
+
+function onPasswordExpiryDaysInput(event: Event) {
+  const value = Math.trunc(Number((event.target as HTMLInputElement).value))
+  if (Number.isInteger(value)) passwordExpiryForm.days = value
+}
+
+async function savePasswordExpiry() {
+  if (savingPasswordExpiry.value || !canManagePasswordExpiry.value) return
+  if (passwordExpiryForm.days < MIN_PASSWORD_EXPIRY_DAYS || passwordExpiryForm.days > MAX_PASSWORD_EXPIRY_DAYS) {
+    showToast(`密码有效期需要为 ${MIN_PASSWORD_EXPIRY_DAYS} 至 ${MAX_PASSWORD_EXPIRY_DAYS} 天`, 'error')
+    return
+  }
+  savingPasswordExpiry.value = true
+  try {
+    const policy = await $fetch<PasswordExpiryPolicy>('/api/admin/password-expiry', {
+      method: 'PATCH',
+      body: {
+        enabled: passwordExpiryForm.enabled,
+        days: passwordExpiryForm.days,
+      },
+    })
+    Object.assign(passwordExpiryForm, policy)
+    showToast(policy.enabled ? `后台密码有效期已设为 ${policy.days} 天` : '后台密码有效期已关闭')
+  } catch (e: any) {
+    showToast(e?.data?.statusMessage || '后台密码有效期保存失败', 'error')
+  } finally {
+    savingPasswordExpiry.value = false
+  }
+}
+
+function onPasswordPolicyToggle(event: Event) {
+  passwordPolicyForm.enabled = Boolean((event.target as HTMLElement & { selected?: boolean }).selected)
+}
+
+function onPasswordPolicyScoreInput(event: Event) {
+  const value = Number((event.target as HTMLElement & { value?: number }).value)
+  if (Number.isInteger(value) && value >= 1 && value <= 6) {
+    passwordPolicyForm.minimumScore = value as PasswordPolicyMinimumScore
+  }
+}
+
+async function savePasswordPolicy() {
+  if (savingPasswordPolicy.value || !canEditPage.value) return
+  savingPasswordPolicy.value = true
+  try {
+    const policy = await $fetch<PasswordPolicy>('/api/admin/password-policy', {
+      method: 'PATCH',
+      body: {
+        enabled: passwordPolicyForm.enabled,
+        minimumScore: passwordPolicyForm.minimumScore,
+      },
+    })
+    Object.assign(passwordPolicyForm, policy)
+    applyPasswordPolicy(policy)
+    showToast(policy.enabled ? `后台账户密码最低复杂度已设为“${passwordStrengthLabel(policy.minimumScore)}”` : '后台账户密码复杂度强制要求已关闭')
+  } catch (e: any) {
+    showToast(e?.data?.statusMessage || '后台账户密码策略保存失败', 'error')
+  } finally {
+    savingPasswordPolicy.value = false
   }
 }
 
@@ -187,8 +315,7 @@ async function loadMcsm() {
     mcsmState.value = config
     mcsmForm.baseUrl = config.baseUrl
     mcsmForm.backupDir = config.backupDir
-    // 服务端不回显 ApiKey，输入框留空即表示沿用旧值。
-    mcsmForm.apiKey = ''
+    mcsmForm.apiKey = config.apiKey
   } catch (e: any) {
     showToast(e?.data?.statusMessage || 'MCSM 面板配置加载失败', 'error')
   } finally {
@@ -221,8 +348,7 @@ async function saveMcsm() {
     mcsmState.value = config
     mcsmForm.baseUrl = config.baseUrl
     mcsmForm.backupDir = config.backupDir
-    mcsmForm.apiKey = ''
-    showMcsmApiKey.value = false
+    mcsmForm.apiKey = config.apiKey
     mcsmProbe.value = probe
     showToast(probe.ok ? '已保存，面板连接正常' : '配置已保存，但连接面板失败', probe.ok ? 'info' : 'error')
   } catch (e: any) {
@@ -247,7 +373,7 @@ async function load() {
       Object.assign(state[scope], config)
       forms[scope].siteKey = config.siteKey
       forms[scope].hostnames = config.hostnames
-      forms[scope].secret = ''
+      forms[scope].secret = config.secret
     }
   } catch (e: any) {
     showToast(e?.data?.statusMessage || '加载失败', 'error')
@@ -333,14 +459,30 @@ async function saveInboundMailKey() {
   }
 }
 
-/** 浏览器里生成 32 字节随机值，避免管理员自己想一串不够随机的密钥。 */
-function generateInboundMailKey() {
-  if (!canEditInboundMailKey.value) return
-  const bytes = new Uint8Array(32)
+function randomHex(byteLength: number) {
+  const bytes = new Uint8Array(byteLength)
   crypto.getRandomValues(bytes)
-  inboundMailKey.value = [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+function generateSecurityEntry() {
+  if (!canManageSecurityEntry.value || securityEntryLoading.value) return
+  securityEntryInput.value = randomHex(24)
+  showToast('已填入随机安全入口，尚未保存')
+}
+
+function generateGameApiKey() {
+  if (!canEditGameApiKey.value || gameApiKeyLoading.value) return
+  gameApiKey.value = randomHex(32)
+  showGameApiKey.value = true
+  showToast('已填入随机游戏 API 密钥，尚未保存')
+}
+
+function generateInboundMailKey() {
+  if (!canEditInboundMailKey.value || inboundMailKeyLoading.value) return
+  inboundMailKey.value = randomHex(32)
   showInboundMailKey.value = true
-  showToast('已生成新密钥，记得保存并同步到 Worker')
+  showToast('已填入随机投递密钥，尚未保存')
 }
 </script>
 
@@ -352,18 +494,125 @@ function generateInboundMailKey() {
       <h2 class="card-title">后台安全入口</h2>
       <p class="card-note">当前入口：<code>/{{ currentSecurityEntry || '…' }}</code></p>
       <div class="setting-form">
-        <md-outlined-text-field
-          label="安全入口"
-          supporting-text="12 至 64 位字母、数字、下划线或连字符"
-          autocomplete="off"
-          spellcheck="false"
-          :disabled="securityEntryLoading"
-          :value="securityEntryInput"
-          @input="securityEntryInput = ($event.target as HTMLInputElement).value"
-        ></md-outlined-text-field>
+        <div class="password-field">
+          <md-outlined-text-field
+            label="安全入口"
+            supporting-text="12 至 64 位字母、数字、下划线或连字符"
+            autocomplete="off"
+            spellcheck="false"
+            :disabled="securityEntryLoading"
+            :value="securityEntryInput"
+            @input="securityEntryInput = ($event.target as HTMLInputElement).value"
+          ></md-outlined-text-field>
+          <div class="secret-field-actions">
+            <md-icon-button
+              aria-label="生成随机安全入口"
+              title="生成随机安全入口"
+              :disabled="securityEntryLoading || savingSecurityEntry"
+              @click="generateSecurityEntry"
+            >
+              <md-icon>casino</md-icon>
+            </md-icon-button>
+          </div>
+        </div>
         <div class="form-actions">
           <md-filled-button :disabled="securityEntryLoading || savingSecurityEntry" @click="saveSecurityEntry">
             {{ savingSecurityEntry ? '保存中…' : '保存安全入口' }}
+          </md-filled-button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2 class="card-title">后台账户密码策略</h2>
+      <p class="card-note">仅应用于后台账户的新建、修改和重置密码，不会影响游戏账户，也不会要求现有后台账户立即改密。</p>
+
+      <div class="setting-form password-policy-form">
+        <div class="password-policy-switch-row">
+          <div>
+            <strong>要求后台密码遵循复杂度原则</strong>
+          </div>
+          <md-switch
+            :selected="passwordPolicyForm.enabled"
+            :disabled="passwordPolicyLoading || !canEditPage"
+            aria-label="要求后台账户密码遵循复杂度原则"
+            @change="onPasswordPolicyToggle"
+          ></md-switch>
+        </div>
+
+        <div class="password-policy-level">
+          <div class="password-policy-level-heading">
+            <span>最低复杂度</span>
+            <strong>{{ passwordPolicyMinimumLabel }}</strong>
+          </div>
+          <md-slider
+            min="1"
+            max="6"
+            step="1"
+            ticks
+            aria-label="后台账户最低密码复杂度"
+            :value="passwordPolicyForm.minimumScore"
+            :disabled="passwordPolicyLoading || !canEditPage"
+            @input="onPasswordPolicyScoreInput"
+          ></md-slider>
+          <div class="password-policy-scale" aria-hidden="true">
+            <span>基础</span>
+            <span>一般</span>
+            <span>中等</span>
+            <span>良好</span>
+            <span>强</span>
+            <span>严格</span>
+          </div>
+        </div>
+
+        <dl class="password-policy-details">
+          <div>
+            <dt>当前要求</dt>
+            <dd>{{ passwordPolicyCurrentRequirements }}</dd>
+          </div>
+        </dl>
+
+        <div v-if="canEditPage" class="form-actions">
+          <md-filled-button :disabled="passwordPolicyLoading || savingPasswordPolicy" @click="savePasswordPolicy">
+            {{ savingPasswordPolicy ? '保存中…' : '保存后台密码策略' }}
+          </md-filled-button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="canManagePasswordExpiry" class="card">
+      <h2 class="card-title">后台密码有效期</h2>
+      <p class="card-note">启用后，后台账户会在密码到期前 10 天收到提醒；到期后必须更新密码才能继续操作后台。</p>
+
+      <div class="setting-form password-policy-form">
+        <div class="password-policy-switch-row">
+          <div>
+            <strong>要求后台密码定期更新</strong>
+          </div>
+          <md-switch
+            :selected="passwordExpiryForm.enabled"
+            :disabled="passwordExpiryLoading"
+            aria-label="要求后台账户密码定期更新"
+            @change="onPasswordExpiryToggle"
+          ></md-switch>
+        </div>
+
+        <md-outlined-text-field
+          type="number"
+          label="密码有效期"
+          supporting-text="1 至 3650 天"
+          suffix-text="天"
+          min="1"
+          max="3650"
+          step="1"
+          :disabled="passwordExpiryLoading"
+          :value="String(passwordExpiryForm.days)"
+          @input="onPasswordExpiryDaysInput"
+        ></md-outlined-text-field>
+
+        <div class="form-actions">
+          <md-filled-button :disabled="passwordExpiryLoading || savingPasswordExpiry" @click="savePasswordExpiry">
+            {{ savingPasswordExpiry ? '保存中…' : '保存密码有效期' }}
           </md-filled-button>
         </div>
       </div>
@@ -385,13 +634,25 @@ function generateInboundMailKey() {
             :value="gameApiKey"
             @input="gameApiKey = ($event.target as HTMLInputElement).value"
           ></md-outlined-text-field>
-          <md-icon-button
-            :aria-label="showGameApiKey ? '隐藏游戏 API 密钥' : '显示游戏 API 密钥'"
-            :disabled="gameApiKeyLoading"
-            @click="showGameApiKey = !showGameApiKey"
-          >
-            <md-icon>{{ showGameApiKey ? 'visibility_off' : 'visibility' }}</md-icon>
-          </md-icon-button>
+          <div class="secret-field-actions">
+              <md-icon-button
+                v-if="canEditGameApiKey"
+                aria-label="生成随机游戏 API 密钥"
+                title="生成随机游戏 API 密钥"
+                :disabled="gameApiKeyLoading || savingGameApiKey"
+                @click="generateGameApiKey"
+              >
+                <md-icon>casino</md-icon>
+              </md-icon-button>
+              <md-icon-button
+                :aria-label="showGameApiKey ? '隐藏游戏 API 密钥' : '显示游戏 API 密钥'"
+                :title="showGameApiKey ? '隐藏游戏 API 密钥' : '显示游戏 API 密钥'"
+                :disabled="gameApiKeyLoading"
+                @click="showGameApiKey = !showGameApiKey"
+              >
+                <md-icon>{{ showGameApiKey ? 'visibility_off' : 'visibility' }}</md-icon>
+              </md-icon-button>
+          </div>
         </div>
         <div v-if="canEditGameApiKey" class="form-actions">
           <md-filled-button :disabled="gameApiKeyLoading || savingGameApiKey" @click="saveGameApiKey">
@@ -412,7 +673,7 @@ function generateInboundMailKey() {
       <p v-else-if="!inboundMailKeyLoading && inboundMailKeySource === 'env'" class="source-note">
         <md-icon>info</md-icon>
         <span>
-          当前使用环境变量 <code>YZWC_INBOUND_MAIL_KEY</code>。在此保存后改用数据库值；Nitro 不读取根目录 <code>.env</code>。
+          当前使用环境变量 <code>YZWC_INBOUND_MAIL_KEY</code>。在此保存后改用数据库值。
         </span>
       </p>
 
@@ -429,22 +690,30 @@ function generateInboundMailKey() {
             :value="inboundMailKey"
             @input="inboundMailKey = ($event.target as HTMLInputElement).value"
           ></md-outlined-text-field>
-          <md-icon-button
-            :aria-label="showInboundMailKey ? '隐藏域名邮件投递密钥' : '显示域名邮件投递密钥'"
-            :disabled="inboundMailKeyLoading"
-            @click="showInboundMailKey = !showInboundMailKey"
-          >
-            <md-icon>{{ showInboundMailKey ? 'visibility_off' : 'visibility' }}</md-icon>
-          </md-icon-button>
+          <div class="secret-field-actions">
+              <md-icon-button
+                v-if="canEditInboundMailKey"
+                aria-label="生成随机域名邮件投递密钥"
+                title="生成随机域名邮件投递密钥"
+                :disabled="inboundMailKeyLoading || savingInboundMailKey"
+                @click="generateInboundMailKey"
+              >
+                <md-icon>casino</md-icon>
+              </md-icon-button>
+              <md-icon-button
+                :aria-label="showInboundMailKey ? '隐藏域名邮件投递密钥' : '显示域名邮件投递密钥'"
+                :title="showInboundMailKey ? '隐藏域名邮件投递密钥' : '显示域名邮件投递密钥'"
+                :disabled="inboundMailKeyLoading"
+                @click="showInboundMailKey = !showInboundMailKey"
+              >
+                <md-icon>{{ showInboundMailKey ? 'visibility_off' : 'visibility' }}</md-icon>
+              </md-icon-button>
+          </div>
         </div>
         <div v-if="canEditInboundMailKey" class="form-actions">
           <md-filled-button :disabled="inboundMailKeyLoading || savingInboundMailKey" @click="saveInboundMailKey">
             {{ savingInboundMailKey ? '保存中…' : '保存投递密钥' }}
           </md-filled-button>
-          <md-outlined-button :disabled="inboundMailKeyLoading || savingInboundMailKey" @click="generateInboundMailKey">
-            <md-icon slot="icon">casino</md-icon>
-            随机生成
-          </md-outlined-button>
         </div>
         <p v-if="canEditInboundMailKey" class="card-note">
           保存后需在 Worker 执行 <code>npx wrangler secret put INBOUND_MAIL_KEY</code> 并填入相同值；不一致会拒收（401）。
@@ -463,7 +732,7 @@ function generateInboundMailKey() {
       <p v-else-if="!mcsmLoading && mcsmState?.apiKeySource === 'env'" class="source-note">
         <md-icon>info</md-icon>
         <span>
-          当前使用环境变量 <code>YZWC_MCSM_API_KEY</code>。在此保存后改用数据库值；Nitro 不读取根目录 <code>.env</code>。
+          当前使用环境变量 <code>YZWC_MCSM_API_KEY</code>。在此保存后改用数据库值。
         </span>
       </p>
 
@@ -483,7 +752,7 @@ function generateInboundMailKey() {
           <md-outlined-text-field
             :type="showMcsmApiKey ? 'text' : 'password'"
             label="MCSM ApiKey"
-            :supporting-text="mcsmState?.apiKeyConfigured ? '已配置，留空表示不修改' : '尚未配置，必须填写'"
+            :supporting-text="mcsmState?.apiKeyConfigured ? '已配置，可直接查看或修改' : '尚未配置，必须填写'"
             autocomplete="new-password"
             spellcheck="false"
             :disabled="mcsmLoading"
@@ -491,13 +760,16 @@ function generateInboundMailKey() {
             :value="mcsmForm.apiKey"
             @input="mcsmForm.apiKey = ($event.target as HTMLInputElement).value"
           ></md-outlined-text-field>
-          <md-icon-button
-            :aria-label="showMcsmApiKey ? '隐藏 ApiKey' : '显示 ApiKey'"
-            :disabled="mcsmLoading"
-            @click="showMcsmApiKey = !showMcsmApiKey"
-          >
-            <md-icon>{{ showMcsmApiKey ? 'visibility_off' : 'visibility' }}</md-icon>
-          </md-icon-button>
+          <div class="secret-field-actions">
+              <md-icon-button
+                :aria-label="showMcsmApiKey ? '隐藏 ApiKey' : '显示 ApiKey'"
+                :title="showMcsmApiKey ? '隐藏 ApiKey' : '显示 ApiKey'"
+                :disabled="mcsmLoading"
+                @click="showMcsmApiKey = !showMcsmApiKey"
+              >
+                <md-icon>{{ showMcsmApiKey ? 'visibility_off' : 'visibility' }}</md-icon>
+              </md-icon-button>
+          </div>
         </div>
 
         <md-outlined-text-field
@@ -547,19 +819,23 @@ function generateInboundMailKey() {
           <md-outlined-text-field
             :type="showSecret.admin ? 'text' : 'password'"
             label="服务端密钥"
-            :supporting-text="state.admin.secretConfigured ? '已配置，留空表示不修改' : '尚未配置，必须填写'"
+            :supporting-text="state.admin.secretConfigured ? '已配置，可直接查看或修改' : '尚未配置，必须填写'"
             autocomplete="new-password"
             spellcheck="false"
             :value="forms.admin.secret"
             :readonly="!canEditAdminTurnstile"
             @input="forms.admin.secret = ($event.target as HTMLInputElement).value"
           ></md-outlined-text-field>
-          <md-icon-button
-            :aria-label="showSecret.admin ? '隐藏服务端密钥' : '显示服务端密钥'"
-            @click="showSecret.admin = !showSecret.admin"
-          >
-            <md-icon>{{ showSecret.admin ? 'visibility_off' : 'visibility' }}</md-icon>
-          </md-icon-button>
+          <div class="secret-field-actions">
+              <md-icon-button
+                :aria-label="showSecret.admin ? '隐藏服务端密钥' : '显示服务端密钥'"
+                :title="showSecret.admin ? '隐藏服务端密钥' : '显示服务端密钥'"
+                :disabled="loading"
+                @click="showSecret.admin = !showSecret.admin"
+              >
+                <md-icon>{{ showSecret.admin ? 'visibility_off' : 'visibility' }}</md-icon>
+              </md-icon-button>
+          </div>
         </div>
 
         <md-outlined-text-field
@@ -614,12 +890,16 @@ function generateInboundMailKey() {
             :readonly="!canEditChatTurnstile"
             @input="forms.chat.secret = ($event.target as HTMLInputElement).value"
           ></md-outlined-text-field>
-          <md-icon-button
-            :aria-label="showSecret.chat ? '隐藏服务端密钥' : '显示服务端密钥'"
-            @click="showSecret.chat = !showSecret.chat"
-          >
-            <md-icon>{{ showSecret.chat ? 'visibility_off' : 'visibility' }}</md-icon>
-          </md-icon-button>
+          <div class="secret-field-actions">
+              <md-icon-button
+                :aria-label="showSecret.chat ? '隐藏服务端密钥' : '显示服务端密钥'"
+                :title="showSecret.chat ? '隐藏服务端密钥' : '显示服务端密钥'"
+                :disabled="loading"
+                @click="showSecret.chat = !showSecret.chat"
+              >
+                <md-icon>{{ showSecret.chat ? 'visibility_off' : 'visibility' }}</md-icon>
+              </md-icon-button>
+          </div>
         </div>
 
         <md-outlined-text-field
@@ -640,12 +920,6 @@ function generateInboundMailKey() {
       </div>
     </div>
 
-    <div class="card">
-      <h2 class="card-title">生产环境配置</h2>
-      <p class="card-note">
-        Nitro 运行时不会读取项目根目录的 <code>.env</code>；请使用本页保存或进程环境变量。
-      </p>
-    </div>
   </div>
 </template>
 
@@ -676,7 +950,7 @@ function generateInboundMailKey() {
   margin: 16px 0 0;
   padding: 12px 14px;
   border-radius: 8px;
-  background: rgba(197, 34, 31, 0.1);
+  background: color-mix(in srgb, var(--md-sys-color-error) 10%, transparent);
   color: var(--md-sys-color-error);
   font-size: 13px;
   line-height: 1.6;
@@ -713,6 +987,10 @@ function generateInboundMailKey() {
   font-size: 12px;
 }
 
+.page > .card {
+  width: min(100%, 608px);
+}
+
 .setting-form {
   display: flex;
   flex-direction: column;
@@ -721,19 +999,125 @@ function generateInboundMailKey() {
   margin-top: 20px;
 }
 
+.password-policy-form {
+  gap: 18px;
+}
+
+.password-policy-switch-row {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.password-policy-switch-row > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.password-policy-switch-row strong,
+.password-policy-level-heading strong {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.password-policy-switch-row span,
+.password-policy-level-heading span,
+.password-policy-scale {
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.password-policy-switch-row md-switch {
+  flex: 0 0 auto;
+}
+
+.password-policy-level {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.password-policy-level-heading,
+.password-policy-scale {
+  align-items: center;
+}
+
+.password-policy-level-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.password-policy-level-heading strong {
+  color: var(--md-sys-color-primary);
+}
+
+.password-policy-level md-slider {
+  width: 100%;
+}
+
+.password-policy-scale {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  padding: 0 8px;
+  text-align: center;
+}
+
+.password-policy-details {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.password-policy-details > div {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 12px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.password-policy-details dt {
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.password-policy-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--md-sys-color-on-surface);
+}
+
 .setting-form md-outlined-text-field {
   width: 100%;
 }
 
 .password-field {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  align-items: flex-start;
+  gap: 4px;
 }
 
 .password-field md-outlined-text-field {
   flex: 1;
   min-width: 0;
+}
+
+.secret-field-actions {
+  min-height: var(--app-field-height);
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.secret-field-actions md-icon-button {
+  flex: 0 0 auto;
 }
 
 .form-actions {

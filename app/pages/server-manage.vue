@@ -629,7 +629,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="page">
+  <div class="page page--wide">
     <div class="page-heading">
       <h1 class="page-title">服务器管理</h1>
       <div class="heading-actions">
@@ -835,7 +835,7 @@ onBeforeUnmount(() => {
                   <th>备份文件</th>
                   <th>大小</th>
                   <th>修改时间</th>
-                  <th></th>
+                  <th class="cell-actions">操作</th>
                 </tr>
               </thead>
               <tbody>

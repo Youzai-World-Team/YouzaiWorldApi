@@ -241,7 +241,7 @@ async function confirmDelete() {
     <div class="page-heading">
       <h1 class="page-title">更新服务</h1>
       <md-icon-button aria-label="打开数据 API" title="打开数据 API" @click="onEndpointClick">
-        <md-icon>api</md-icon>
+        <md-icon>link</md-icon>
       </md-icon-button>
     </div>
 
@@ -264,7 +264,7 @@ async function confirmDelete() {
             <th>类型</th>
             <th>强制更新</th>
             <th>发布时间</th>
-            <th>操作</th>
+            <th class="cell-actions">操作</th>
           </tr>
         </thead>
         <tbody>
@@ -336,13 +336,13 @@ async function confirmDelete() {
           </label>
 
           <div class="field-group">
-            <label class="field-label">发布日期</label>
-            <input v-model="formDate" type="date" class="date-input" />
+            <label class="field-label" for="update-release-date">发布日期</label>
+            <input id="update-release-date" v-model="formDate" type="date" class="date-input" />
           </div>
 
           <div class="field-group">
-            <label class="field-label">发布时间</label>
-            <input v-model="formTime" type="time" step="1" class="date-input" />
+            <label class="field-label" for="update-release-time">发布时间</label>
+            <input id="update-release-time" v-model="formTime" type="time" step="1" class="date-input" />
           </div>
 
           <md-outlined-text-field
@@ -482,12 +482,12 @@ async function confirmDelete() {
 }
 
 .type-badge--success {
-  background: rgba(24, 128, 56, 0.14);
+  background: color-mix(in srgb, var(--act-success) 14%, transparent);
   color: var(--act-success);
 }
 
 .type-badge--warning {
-  background: rgba(176, 96, 0, 0.14);
+  background: color-mix(in srgb, var(--act-warning) 14%, transparent);
   color: var(--act-warning);
 }
 
@@ -498,7 +498,7 @@ async function confirmDelete() {
   border-radius: 999px;
   font-size: 13px;
   font-weight: 500;
-  background: rgba(197, 34, 31, 0.14);
+  background: color-mix(in srgb, var(--act-error) 14%, transparent);
   color: var(--act-error);
 }
 
@@ -550,10 +550,10 @@ async function confirmDelete() {
 
 .date-input {
   width: 100%;
-  height: var(--app-control-height);
+  height: var(--app-field-height);
   padding: 0 12px;
   border: 1px solid var(--md-sys-color-outline-variant);
-  border-radius: 4px;
+  border-radius: var(--md-sys-shape-corner-extra-small);
   background: transparent;
   color: var(--md-sys-color-on-surface);
   font: inherit;
@@ -615,6 +615,15 @@ async function confirmDelete() {
   .update-table th,
   .update-table td {
     padding: 10px;
+  }
+
+  .update-table {
+    min-width: 700px;
+  }
+
+  .update-table th:nth-child(2),
+  .update-table td:nth-child(2) {
+    display: none;
   }
 }
 </style>

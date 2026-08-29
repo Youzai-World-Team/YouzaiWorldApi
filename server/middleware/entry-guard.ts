@@ -44,6 +44,9 @@ export default defineEventHandler(async (event) => {
     if (normalizedPath === '/' + entry || normalizedPath === '/login') {
       return sendRedirect(event, '/', 302)
     }
+    if (user.passwordExpiry.expired && normalizedPath !== '/account') {
+      return sendRedirect(event, '/account', 302)
+    }
     const pageKey = adminPageKeyForPath(normalizedPath)
     if (!pageKey) {
       if (normalizedPath === '/account') return

@@ -703,7 +703,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="page">
+  <div class="page page--wide">
     <div class="page-heading">
       <h1 class="page-title">服务器文件</h1>
       <md-icon-button aria-label="刷新" title="刷新" :disabled="listLoading" @click="loadList()">
@@ -1016,7 +1016,7 @@ onBeforeUnmount(() => {
       </section>
     </template>
 
-    <md-dialog ref="previewDialog" :open="previewOpen" @closed="previewOpen = false">
+    <md-dialog ref="previewDialog" class="file-preview-dialog" :open="previewOpen" @closed="previewOpen = false">
       <div slot="headline" class="preview-headline">
         <span class="preview-name">{{ previewTarget?.name }}</span>
         <span class="preview-actions">
@@ -1100,7 +1100,7 @@ onBeforeUnmount(() => {
           :kind="previewTarget.kind"
           :size="previewTarget.size"
           :can-edit="canModifyFiles"
-          editor-height="calc(100vh - 190px)"
+          editor-height="calc(100dvh - 190px)"
           @saved="loadList()"
         />
       </div>
@@ -1382,9 +1382,10 @@ onBeforeUnmount(() => {
 .preview-headline { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .preview-name { font-family: 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 14px; overflow-wrap: anywhere; }
 .preview-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
-.preview-body { min-width: min(760px, calc(100vw - 72px)); }
+.file-preview-dialog { --md-dialog-container-width: min(900px, calc(100vw - 32px)); --md-dialog-container-max-width: min(900px, calc(100vw - 32px)); }
+.preview-body { width: min(820px, calc(100vw - 88px)); min-width: 0; }
 .plain-link { text-decoration: none; }
-.fullscreen-layer { position: fixed; inset: 0; z-index: 30; display: flex; flex-direction: column; background: var(--md-sys-color-surface); }
+.fullscreen-layer { position: fixed; inset: 0; z-index: 30; width: 100vw; height: 100dvh; display: flex; flex-direction: column; background: var(--md-sys-color-surface); }
 .fullscreen-bar { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--md-sys-color-outline-variant); background: var(--md-sys-color-surface-container); }
 .fullscreen-name { flex: 1; min-width: 0; font-family: 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fullscreen-body { flex: 1; min-height: 0; overflow: auto; padding: 16px; }

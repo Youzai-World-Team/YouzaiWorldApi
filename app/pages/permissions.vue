@@ -232,7 +232,7 @@ onMounted(loadPermissions)
 </script>
 
 <template>
-  <div class="page permissions-page">
+  <div class="page page--wide permissions-page">
     <div class="page-heading">
       <h1 class="page-title">权限管理</h1>
       <md-icon-button aria-label="刷新" title="刷新" :disabled="loading" @click="loadPermissions">
@@ -313,7 +313,7 @@ onMounted(loadPermissions)
                       </span>
                     </div>
                     <div class="permission-options" role="group" :aria-label="`${feature.label}权限`">
-                      <button v-for="option in featureOptions(feature)" :key="option" type="button" :class="{ 'permission-option--active': (ownerSelected ? 'edit' : featureDrafts[feature.key]) === option }" :disabled="!canEditSelection" @click="setFeaturePermission(feature, option)">
+                      <button v-for="option in featureOptions(feature)" :key="option" type="button" :aria-pressed="(ownerSelected ? 'edit' : featureDrafts[feature.key]) === option" :class="{ 'permission-option--active': (ownerSelected ? 'edit' : featureDrafts[feature.key]) === option }" :disabled="!canEditSelection" @click="setFeaturePermission(feature, option)">
                         {{ permissionLabel(option, true) }}
                       </button>
                     </div>
@@ -349,7 +349,7 @@ onMounted(loadPermissions)
                     </Transition>
                   </md-icon-button>
                   <div class="permission-options" role="group" :aria-label="`${page.label}权限`">
-                    <button v-for="option in pageOptions(page)" :key="option" type="button" :class="{ 'permission-option--active': (ownerSelected ? (page.readOnly ? 'view' : 'edit') : drafts[page.key]) === option }" :disabled="!canEditSelection" @click="setPermission(page, option)">
+                    <button v-for="option in pageOptions(page)" :key="option" type="button" :aria-pressed="(ownerSelected ? (page.readOnly ? 'view' : 'edit') : drafts[page.key]) === option" :class="{ 'permission-option--active': (ownerSelected ? (page.readOnly ? 'view' : 'edit') : drafts[page.key]) === option }" :disabled="!canEditSelection" @click="setPermission(page, option)">
                       {{ permissionLabel(option) }}
                     </button>
                   </div>
@@ -366,7 +366,7 @@ onMounted(loadPermissions)
                       </span>
                     </div>
                     <div class="permission-options" role="group" :aria-label="`${feature.label}权限`">
-                      <button v-for="option in featureOptions(feature)" :key="option" type="button" :class="{ 'permission-option--active': (ownerSelected ? 'edit' : featureDrafts[feature.key]) === option }" :disabled="!canEditSelection" @click="setFeaturePermission(feature, option)">
+                      <button v-for="option in featureOptions(feature)" :key="option" type="button" :aria-pressed="(ownerSelected ? 'edit' : featureDrafts[feature.key]) === option" :class="{ 'permission-option--active': (ownerSelected ? 'edit' : featureDrafts[feature.key]) === option }" :disabled="!canEditSelection" @click="setFeaturePermission(feature, option)">
                         {{ permissionLabel(option, true) }}
                       </button>
                     </div>
@@ -404,9 +404,14 @@ onMounted(loadPermissions)
 }
 
 .user-list {
+  position: sticky;
+  top: calc(var(--app-bar-height) + 16px);
+  max-height: calc(100vh - var(--app-bar-height) - 48px);
+  max-height: calc(100dvh - var(--app-bar-height) - 48px);
   display: grid;
   gap: 4px;
   padding: 8px;
+  overflow-y: auto;
 }
 
 .user-option {
@@ -584,6 +589,13 @@ onMounted(loadPermissions)
   color: var(--md-sys-color-on-surface-variant);
   background: transparent;
   cursor: pointer;
+  transition:
+    background-color var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard),
+    color var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard);
+}
+
+.permission-options button:hover:not(:disabled):not(.permission-option--active) {
+  background: color-mix(in srgb, var(--md-sys-color-on-surface) var(--md-sys-state-hover-state-layer-opacity), transparent);
 }
 
 .permission-options button:last-child {
@@ -592,6 +604,7 @@ onMounted(loadPermissions)
 
 .permission-options button:disabled {
   cursor: default;
+  opacity: var(--md-sys-state-disabled-content-opacity);
 }
 
 .permission-options .permission-option--active {
@@ -615,7 +628,10 @@ onMounted(loadPermissions)
   }
 
   .user-list {
+    position: static;
+    max-height: none;
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    overflow: visible;
   }
 
   .permission-row {

@@ -30,6 +30,10 @@ export default defineNuxtRouteMiddleware(async (to) => {
     return
   }
 
+  if (access.user.value?.passwordExpiry.expired && to.path !== '/account') {
+    return navigateTo('/account')
+  }
+
   await useEntry().load()
   if (access.levelForPath(to.path) === 'hidden') {
     return navigateTo(access.firstVisibleRoute.value)

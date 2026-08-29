@@ -177,7 +177,7 @@ async function confirmDelete() {
     <div class="page-heading">
       <h1 class="page-title">封禁列表</h1>
       <md-icon-button :href="endpoint" target="_blank" rel="noopener" aria-label="打开数据 API" title="打开数据 API">
-        <md-icon>api</md-icon>
+        <md-icon>link</md-icon>
       </md-icon-button>
     </div>
 
@@ -198,7 +198,7 @@ async function confirmDelete() {
             <th>封禁时间</th>
             <th>解封时间</th>
             <th>原因</th>
-            <th>操作</th>
+            <th class="cell-actions">操作</th>
           </tr>
         </thead>
         <tbody>
@@ -239,8 +239,8 @@ async function confirmDelete() {
           ></md-outlined-text-field>
 
           <div class="field-group">
-            <label class="field-label">封禁时间</label>
-            <input v-model="formBanTime" type="date" class="date-input" />
+            <label class="field-label" for="ban-start-date">封禁时间</label>
+            <input id="ban-start-date" v-model="formBanTime" type="date" class="date-input" />
           </div>
 
           <label class="permanent-row">
@@ -249,8 +249,8 @@ async function confirmDelete() {
           </label>
 
           <div v-if="!formPermanent" class="field-group">
-            <label class="field-label">解封时间</label>
-            <input v-model="formUnbanTime" type="date" class="date-input" />
+            <label class="field-label" for="ban-end-date">解封时间</label>
+            <input id="ban-end-date" v-model="formUnbanTime" type="date" class="date-input" />
           </div>
 
           <md-outlined-text-field
@@ -368,7 +368,7 @@ async function confirmDelete() {
   border-radius: 999px;
   font-size: 13px;
   font-weight: 500;
-  background: rgba(197, 34, 31, 0.14);
+  background: color-mix(in srgb, var(--act-error) 14%, transparent);
   color: var(--act-error);
 }
 
@@ -402,10 +402,10 @@ async function confirmDelete() {
 
 .date-input {
   width: 100%;
-  height: var(--app-control-height);
+  height: var(--app-field-height);
   padding: 0 12px;
   border: 1px solid var(--md-sys-color-outline-variant);
-  border-radius: 4px;
+  border-radius: var(--md-sys-shape-corner-extra-small);
   background: transparent;
   color: var(--md-sys-color-on-surface);
   font: inherit;
@@ -477,6 +477,15 @@ async function confirmDelete() {
   .ban-table th,
   .ban-table td {
     padding: 10px;
+  }
+
+  .ban-table {
+    min-width: 690px;
+  }
+
+  .ban-table th:nth-child(2),
+  .ban-table td:nth-child(2) {
+    display: none;
   }
 }
 </style>

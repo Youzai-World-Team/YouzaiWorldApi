@@ -172,7 +172,7 @@ async function confirmDelete() {
     <div class="page-heading">
       <h1 class="page-title">服务器动态</h1>
       <md-icon-button :href="endpoint" target="_blank" rel="noopener" aria-label="打开数据 API" title="打开数据 API">
-        <md-icon>api</md-icon>
+        <md-icon>link</md-icon>
       </md-icon-button>
     </div>
 
@@ -192,7 +192,7 @@ async function confirmDelete() {
             <th>类型</th>
             <th>日期</th>
             <th>内容</th>
-            <th>操作</th>
+            <th class="cell-actions">操作</th>
           </tr>
         </thead>
         <tbody>
@@ -354,22 +354,22 @@ async function confirmDelete() {
 }
 
 .badge--info {
-  background: rgba(26, 115, 232, 0.14);
+  background: color-mix(in srgb, var(--act-info) 14%, transparent);
   color: var(--act-info);
 }
 
 .badge--success {
-  background: rgba(24, 128, 56, 0.14);
+  background: color-mix(in srgb, var(--act-success) 14%, transparent);
   color: var(--act-success);
 }
 
 .badge--warning {
-  background: rgba(176, 96, 0, 0.16);
+  background: color-mix(in srgb, var(--act-warning) 16%, transparent);
   color: var(--act-warning);
 }
 
 .badge--error {
-  background: rgba(197, 34, 31, 0.14);
+  background: color-mix(in srgb, var(--act-error) 14%, transparent);
   color: var(--act-error);
 }
 
@@ -386,10 +386,10 @@ async function confirmDelete() {
 }
 
 .date-input {
-  height: var(--app-control-height);
+  height: var(--app-field-height);
   padding: 0 12px;
   border: 1px solid var(--md-sys-color-outline-variant);
-  border-radius: 4px;
+  border-radius: var(--md-sys-shape-corner-extra-small);
   background: transparent;
   color: var(--md-sys-color-on-surface);
   font: inherit;

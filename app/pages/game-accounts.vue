@@ -94,6 +94,30 @@ watch(username, async (value) => {
   }
 })
 
+function openCreateAccountDialog() {
+  username.value = ''
+  password.value = ''
+  uuid.value = ''
+  showCreate.value = true
+}
+
+function closeCreateAccountDialog() {
+  showCreate.value = false
+  username.value = ''
+  password.value = ''
+  uuid.value = ''
+}
+
+function openResetAccountDialog(account: GameAccount) {
+  resetPassword.value = ''
+  resetTarget.value = account
+}
+
+function closeResetAccountDialog() {
+  resetTarget.value = null
+  resetPassword.value = ''
+}
+
 async function loadAccounts() {
   loading.value = true
   try {
@@ -346,14 +370,14 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="page">
+  <div class="page page--wide">
     <div class="page-heading">
       <div>
         <h1 class="page-title">游戏账户</h1>
       </div>
       <div class="heading-actions">
         <md-icon-button aria-label="刷新" :disabled="loading" @click="loadAccounts"><md-icon :class="{ 'refresh-icon--loading': loading }">refresh</md-icon></md-icon-button>
-        <md-filled-button v-if="canManageAccounts" @click="showCreate = true"><md-icon slot="icon">person_add</md-icon>新建账户</md-filled-button>
+        <md-filled-button v-if="canManageAccounts" @click="openCreateAccountDialog"><md-icon slot="icon">person_add</md-icon>新建账户</md-filled-button>
       </div>
     </div>
 
@@ -421,22 +445,29 @@ onUnmounted(() => {
               <td class="mono email-cell" :title="account.email || undefined">{{ account.email || '未绑定' }}</td>
               <td class="mono">{{ account.last_login_ip || '暂无记录' }}</td>
               <td>{{ formatAuthenticationDate(account.last_authenticated_date) }}</td>
-              <td class="actions"><md-icon-button v-if="canManageAccounts && isAccountLocked(account)" aria-label="解除登录锁定" title="解除登录锁定" @click="unlockAccount(account)"><md-icon>lock_open</md-icon></md-icon-button><md-icon-button aria-label="查看皮肤与披风" title="查看皮肤与披风" @click="openCosmetics(account)"><md-icon>checkroom</md-icon></md-icon-button><md-icon-button v-if="canManageAccounts" aria-label="重置密码" @click="resetTarget = account"><md-icon>key</md-icon></md-icon-button><md-icon-button v-if="canManageAccounts" aria-label="注销账户" @click="deleteAccount(account)"><md-icon>delete</md-icon></md-icon-button></td>
+              <td class="actions"><md-icon-button v-if="canManageAccounts && isAccountLocked(account)" aria-label="解除登录锁定" title="解除登录锁定" @click="unlockAccount(account)"><md-icon>lock_open</md-icon></md-icon-button><md-icon-button aria-label="查看皮肤与披风" title="查看皮肤与披风" @click="openCosmetics(account)"><md-icon>checkroom</md-icon></md-icon-button><md-icon-button v-if="canManageAccounts" aria-label="重置密码" @click="openResetAccountDialog(account)"><md-icon>key</md-icon></md-icon-button><md-icon-button v-if="canManageAccounts" aria-label="注销账户" @click="deleteAccount(account)"><md-icon>delete</md-icon></md-icon-button></td>
             </tr>
           </tbody>
         </table>
       </div>
     </div>
 
-    <md-dialog ref="createDialog" :open="showCreate" @closed="showCreate = false">
+    <md-dialog ref="createDialog" :open="showCreate" @closed="closeCreateAccountDialog">
       <div slot="headline">新建游戏账户</div>
-      <div slot="content" class="dialog-form"><md-outlined-text-field label="玩家代号" :value="username" @input="username = ($event.target as HTMLInputElement).value"></md-outlined-text-field><md-outlined-text-field type="password" label="初始密码" :value="password" @input="password = ($event.target as HTMLInputElement).value"></md-outlined-text-field><md-outlined-text-field label="离线 UUID（自动生成）" :value="uuid || '输入玩家代号后自动生成'" readonly></md-outlined-text-field></div>
+      <div slot="content" class="dialog-form">
+        <md-outlined-text-field label="玩家代号" :value="username" @input="username = ($event.target as HTMLInputElement).value"></md-outlined-text-field>
+        <md-outlined-text-field type="password" label="初始密码" autocomplete="new-password" :value="password" @input="password = ($event.target as HTMLInputElement).value"></md-outlined-text-field>
+        <md-outlined-text-field label="离线 UUID（自动生成）" :value="uuid || '输入玩家代号后自动生成'" readonly></md-outlined-text-field>
+      </div>
       <div slot="actions"><md-text-button @click="showCreate = false">取消</md-text-button><md-filled-button @click="createAccount">创建</md-filled-button></div>
     </md-dialog>
 
-    <md-dialog ref="resetDialog" :open="!!resetTarget" @closed="resetTarget = null">
+    <md-dialog ref="resetDialog" :open="!!resetTarget" @closed="closeResetAccountDialog">
       <div slot="headline">重置密码</div>
-      <div slot="content" class="dialog-form"><p>账户：{{ resetTarget?.username }}</p><md-outlined-text-field type="password" label="新密码" :value="resetPassword" @input="resetPassword = ($event.target as HTMLInputElement).value"></md-outlined-text-field></div>
+      <div slot="content" class="dialog-form">
+        <p>账户：{{ resetTarget?.username }}</p>
+        <md-outlined-text-field type="password" label="新密码" autocomplete="new-password" :value="resetPassword" @input="resetPassword = ($event.target as HTMLInputElement).value"></md-outlined-text-field>
+      </div>
       <div slot="actions"><md-text-button @click="resetTarget = null">取消</md-text-button><md-filled-button @click="resetAccountPassword">保存</md-filled-button></div>
     </md-dialog>
 
@@ -775,6 +806,17 @@ tr:last-child td {
 
   .smtp-connection-row {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  table {
+    min-width: 660px;
+  }
+
+  .uuid-column,
+  .uuid-cell,
+  th:nth-child(4),
+  td:nth-child(4) {
+    display: none;
   }
 
   th,

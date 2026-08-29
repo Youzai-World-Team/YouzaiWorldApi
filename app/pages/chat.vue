@@ -202,7 +202,7 @@ async function confirmClear() {
     <div class="page-heading">
       <h1 class="page-title">聊天区</h1>
       <md-icon-button :href="publicEndpoint" target="_blank" rel="noopener" aria-label="打开数据 API" title="打开数据 API">
-        <md-icon>api</md-icon>
+        <md-icon>link</md-icon>
       </md-icon-button>
     </div>
 
@@ -241,7 +241,7 @@ async function confirmClear() {
               <th>内容</th>
               <th>IP 归属地</th>
               <th>IP 标识</th>
-              <th v-if="canModerateMessages">操作</th>
+              <th v-if="canModerateMessages" class="cell-actions">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -645,6 +645,24 @@ async function confirmClear() {
   .chat-table th,
   .chat-table td {
     padding: 10px;
+  }
+
+  .chat-table {
+    min-width: 720px;
+  }
+
+  .chat-table th:nth-child(5),
+  .chat-table td:nth-child(5) {
+    display: none;
+  }
+
+  .compose-identity {
+    align-items: flex-start;
+  }
+
+  .delete-preview {
+    width: 100%;
+    min-width: 0;
   }
 }
 </style>

@@ -192,7 +192,7 @@ watch(() => [props.uuid, props.daemonId], () => void load(), { immediate: true }
             <th>触发方式</th>
             <th>动作</th>
             <th>剩余次数</th>
-            <th></th>
+            <th class="cell-actions">操作</th>
           </tr>
         </thead>
         <tbody>

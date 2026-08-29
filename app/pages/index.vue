@@ -130,6 +130,7 @@ const accountsWithEmail = computed(() => gameAccounts.value.filter((account) => 
 const todayLoginCount = computed(() => logins.value.filter((login) => sameLocalDay(login.time)).length)
 const todayAuditCount = computed(() => auditLogs.value.filter((log) => sameLocalDay(log.time)).length)
 const uniqueLoginIps = computed(() => new Set(logins.value.map((login) => login.ip).filter(Boolean)).size)
+const passwordExpiry = computed(() => access.user.value?.passwordExpiry)
 
 const activityOverviewItems = computed(() => [
   { type: 'info' as const, label: '信息', icon: 'info' },
@@ -210,6 +211,26 @@ const healthMeters = computed<HealthMeter[]>(() => {
 
 const attentionItems = computed<AttentionItem[]>(() => {
   const items: AttentionItem[] = []
+  const expiry = passwordExpiry.value
+  if (expiry?.enabled && expiry.expired) {
+    items.push({
+      key: 'password-expired',
+      title: '后台账户密码已过期',
+      detail: '请立即前往账户设置修改密码，其他后台操作已被限制',
+      icon: 'lock_clock',
+      tone: 'error',
+      to: '/account',
+    })
+  } else if (expiry?.enabled && expiry.warning && expiry.daysRemaining !== null) {
+    items.push({
+      key: 'password-expiring',
+      title: `后台账户密码将在 ${expiry.daysRemaining} 天后过期`,
+      detail: '建议提前更新密码，避免过期后无法进行常规后台操作',
+      icon: 'lock_clock',
+      tone: 'warning',
+      to: '/account',
+    })
+  }
   if (canView('status')) {
     if (statusError.value) items.push({ key: 'status-request', title: '状态接口不可用', detail: statusError.value, icon: 'cloud_off', tone: 'error', to: '/status' })
     else if (statusSnapshot.value?.minecraft?.online === false) items.push({ key: 'minecraft-offline', title: 'Minecraft 服务离线', detail: statusSnapshot.value.minecraft.error || '服务未响应', icon: 'dns', tone: 'error', to: '/status' })

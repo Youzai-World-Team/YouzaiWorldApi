@@ -235,6 +235,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .login-page {
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -332,6 +333,11 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 480px) {
+  .login-page {
+    align-items: flex-start;
+    padding-bottom: max(24px, env(safe-area-inset-bottom));
+  }
+
   .theme-toggle {
     top: 8px;
     right: 8px;

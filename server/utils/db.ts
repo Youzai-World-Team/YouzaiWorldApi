@@ -29,15 +29,34 @@ import {
 } from './email-template-renderer'
 import {
   ADMIN_FEATURE_DEFINITIONS,
+  ADMIN_NAVIGATION_ORDER,
   ADMIN_PAGE_DEFINITIONS,
   defaultAdminFeaturePermissions,
   defaultAdminPagePermissions,
+  normalizeAdminNavigationPreferences,
   ownerAdminFeaturePermissions,
   ownerAdminPagePermissions,
   permissionAllows,
   type AdminFeaturePermissionLevel,
+  type AdminNavigationPreferences,
   type AdminPagePermissionLevel,
 } from '#shared/admin-page-permissions'
+import {
+  calculatePasswordExpiryStatus,
+  DEFAULT_PASSWORD_EXPIRY_POLICY,
+  DEFAULT_PASSWORD_POLICY,
+  MAX_PASSWORD_EXPIRY_DAYS,
+  MIN_PASSWORD_EXPIRY_DAYS,
+  normalizePasswordExpiryDays,
+  normalizePasswordPolicyMinimumScore,
+  passwordMeetsPolicy,
+  passwordPolicyRequirementLabels,
+  passwordStrengthLabel,
+  type PasswordPolicy,
+  type PasswordPolicyMinimumScore,
+  type PasswordExpiryPolicy,
+  type PasswordExpiryStatus,
+} from '#shared/password-policy'
 
 const dataDir = path.resolve(process.cwd(), 'server/data')
 mkdirSync(dataDir, { recursive: true })
@@ -66,6 +85,8 @@ db.exec(`
     password_hash TEXT NOT NULL,
     avatar TEXT NOT NULL DEFAULT '',
     full_name TEXT NOT NULL DEFAULT '',
+    navigation_preferences TEXT NOT NULL DEFAULT '',
+    password_changed_at INTEGER NOT NULL DEFAULT 0,
     is_owner INTEGER NOT NULL DEFAULT 0,
     is_active INTEGER NOT NULL DEFAULT 1,
     created_at INTEGER NOT NULL,
@@ -85,6 +106,14 @@ db.exec(`
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (user_id, feature_key)
   );
+  CREATE TABLE IF NOT EXISTS admin_password_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    password_hash TEXT NOT NULL,
+    changed_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS admin_password_history_user_idx
+    ON admin_password_history (user_id, changed_at DESC, id DESC);
   CREATE TABLE IF NOT EXISTS admin_presence (
     user_id INTEGER PRIMARY KEY,
     path TEXT NOT NULL DEFAULT '/',
@@ -467,6 +496,22 @@ if (!adminUserColumns.some((column) => column.name === 'full_name')) {
     if (!migratedColumns.some((column) => column.name === 'full_name')) throw error
   }
 }
+if (!adminUserColumns.some((column) => column.name === 'navigation_preferences')) {
+  try {
+    db.exec("ALTER TABLE admin_users ADD COLUMN navigation_preferences TEXT NOT NULL DEFAULT ''")
+  } catch (error) {
+    const migratedColumns = db.prepare('PRAGMA table_info(admin_users)').all() as { name?: string }[]
+    if (!migratedColumns.some((column) => column.name === 'navigation_preferences')) throw error
+  }
+}
+if (!adminUserColumns.some((column) => column.name === 'password_changed_at')) {
+  try {
+    db.exec('ALTER TABLE admin_users ADD COLUMN password_changed_at INTEGER NOT NULL DEFAULT 0')
+  } catch (error) {
+    const migratedColumns = db.prepare('PRAGMA table_info(admin_users)').all() as { name?: string }[]
+    if (!migratedColumns.some((column) => column.name === 'password_changed_at')) throw error
+  }
+}
 
 const sessionColumns = db.prepare('PRAGMA table_info(sessions)').all() as { name?: string }[]
 if (!sessionColumns.some((column) => column.name === 'user_id')) {
@@ -663,6 +708,10 @@ const MOJANG_PROFILE_TTL_MS = 6 * 60 * 60 * 1000
 const MOJANG_ERROR_TTL_MS = 5 * 60 * 1000
 const ADMIN_ENTRY_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{11,63}$/
 const ADMIN_AVATAR_RE = /^\/(?:favicon\.ico|api\/uploads\/[A-Za-z0-9._-]+\.(?:png|jpe?g|webp|gif|avif))$/
+const PASSWORD_POLICY_ENABLED_SETTING = 'password_policy.enabled'
+const PASSWORD_POLICY_MINIMUM_SCORE_SETTING = 'password_policy.minimum_score'
+const PASSWORD_EXPIRY_ENABLED_SETTING = 'password_expiry.enabled'
+const PASSWORD_EXPIRY_DAYS_SETTING = 'password_expiry.days'
 const RESERVED_ADMIN_ENTRIES = new Set([
   'login', 'account', 'activity', 'donors', 'bans', 'updates', 'game-accounts',
   'game-cosmetics', 'game-account-email-templates', 'server-manage', 'server-files',
@@ -715,6 +764,73 @@ export function setSetting(key: string, value: string) {
 
 export function deleteSetting(key: string) {
   run('DELETE FROM settings WHERE key = ?', key)
+}
+
+export function getPasswordPolicy(): PasswordPolicy {
+  return {
+    enabled: getSetting(PASSWORD_POLICY_ENABLED_SETTING) === 'true',
+    minimumScore: normalizePasswordPolicyMinimumScore(
+      getSetting(PASSWORD_POLICY_MINIMUM_SCORE_SETTING) ?? DEFAULT_PASSWORD_POLICY.minimumScore,
+    ),
+  }
+}
+
+export function setPasswordPolicy(enabledValue: unknown, minimumScoreValue: unknown): PasswordPolicy {
+  if (typeof enabledValue !== 'boolean') {
+    throw createError({ statusCode: 400, statusMessage: '密码复杂度开关参数无效' })
+  }
+  const rawMinimumScore = Number(minimumScoreValue)
+  if (!Number.isInteger(rawMinimumScore) || rawMinimumScore < 1 || rawMinimumScore > 6) {
+    throw createError({ statusCode: 400, statusMessage: '最低密码复杂度需要为 1 至 6 级' })
+  }
+  const minimumScore = rawMinimumScore as PasswordPolicyMinimumScore
+
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    setSetting(PASSWORD_POLICY_ENABLED_SETTING, enabledValue ? 'true' : 'false')
+    setSetting(PASSWORD_POLICY_MINIMUM_SCORE_SETTING, String(minimumScore))
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+  return { enabled: enabledValue, minimumScore }
+}
+
+export function getPasswordExpiryPolicy(): PasswordExpiryPolicy {
+  return {
+    enabled: getSetting(PASSWORD_EXPIRY_ENABLED_SETTING) === 'true',
+    days: normalizePasswordExpiryDays(
+      getSetting(PASSWORD_EXPIRY_DAYS_SETTING) ?? DEFAULT_PASSWORD_EXPIRY_POLICY.days,
+    ),
+  }
+}
+
+export function setPasswordExpiryPolicy(enabledValue: unknown, daysValue: unknown): PasswordExpiryPolicy {
+  if (typeof enabledValue !== 'boolean') {
+    throw createError({ statusCode: 400, statusMessage: '密码有效期开关参数无效' })
+  }
+  const rawDays = Number(daysValue)
+  if (!Number.isInteger(rawDays) || rawDays < MIN_PASSWORD_EXPIRY_DAYS || rawDays > MAX_PASSWORD_EXPIRY_DAYS) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: `密码有效期需要为 ${MIN_PASSWORD_EXPIRY_DAYS} 至 ${MAX_PASSWORD_EXPIRY_DAYS} 天`,
+    })
+  }
+  const days = normalizePasswordExpiryDays(rawDays)
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    setSetting(PASSWORD_EXPIRY_ENABLED_SETTING, enabledValue ? 'true' : 'false')
+    setSetting(PASSWORD_EXPIRY_DAYS_SETTING, String(days))
+    if (enabledValue) {
+      run('UPDATE admin_users SET password_changed_at = ? WHERE password_changed_at <= 0', Date.now())
+    }
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+  return { enabled: enabledValue, days }
 }
 
 export interface TurnstileConfig {
@@ -885,8 +1001,11 @@ export interface AdminUser {
   isOwner: boolean
   isActive: boolean
   createdAt: number
+  passwordChangedAt: number
+  passwordExpiry: PasswordExpiryStatus
   permissions: Record<string, AdminPagePermissionLevel>
   featurePermissions: Record<string, AdminFeaturePermissionLevel>
+  navigationPreferences: AdminNavigationPreferences
 }
 
 export interface AdminPresence {
@@ -1009,9 +1128,15 @@ function getAdminFeaturePermissions(
   return permissions
 }
 
-function mapAdminUser(row: Record<string, unknown>): AdminUser {
+function mapAdminUser(
+  row: Record<string, unknown>,
+  passwordExpiryPolicy = getPasswordExpiryPolicy(),
+): AdminUser {
   const id = Number(row.id)
   const isOwner = Number(row.is_owner ?? 0) === 1
+  const createdAt = Number(row.created_at ?? 0)
+  const storedPasswordChangedAt = Number(row.password_changed_at ?? 0)
+  const passwordChangedAt = storedPasswordChangedAt > 0 ? storedPasswordChangedAt : createdAt
   const permissions = getAdminPagePermissions(id, isOwner)
   return {
     id,
@@ -1020,9 +1145,12 @@ function mapAdminUser(row: Record<string, unknown>): AdminUser {
     fullName: String(row.full_name ?? ''),
     isOwner,
     isActive: Number(row.is_active ?? 0) === 1,
-    createdAt: Number(row.created_at ?? 0),
+    createdAt,
+    passwordChangedAt,
+    passwordExpiry: calculatePasswordExpiryStatus(passwordExpiryPolicy, passwordChangedAt),
     permissions,
     featurePermissions: getAdminFeaturePermissions(id, isOwner, permissions),
+    navigationPreferences: normalizeAdminNavigationPreferences(row.navigation_preferences),
   }
 }
 
@@ -1150,13 +1278,14 @@ export function updateAdminPermissionsBatch(
 }
 
 function getAdminUserById(id: number): AdminUser | undefined {
-  const row = get('SELECT id, username, avatar, full_name, is_owner, is_active, created_at FROM admin_users WHERE id = ?', id)
+  const row = get('SELECT id, username, avatar, full_name, navigation_preferences, password_changed_at, is_owner, is_active, created_at FROM admin_users WHERE id = ?', id)
   return row ? mapAdminUser(row) : undefined
 }
 
 export function listAdminUsers(): AdminUser[] {
-  return all('SELECT id, username, avatar, full_name, is_owner, is_active, created_at FROM admin_users ORDER BY is_owner DESC, username COLLATE NOCASE')
-    .map(mapAdminUser)
+  const passwordExpiryPolicy = getPasswordExpiryPolicy()
+  return all('SELECT id, username, avatar, full_name, navigation_preferences, password_changed_at, is_owner, is_active, created_at FROM admin_users ORDER BY is_owner DESC, username COLLATE NOCASE')
+    .map(row => mapAdminUser(row, passwordExpiryPolicy))
 }
 
 function requireAdminUsername(value: unknown): string {
@@ -1167,12 +1296,78 @@ function requireAdminUsername(value: unknown): string {
   return username
 }
 
-function requireAdminPassword(value: unknown, label = '密码'): string {
+function requireAccountPassword(
+  value: unknown,
+  minLength: number,
+  maxLength: number,
+  label: string,
+): string {
   const password = String(value ?? '')
-  if (password.length < 12 || password.length > 128) {
-    throw createError({ statusCode: 400, statusMessage: `${label}长度需要为 12 至 128 位` })
+  if (password.length < minLength || password.length > maxLength) {
+    throw createError({ statusCode: 400, statusMessage: `${label}长度需要为 ${minLength} 至 ${maxLength} 位` })
   }
   return password
+}
+
+function requireAdminPassword(value: unknown, label = '密码'): string {
+  const password = String(value ?? '')
+  const passwordLength = Array.from(password).length
+  if (passwordLength < 12 || passwordLength > 128) {
+    throw createError({ statusCode: 400, statusMessage: `${label}长度需要为 12 至 128 位` })
+  }
+  const policy = getPasswordPolicy()
+  if (!passwordMeetsPolicy(password, 12, policy)) {
+    const requirements = passwordPolicyRequirementLabels(policy.minimumScore, 12).join('、')
+    const message = `${label}复杂度需要达到“${passwordStrengthLabel(policy.minimumScore)}”：${requirements}`
+    throw createError({ statusCode: 400, statusMessage: message, message })
+  }
+  return password
+}
+
+function assertAdminPasswordNotReused(userId: number, password: string, currentHash: string): void {
+  const recentHashes = all(`
+    SELECT password_hash
+    FROM admin_password_history
+    WHERE user_id = ?
+    ORDER BY changed_at DESC, id DESC
+    LIMIT 3
+  `, userId).map(row => String(row.password_hash ?? ''))
+  if ([currentHash, ...recentHashes].some(hash => hash && verifyGamePassword(password, hash))) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: '新密码不能与当前密码或最近 3 次使用过的密码相同',
+    })
+  }
+}
+
+function rotateAdminPassword(userId: number, password: string, now = Date.now()): void {
+  const row = get('SELECT password_hash FROM admin_users WHERE id = ?', userId)
+  if (!row) throw createError({ statusCode: 404, statusMessage: '后台用户不存在' })
+  const currentHash = String(row.password_hash ?? '')
+  assertAdminPasswordNotReused(userId, password, currentHash)
+  const passwordHash = hashAdminPassword(password)
+  run(
+    'INSERT INTO admin_password_history (user_id, password_hash, changed_at) VALUES (?, ?, ?)',
+    userId, currentHash, now,
+  )
+  run(
+    'UPDATE admin_users SET password_hash = ?, password_changed_at = ?, updated_at = ? WHERE id = ?',
+    passwordHash, now, now, userId,
+  )
+  run(`
+    DELETE FROM admin_password_history
+    WHERE user_id = ? AND id NOT IN (
+      SELECT id
+      FROM admin_password_history
+      WHERE user_id = ?
+      ORDER BY changed_at DESC, id DESC
+      LIMIT 3
+    )
+  `, userId, userId)
+}
+
+export function requireGamePassword(value: unknown, label = '密码'): string {
+  return requireAccountPassword(value, 4, 128, label)
 }
 
 export function createAdminUser(
@@ -1188,8 +1383,8 @@ export function createAdminUser(
   const now = Date.now()
   try {
     const result = run(
-      'INSERT INTO admin_users (username, password_hash, avatar, full_name, is_owner, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)',
-      username, hashAdminPassword(password), avatar, fullName, isOwner ? 1 : 0, now, now,
+      'INSERT INTO admin_users (username, password_hash, avatar, full_name, password_changed_at, is_owner, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)',
+      username, hashAdminPassword(password), avatar, fullName, now, isOwner ? 1 : 0, now, now,
     )
     const user = getAdminUserById(Number(result.lastInsertRowid))
     if (!user) throw createError({ statusCode: 500, statusMessage: '用户创建失败' })
@@ -1233,6 +1428,54 @@ export function updateAdminFullName(userId: number, fullNameValue: unknown): Adm
   return getAdminUserById(userId) as AdminUser
 }
 
+function requireAdminNavigationKeys(value: unknown, allowedKeys: Set<string>, label: string): string[] {
+  if (!Array.isArray(value)) {
+    throw createError({ statusCode: 400, statusMessage: `${label}格式无效` })
+  }
+  const keys: string[] = []
+  const seen = new Set<string>()
+  for (const candidate of value) {
+    const key = typeof candidate === 'string' ? candidate : ''
+    if (!allowedKeys.has(key)) {
+      throw createError({ statusCode: 400, statusMessage: '侧边栏页面权限已发生变化，请刷新后重试' })
+    }
+    if (seen.has(key)) continue
+    seen.add(key)
+    keys.push(key)
+  }
+  return keys
+}
+
+export function updateAdminNavigationPreferences(
+  userId: number,
+  orderValue: unknown,
+  hiddenValue: unknown,
+): AdminUser {
+  const current = getAdminUserById(userId)
+  if (!current) throw createError({ statusCode: 404, statusMessage: '后台用户不存在' })
+  const allowedOrder = ADMIN_NAVIGATION_ORDER.filter((key) => current.permissions[key] !== 'hidden')
+  const allowedKeys = new Set<string>(allowedOrder)
+  const order = requireAdminNavigationKeys(orderValue, allowedKeys, '侧边栏顺序')
+  const hidden = requireAdminNavigationKeys(hiddenValue, allowedKeys, '侧边栏隐藏项')
+  for (const key of allowedOrder) {
+    if (!order.includes(key)) order.push(key)
+  }
+  let allowedIndex = 0
+  const mergedOrder = current.navigationPreferences.order.map((key) => (
+    allowedKeys.has(key) ? order[allowedIndex++]! : key
+  ))
+  const lockedHidden = current.navigationPreferences.hidden.filter((key) => !allowedKeys.has(key))
+  const preferences: AdminNavigationPreferences = {
+    order: mergedOrder,
+    hidden: [...hidden, ...lockedHidden],
+  }
+  run(
+    'UPDATE admin_users SET navigation_preferences = ?, updated_at = ? WHERE id = ?',
+    JSON.stringify(preferences), Date.now(), userId,
+  )
+  return getAdminUserById(userId) as AdminUser
+}
+
 export function updateAdminUser(userId: number, changes: { password?: unknown; active?: unknown }): AdminUser {
   const current = getAdminUserById(userId)
   if (!current) throw createError({ statusCode: 404, statusMessage: '后台用户不存在' })
@@ -1250,7 +1493,7 @@ export function updateAdminUser(userId: number, changes: { password?: unknown; a
   db.exec('BEGIN IMMEDIATE')
   try {
     if (password !== undefined) {
-      run('UPDATE admin_users SET password_hash = ?, updated_at = ? WHERE id = ?', hashAdminPassword(password), Date.now(), userId)
+      rotateAdminPassword(userId, password)
       run('DELETE FROM sessions WHERE user_id = ?', userId)
     }
     if (active !== undefined) {
@@ -1278,6 +1521,7 @@ export function deleteAdminUser(userId: number): void {
   run('DELETE FROM admin_login_takeovers WHERE user_id = ?', userId)
   run('DELETE FROM admin_page_permissions WHERE user_id = ?', userId)
   run('DELETE FROM admin_feature_permissions WHERE user_id = ?', userId)
+  run('DELETE FROM admin_password_history WHERE user_id = ?', userId)
   clearAdminPresence(userId)
   run('DELETE FROM domain_mail_reads WHERE user_id = ?', userId)
   run('DELETE FROM admin_users WHERE id = ?', userId)
@@ -1352,7 +1596,7 @@ export function requireOwner(event: H3Event): AdminUser {
 
 export function getAdminUserForLogin(usernameValue: unknown, password: string): AdminUser | undefined {
   const username = String(usernameValue ?? '').trim()
-  const row = get('SELECT id, username, avatar, full_name, password_hash, is_owner, is_active, created_at FROM admin_users WHERE username = ?', username)
+  const row = get('SELECT id, username, avatar, full_name, navigation_preferences, password_hash, password_changed_at, is_owner, is_active, created_at FROM admin_users WHERE username = ?', username)
   if (!row || Number(row.is_active) !== 1 || !verifyGamePassword(password, String(row.password_hash ?? ''))) return undefined
   return mapAdminUser(row)
 }
@@ -1504,7 +1748,7 @@ export function getAuthenticatedUser(event: H3Event): AdminUser | undefined {
   return token ? getSessionUser(token) : undefined
 }
 
-export function requireAuth(event: H3Event): AdminUser {
+export function requireAuth(event: H3Event, options: { allowExpired?: boolean } = {}): AdminUser {
   const cookie = getCookie(event, ADMIN_COOKIE_NAME)
   const header = getHeader(event, 'authorization')?.replace(/^Bearer\s+/i, '')
   const token = cookie || header
@@ -1514,6 +1758,16 @@ export function requireAuth(event: H3Event): AdminUser {
   const user = getSessionUser(token)
   if (!user) {
     throw createError({ statusCode: 401, statusMessage: '会话已失效' })
+  }
+  if (user.passwordExpiry.expired && !options.allowExpired) {
+    throw createError({
+      statusCode: 403,
+      statusMessage: '后台密码已过期，请先修改密码',
+      data: {
+        code: 'ADMIN_PASSWORD_EXPIRED',
+        passwordExpiry: user.passwordExpiry,
+      },
+    })
   }
   event.context.adminUser = user
   return user
@@ -2417,10 +2671,11 @@ export interface McsmConfig {
   backupDir: string
 }
 
-/** 回给后台页面的那一份：不含 ApiKey 明文，只说明是否已配置、来自哪里。 */
+/** 回给具备 MCSM 设置查看权限的后台页面。 */
 export interface McsmAdminConfig {
   baseUrl: string
   baseUrlSource: SettingSource
+  apiKey: string
   apiKeyConfigured: boolean
   apiKeySource: SettingSource
   backupDir: string
@@ -2503,7 +2758,7 @@ function settingSource(settingKey: string, envName: string): SettingSource {
   return 'none'
 }
 
-/** 服务端调用面板时用的完整配置；ApiKey 只在服务端流转，不下发给浏览器。 */
+/** 服务端调用面板时使用的完整配置。 */
 export function getMcsmConfig(): McsmConfig {
   return {
     baseUrl: getSetting(MCSM_BASE_URL_SETTING)?.trim() || process.env[MCSM_BASE_URL_ENV]?.trim() || '',
@@ -2522,6 +2777,7 @@ export function getAdminMcsmConfig(): McsmAdminConfig {
   return {
     baseUrl: config.baseUrl,
     baseUrlSource: settingSource(MCSM_BASE_URL_SETTING, MCSM_BASE_URL_ENV),
+    apiKey: config.apiKey,
     apiKeyConfigured: Boolean(config.apiKey),
     apiKeySource: settingSource(MCSM_API_KEY_SETTING, MCSM_API_KEY_ENV),
     backupDir: config.backupDir,
@@ -2532,8 +2788,7 @@ export function getAdminMcsmConfig(): McsmAdminConfig {
 /**
  * 保存 MCSM 面板配置。
  * <p>
- * ApiKey 留空表示沿用已有那一份（页面从不回显明文，留空是「只改地址」的唯一表达方式）。
- * 首次配置必须填写，否则保存下来的地址没有任何用处。
+ * ApiKey 留空仍表示沿用已有值，兼容旧版页面和只修改地址的调用方。
  * </p>
  */
 export function setMcsmConfig(input: { baseUrl?: unknown; apiKey?: unknown; backupDir?: unknown }): McsmAdminConfig {
@@ -3905,10 +4160,7 @@ export function completeGamePasswordReset(
   if (!/^\d{6}$/.test(code)) {
     throw createError({ statusCode: 400, message: '邮箱验证码格式不正确' })
   }
-  const newPassword = String(newPasswordValue ?? '')
-  if (newPassword.length < 4 || newPassword.length > 128) {
-    throw createError({ statusCode: 400, message: '新密码长度需要为 4 至 128 位' })
-  }
+  const newPassword = requireGamePassword(newPasswordValue, '新密码')
 
   const { identity, session } = getGamePasswordResetSession(sessionIdValue)
   const now = Date.now()
@@ -4022,11 +4274,13 @@ export function initializeAdmin(
     setSetting(GAME_API_KEY_SETTING, normalizedGameApiKey)
     run('DELETE FROM sessions')
     run('DELETE FROM admin_presence')
+    run('DELETE FROM admin_password_history')
     run('DELETE FROM admin_users')
     const passwordHash = hashAdminPassword(rawPassword)
+    const now = Date.now()
     run(
-      'INSERT INTO admin_users (username, password_hash, avatar, is_owner, is_active, created_at, updated_at) VALUES (?, ?, ?, 1, 1, ?, ?)',
-      username, passwordHash, DEFAULT_ADMIN_AVATAR, Date.now(), Date.now(),
+      'INSERT INTO admin_users (username, password_hash, avatar, password_changed_at, is_owner, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, 1, 1, ?, ?)',
+      username, passwordHash, DEFAULT_ADMIN_AVATAR, now, now, now,
     )
     db.exec('COMMIT')
     return entry
@@ -4037,13 +4291,27 @@ export function initializeAdmin(
 }
 
 export function updateAdminPassword(user: AdminUser, oldPassword: string, newPassword: string): void {
-  if (!verifyUserPassword(user.username, oldPassword)) throw createError({ statusCode: 401, statusMessage: '当前密码错误' })
+  const row = get('SELECT password_hash FROM admin_users WHERE id = ? AND is_active = 1', user.id)
+  const currentHash = String(row?.password_hash ?? '')
+  if (!currentHash || !verifyGamePassword(oldPassword, currentHash)) {
+    throw createError({ statusCode: 401, statusMessage: '当前密码错误' })
+  }
   const password = requireAdminPassword(newPassword, '新密码')
-  run('UPDATE admin_users SET password_hash = ?, updated_at = ? WHERE id = ?', hashAdminPassword(password), Date.now(), user.id)
-  if (user.isOwner) deleteSetting(ADMIN_PASSWORD_SETTING)
-  run('DELETE FROM sessions WHERE user_id = ?', user.id)
-  run('DELETE FROM admin_login_takeovers WHERE user_id = ?', user.id)
-  run('DELETE FROM admin_presence WHERE user_id = ?', user.id)
+  if (password === oldPassword) {
+    throw createError({ statusCode: 400, statusMessage: '新密码不能与当前密码相同' })
+  }
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    rotateAdminPassword(user.id, password)
+    if (user.isOwner) deleteSetting(ADMIN_PASSWORD_SETTING)
+    run('DELETE FROM sessions WHERE user_id = ?', user.id)
+    run('DELETE FROM admin_login_takeovers WHERE user_id = ?', user.id)
+    run('DELETE FROM admin_presence WHERE user_id = ?', user.id)
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
 }
 
 export function verifyUserPassword(username: string, password: string): boolean {
@@ -5157,8 +5425,8 @@ export async function migrateFromJson() {
         && ADMIN_ENTRY_RE.test(configuredEntry) && !RESERVED_ADMIN_ENTRIES.has(configuredEntry.toLowerCase())) {
       const now = Date.now()
       run(
-        'INSERT INTO admin_users (username, password_hash, avatar, is_owner, is_active, created_at, updated_at) VALUES (?, ?, ?, 1, 1, ?, ?)',
-        configuredUsername, passwordHash, DEFAULT_ADMIN_AVATAR, now, now,
+        'INSERT INTO admin_users (username, password_hash, avatar, password_changed_at, is_owner, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, 1, 1, ?, ?)',
+        configuredUsername, passwordHash, DEFAULT_ADMIN_AVATAR, now, now, now,
       )
       // 多用户认证已迁移到 admin_users，删除旧设置中的历史哈希，避免保留第二个认证源。
       deleteSetting(ADMIN_PASSWORD_SETTING)

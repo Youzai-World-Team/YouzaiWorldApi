@@ -32,6 +32,7 @@ const deleteTarget = ref<AdminUser | null>(null)
 const { showToast } = useToast()
 const { apply: applyDialogAnimation } = useDialogAnimation()
 const access = useAdminAccess()
+const { policy: passwordPolicy, load: loadPasswordPolicy, validate: validatePasswordPolicy } = usePasswordPolicy()
 const canEdit = computed(() => access.user.value?.isOwner === true)
 
 function closeResetDialog() {
@@ -117,6 +118,11 @@ async function createUser() {
     showToast('密码需要为 12 至 128 位', 'error')
     return
   }
+  const passwordPolicyError = validatePasswordPolicy(password.value, 12)
+  if (passwordPolicyError) {
+    showToast(passwordPolicyError, 'error')
+    return
+  }
   if (password.value !== confirmPassword.value) {
     showToast('两次输入的密码不一致', 'error')
     return
@@ -174,6 +180,11 @@ async function resetUserPassword() {
     showToast('密码需要为 12 至 128 位', 'error')
     return
   }
+  const passwordPolicyError = validatePasswordPolicy(resetPassword.value, 12, '新密码')
+  if (passwordPolicyError) {
+    showToast(passwordPolicyError, 'error')
+    return
+  }
   try {
     await $fetch(`/api/admin/users/${resetTarget.value.id}`, { method: 'PATCH', body: { password: resetPassword.value } })
     showToast('密码已重置')
@@ -201,6 +212,7 @@ function formatDate(value: number) {
 
 onMounted(() => {
   loadUsers()
+  void loadPasswordPolicy()
   applyDialogAnimation(createDialog.value)
   applyDialogAnimation(resetDialog.value)
 })
@@ -225,7 +237,7 @@ onBeforeUnmount(() => {
     <section class="card">
       <div class="table-wrap">
         <table class="data-table">
-          <thead><tr><th>用户名</th><th>全名</th><th>状态</th><th>类型</th><th>创建时间</th><th></th></tr></thead>
+          <thead><tr><th>用户名</th><th>全名</th><th>状态</th><th>类型</th><th>创建时间</th><th class="row-actions">操作</th></tr></thead>
           <tbody>
             <tr v-for="user in users" :key="user.id">
               <td class="primary-cell">
@@ -286,6 +298,7 @@ onBeforeUnmount(() => {
           :value="password"
           @input="password = ($event.target as HTMLInputElement).value"
         ></md-outlined-text-field>
+        <PasswordStrength :password="password" :min-length="12" :required-score="passwordPolicy.enabled ? passwordPolicy.minimumScore : 0" />
         <md-outlined-text-field
           type="password"
           label="确认密码"
@@ -306,6 +319,7 @@ onBeforeUnmount(() => {
       <div slot="content" class="dialog-form">
         <p>正在重置 {{ resetTarget?.username }} 的密码。</p>
         <md-outlined-text-field type="password" label="新密码" autocomplete="new-password" :value="resetPassword" @input="resetPassword = ($event.target as HTMLInputElement).value"></md-outlined-text-field>
+        <PasswordStrength :password="resetPassword" :min-length="12" :required-score="passwordPolicy.enabled ? passwordPolicy.minimumScore : 0" />
       </div>
       <div slot="actions"><md-text-button @click="closeResetDialog">取消</md-text-button><md-text-button @click="resetUserPassword">保存</md-text-button></div>
     </md-dialog>
@@ -351,6 +365,8 @@ onBeforeUnmount(() => {
   .page-heading-actions { align-self: flex-end; }
   .page-subtitle { margin-bottom: 8px; overflow-wrap: anywhere; }
   .data-table { min-width: 620px; }
+  .data-table th:nth-child(5),
+  .data-table td:nth-child(5) { display: none; }
   .dialog-form,
   .create-dialog-form { width: 100%; min-width: 0; }
   .create-avatar-control { align-items: flex-start; }

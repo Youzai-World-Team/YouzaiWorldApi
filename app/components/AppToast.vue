@@ -18,8 +18,9 @@ const { toasts } = useToast()
 <style scoped>
 .toast-container {
   position: fixed;
-  top: 24px;
+  top: calc(var(--app-bar-height) + 12px);
   left: 50%;
+  width: min(520px, calc(100vw - 24px));
   transform: translateX(-50%);
   z-index: 100;
   display: flex;
@@ -33,13 +34,16 @@ const { toasts } = useToast()
   display: flex;
   align-items: center;
   gap: 8px;
-  max-width: 80vw;
+  max-width: 100%;
   padding: 14px 16px;
-  border-radius: 8px;
-  font-size: 14px;
+  border-radius: var(--md-sys-shape-corner-extra-small);
+  font-family: var(--md-sys-typescale-body-medium-font);
+  font-size: var(--md-sys-typescale-body-medium-size);
+  line-height: var(--md-sys-typescale-body-medium-line-height);
   background: var(--md-sys-color-inverse-surface);
   color: var(--md-sys-color-inverse-on-surface);
-  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2);
+  box-shadow: var(--md-sys-elevation-level3);
+  overflow-wrap: anywhere;
 }
 
 .toast-icon {
@@ -50,7 +54,9 @@ const { toasts } = useToast()
 
 .toast-enter-active,
 .toast-leave-active {
-  transition: all 0.25s ease;
+  transition:
+    opacity var(--md-sys-motion-duration-medium1) var(--md-sys-motion-easing-standard),
+    transform var(--md-sys-motion-duration-medium1) var(--md-sys-motion-easing-standard);
 }
 
 .toast-enter-from,

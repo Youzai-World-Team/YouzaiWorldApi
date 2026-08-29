@@ -1,5 +1,5 @@
 import { createError } from 'h3'
-import { deleteGameSessionsForUser, gameAccountWire, getGameAccount, hashGamePassword, requireFeaturePermission, upsertGameAccount } from '../../../utils/db'
+import { deleteGameSessionsForUser, gameAccountWire, getGameAccount, hashGamePassword, requireFeaturePermission, requireGamePassword, upsertGameAccount } from '../../../utils/db'
 
 export default defineEventHandler(async (event) => {
   requireFeaturePermission(event, 'game-accounts-manage', 'edit')
@@ -8,8 +8,7 @@ export default defineEventHandler(async (event) => {
   if (!account) throw createError({ statusCode: 404, statusMessage: '账户不存在' })
   const body = await readBody<any>(event)
   if (body?.password !== undefined) {
-    const password = String(body.password)
-    if (password.length < 4 || password.length > 128) throw createError({ statusCode: 400, statusMessage: '密码长度需要为 4 至 128 位' })
+    const password = requireGamePassword(body.password)
     if (!account.password) account.registrationDate = new Date().toISOString()
     account.password = hashGamePassword(password)
     account.lastIp = ''

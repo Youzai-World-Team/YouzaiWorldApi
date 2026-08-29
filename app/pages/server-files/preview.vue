@@ -37,7 +37,7 @@ function backToFiles() {
 </script>
 
 <template>
-  <div class="page">
+  <div class="page page--wide">
     <div class="page-heading">
       <div class="heading-main">
         <md-icon-button aria-label="返回文件列表" title="返回文件列表" @click="backToFiles">
@@ -68,7 +68,7 @@ function backToFiles() {
         :kind="kind"
         :size="size"
         :can-edit="canEdit"
-        editor-height="calc(100vh - 300px)"
+        editor-height="calc(100dvh - 300px)"
       />
     </section>
   </div>

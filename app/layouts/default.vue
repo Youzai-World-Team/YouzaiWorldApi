@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, onMounted, onBeforeUnmount, watch } from 'vue'
-import { adminPageKeyForPath, adminPagePermissionNotice } from '#shared/admin-page-permissions'
+import {
+  ADMIN_NAVIGATION_ORDER,
+  adminPageKeyForPath,
+  adminPagePermissionNotice,
+} from '#shared/admin-page-permissions'
 import type { ThemeMode } from '../composables/useThemeTransition'
 
 const route = useRoute()
@@ -10,9 +14,17 @@ const currentUser = access.user
 const domainMailUnread = useDomainMailUnread()
 const hasUnreadDomainMail = computed(() => (domainMailUnread.count.value ?? 0) > 0)
 const accountLabel = computed(() => currentUser.value?.fullName || currentUser.value?.username || '账户')
-const navItems = computed(() => access.pages
-  .filter((page) => access.levelForKey(page.key) !== 'hidden')
-  .map((page) => ({ ...page, to: page.route })))
+const navItems = computed(() => {
+  const preferences = currentUser.value?.navigationPreferences
+  const hidden = new Set(preferences?.hidden || [])
+  const order = preferences?.order || ADMIN_NAVIGATION_ORDER
+  const rank = new Map<string, number>(order.map((key, index) => [key, index]))
+  return access.pages
+    .filter((page) => access.levelForKey(page.key) !== 'hidden' && !hidden.has(page.key))
+    .sort((left, right) => (rank.get(left.key) ?? Number.MAX_SAFE_INTEGER)
+      - (rank.get(right.key) ?? Number.MAX_SAFE_INTEGER))
+    .map((page) => ({ ...page, to: page.route }))
+})
 const currentPageKey = computed(() => adminPageKeyForPath(route.path))
 const permissionNotice = computed(() => {
   const pageKey = currentPageKey.value
@@ -23,7 +35,8 @@ const permissionNotice = computed(() => {
   )
 })
 
-const drawerOpen = ref(true)
+const desktopDrawerOpen = useState('admin-desktop-drawer-open', () => true)
+const drawerOpen = ref(desktopDrawerOpen.value)
 const isDesktop = ref(true)
 const dark = ref(false)
 const themeMode = ref<ThemeMode>('system')
@@ -32,16 +45,32 @@ const { toggleTheme, themeIcon, themeModeLabel, themeButtonLabel } = useThemeTra
 const desktopNavList = ref<HTMLElement | null>(null)
 const collapsedNavList = ref<HTMLElement | null>(null)
 const mobileNavList = ref<HTMLElement | null>(null)
+const passwordExpiryNoticeOpen = ref(false)
+const passwordDialogOpen = ref(false)
+const openPasswordAfterNotice = ref(false)
+const passwordExpiry = computed(() => currentUser.value?.passwordExpiry)
+const passwordExpiryNoticeText = computed(() => {
+  const status = passwordExpiry.value
+  if (!status?.enabled) return ''
+  if (status.expired) return '你的后台密码已过期，必须更新密码后才能继续使用后台。'
+  if ((status.daysRemaining ?? 0) <= 1) return '你的后台密码将在 1 天内过期，是否立即更改密码？'
+  return `你的后台密码将在 ${status.daysRemaining} 天后过期，是否立即更改密码？`
+})
 
 const { load: loadEntry } = useEntry()
 
-const mq = typeof window !== 'undefined' ? window.matchMedia('(min-width: 900px)') : null
+const mq = typeof window !== 'undefined' ? window.matchMedia('(min-width: 1200px)') : null
 let unreadRefreshTimer: ReturnType<typeof setInterval> | undefined
 let presenceHeartbeatTimer: ReturnType<typeof setInterval> | undefined
 
 function syncDrawer() {
   isDesktop.value = mq ? mq.matches : true
-  drawerOpen.value = isDesktop.value
+  drawerOpen.value = isDesktop.value ? desktopDrawerOpen.value : false
+}
+
+function toggleDrawer() {
+  drawerOpen.value = !drawerOpen.value
+  if (isDesktop.value) desktopDrawerOpen.value = drawerOpen.value
 }
 
 async function onNav(e: Event, to: string) {
@@ -57,7 +86,10 @@ function onDrawerChanged(e: Event) {
   const opened = (e as CustomEvent<{ opened: boolean }>).detail.opened
   // Opening is controlled by the menu button. Ignore delayed "opened" events
   // so they cannot reopen the mobile drawer after a navigation item was chosen.
-  if (!opened) drawerOpen.value = false
+  if (!opened) {
+    drawerOpen.value = false
+    if (isDesktop.value) desktopDrawerOpen.value = false
+  }
 }
 
 function isActive(to: string) {
@@ -104,6 +136,31 @@ function onProfileUpdated(event: Event) {
   if (user?.username) access.updateProfile(user)
 }
 
+function showPasswordExpiryNotice() {
+  const status = passwordExpiry.value
+  if (status?.enabled && (status.warning || status.expired)) passwordExpiryNoticeOpen.value = true
+}
+
+function preventPasswordExpiryNoticeCancel(event: Event) {
+  event.preventDefault()
+}
+
+function dismissPasswordExpiryNotice() {
+  if (passwordExpiry.value?.expired) return
+  passwordExpiryNoticeOpen.value = false
+}
+
+function beginPasswordUpdate() {
+  openPasswordAfterNotice.value = true
+  passwordExpiryNoticeOpen.value = false
+}
+
+function onPasswordExpiryNoticeClosed() {
+  if (!openPasswordAfterNotice.value) return
+  openPasswordAfterNotice.value = false
+  passwordDialogOpen.value = true
+}
+
 onMounted(async () => {
   syncDrawer()
   mq?.addEventListener('change', syncDrawer)
@@ -111,6 +168,7 @@ onMounted(async () => {
   try {
     // 权限定义可能随版本新增，挂载布局时刷新快照，避免旧 useState 隐藏新页面。
     await access.load(true)
+    showPasswordExpiryNotice()
     await refreshDomainMailUnread()
     await heartbeatAdminPresence()
     unreadRefreshTimer = window.setInterval(() => {
@@ -140,7 +198,7 @@ watch(() => route.path, () => {
 <template>
   <div class="shell">
     <header class="app-bar">
-      <md-icon-button class="menu-button" aria-label="菜单" @click="drawerOpen = !drawerOpen">
+      <md-icon-button class="menu-button" aria-label="菜单" @click="toggleDrawer">
         <md-icon>menu</md-icon>
       </md-icon-button>
       <img class="app-logo" src="/images/uzw-tm.png" alt="悠哉世界" />
@@ -290,11 +348,32 @@ watch(() => route.path, () => {
       </main>
     </div>
   </div>
+
+  <md-dialog
+    :open="passwordExpiryNoticeOpen"
+    @cancel="preventPasswordExpiryNoticeCancel"
+    @closed="onPasswordExpiryNoticeClosed"
+  >
+    <md-icon slot="icon">{{ passwordExpiry?.expired ? 'error' : 'schedule' }}</md-icon>
+    <div slot="headline">{{ passwordExpiry?.expired ? '密码已过期' : '密码即将过期' }}</div>
+    <div slot="content" class="password-expiry-dialog-copy">{{ passwordExpiryNoticeText }}</div>
+    <div slot="actions">
+      <md-text-button v-if="!passwordExpiry?.expired" @click="dismissPasswordExpiryNotice">稍后</md-text-button>
+      <md-filled-button @click="beginPasswordUpdate">立即更改密码</md-filled-button>
+    </div>
+  </md-dialog>
+
+  <AdminPasswordDialog
+    :open="passwordDialogOpen"
+    :forced="passwordExpiry?.expired === true"
+    @close="passwordDialogOpen = false"
+  />
 </template>
 
 <style scoped>
 .shell {
   min-height: 100vh;
+  min-height: 100dvh;
 }
 
 .app-bar {
@@ -352,6 +431,7 @@ watch(() => route.path, () => {
 .body {
   display: flex;
   min-height: 100vh;
+  min-height: 100dvh;
   padding-top: 64px;
 }
 
@@ -362,6 +442,7 @@ watch(() => route.path, () => {
   top: 64px;
   align-self: flex-start;
   height: calc(100vh - 64px);
+  height: calc(100dvh - 64px);
   overflow: hidden;
   background: var(--md-sys-color-surface-container);
   border-right: 1px solid var(--md-sys-color-outline-variant);
@@ -461,7 +542,7 @@ md-navigation-drawer-modal {
   pointer-events: none;
   --md-navigation-drawer-modal-container-width: 256px;
   --md-navigation-drawer-modal-container-color: var(--md-sys-color-surface-container);
-  --md-navigation-drawer-modal-scrim-color: #000;
+  --md-navigation-drawer-modal-scrim-color: var(--md-sys-color-scrim);
   --md-navigation-drawer-modal-scrim-opacity: 0.32;
 }
 
@@ -560,7 +641,13 @@ md-list {
   --md-icon-size: 20px;
 }
 
-@media (max-width: 899px) {
+.password-expiry-dialog-copy {
+  width: min(380px, calc(100vw - 72px));
+  color: var(--md-sys-color-on-surface-variant);
+  line-height: 1.65;
+}
+
+@media (max-width: 1199px) {
   .app-bar {
     height: 56px;
     padding: 0 8px;
@@ -577,7 +664,14 @@ md-list {
 
   md-navigation-drawer-modal {
     inset: 56px 0 0;
+    height: calc(100dvh - 56px);
     --md-navigation-drawer-modal-container-width: min(320px, calc(100vw - 40px));
+  }
+}
+
+@media (max-width: 640px) {
+  .password-expiry-dialog-copy {
+    width: 100%;
   }
 }
 </style>

@@ -264,11 +264,11 @@ onBeforeUnmount(() => {
       <aside class="member-panel">
         <div class="panel-heading"><div><h2>成员状态</h2><span>{{ onlineCount }} / {{ members.length }} 在线</span></div><md-icon>group</md-icon></div>
         <div class="member-list">
-          <button type="button" class="member-item member-item--all" :class="{ 'member-item--selected': selectedMemberId === null }" @click="selectedMemberId = null">
+          <button type="button" class="member-item member-item--all" :aria-pressed="selectedMemberId === null" :class="{ 'member-item--selected': selectedMemberId === null }" @click="selectedMemberId = null">
             <span class="member-avatar member-avatar--all"><md-icon>groups</md-icon></span>
             <span class="member-copy"><strong>全部成员</strong><small>{{ overview?.records.length || 0 }} 条记录</small></span>
           </button>
-          <button v-for="member in members" :key="member.id" type="button" class="member-item" :class="{ 'member-item--selected': selectedMemberId === member.id }" @click="selectedMemberId = member.id">
+          <button v-for="member in members" :key="member.id" type="button" class="member-item" :aria-pressed="selectedMemberId === member.id" :class="{ 'member-item--selected': selectedMemberId === member.id }" @click="selectedMemberId = member.id">
             <span class="member-avatar-wrap">
               <img v-if="member.avatar" class="member-avatar" :src="member.avatar" alt="" />
               <span v-else class="member-avatar member-avatar--fallback">{{ memberInitial(member) }}</span>
@@ -287,10 +287,10 @@ onBeforeUnmount(() => {
         <div class="panel-heading records-heading"><div><h2>记录时间线</h2><span>{{ filteredRecords.length }} 条</span></div><md-icon>history</md-icon></div>
         <div class="record-controls">
           <md-outlined-text-field class="record-search" label="搜索记录" :value="search" @input="search = ($event.target as HTMLInputElement).value"><md-icon slot="leading-icon">search</md-icon></md-outlined-text-field>
-          <div class="mode-control" aria-label="记录类型">
-            <button type="button" :class="{ 'mode-button--active': mode === 'all' }" @click="mode = 'all'">全部</button>
-            <button type="button" :class="{ 'mode-button--active': mode === 'actions' }" @click="mode = 'actions'">管理操作</button>
-            <button type="button" :class="{ 'mode-button--active': mode === 'connections' }" @click="mode = 'connections'">登录活动</button>
+          <div class="mode-control" role="group" aria-label="记录类型">
+            <button type="button" :aria-pressed="mode === 'all'" :class="{ 'mode-button--active': mode === 'all' }" @click="mode = 'all'">全部</button>
+            <button type="button" :aria-pressed="mode === 'actions'" :class="{ 'mode-button--active': mode === 'actions' }" @click="mode = 'actions'">管理操作</button>
+            <button type="button" :aria-pressed="mode === 'connections'" :class="{ 'mode-button--active': mode === 'connections' }" @click="mode = 'connections'">登录活动</button>
           </div>
         </div>
 
@@ -375,9 +375,9 @@ onBeforeUnmount(() => {
 .panel-heading h2 { margin: 0; font-size: 14px; font-weight: 650; }
 .panel-heading span { color: var(--md-sys-color-on-surface-variant); font-size: 10px; }
 .panel-heading > md-icon { color: var(--md-sys-color-on-surface-variant); }
-.member-list { max-height: min(650px, calc(100vh - var(--app-bar-height) - 150px)); overflow: auto; padding: 6px; scrollbar-width: thin; }
-.member-item { width: 100%; min-height: 58px; display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 7px 9px; border: 0; border-radius: 6px; color: var(--md-sys-color-on-surface); background: transparent; font: inherit; text-align: left; cursor: pointer; transition: background-color 140ms ease, color 140ms ease; }
-.member-item:hover { background: color-mix(in srgb, var(--md-sys-color-primary) 7%, transparent); }
+.member-list { max-height: min(650px, calc(100vh - var(--app-bar-height) - 150px)); max-height: min(650px, calc(100dvh - var(--app-bar-height) - 150px)); overflow: auto; padding: 6px; scrollbar-width: thin; }
+.member-item { width: 100%; min-height: 58px; display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 7px 9px; border: 0; border-radius: 6px; color: var(--md-sys-color-on-surface); background: transparent; font: inherit; text-align: left; cursor: pointer; transition: background-color var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard), color var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard); }
+.member-item:hover { background: color-mix(in srgb, var(--md-sys-color-on-surface) var(--md-sys-state-hover-state-layer-opacity), transparent); }
 .member-item--selected { color: var(--md-sys-color-on-primary-container); background: var(--md-sys-color-primary-container); }
 .member-avatar-wrap { position: relative; width: 36px; height: 36px; }
 .member-avatar { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 50%; object-fit: cover; }
@@ -402,7 +402,7 @@ onBeforeUnmount(() => {
 .record-search { min-width: 180px; flex: 1; }
 .mode-control { height: 40px; display: inline-grid; grid-auto-flow: column; grid-auto-columns: max-content; align-items: center; padding: 3px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 7px; background: var(--md-sys-color-surface); }
 .mode-control button { height: 32px; padding: 0 11px; border: 0; border-radius: 5px; color: var(--md-sys-color-on-surface-variant); background: transparent; font-family: inherit; font-size: 11px; font-weight: 500; cursor: pointer; }
-.mode-control button:hover { color: var(--md-sys-color-on-surface); background: var(--md-sys-color-surface-container-high); }
+.mode-control button:hover { color: var(--md-sys-color-on-surface); background: color-mix(in srgb, var(--md-sys-color-on-surface) var(--md-sys-state-hover-state-layer-opacity), transparent); }
 .mode-control .mode-button--active { color: var(--md-sys-color-on-primary-container); background: var(--md-sys-color-primary-container); }
 .loading-state, .empty-state { min-height: 280px; display: grid; place-items: center; align-content: center; gap: 12px; color: var(--md-sys-color-on-surface-variant); }
 .empty-state > md-icon { --md-icon-size: 34px; }

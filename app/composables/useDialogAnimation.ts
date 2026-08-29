@@ -19,7 +19,7 @@ function installNativeBackdrop(el: HTMLElement) {
   style.dataset.patch = DIALOG_BACKDROP_STYLE
   style.textContent = `
     :host([open]) .scrim { display: none !important; }
-    dialog::backdrop { background: rgb(0 0 0 / 32%); }
+    dialog::backdrop { background: color-mix(in srgb, var(--md-sys-color-scrim) 32%, transparent); }
   `
   root.append(style)
 }

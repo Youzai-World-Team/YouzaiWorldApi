@@ -229,7 +229,7 @@ function operationPending(operation: string, player: PlayerTitles, titleId: stri
 }
 
 function setRenderType(event: Event) {
-  form.value.render_type = (event.target as HTMLSelectElement).value as RenderType
+  form.value.render_type = (event.target as HTMLElement & { value: RenderType }).value
 }
 
 onMounted(async () => {
@@ -260,12 +260,28 @@ onMounted(async () => {
       </div>
     </div>
 
-    <div class="view-switch" role="tablist" aria-label="称号管理视图">
-      <button :class="{ active: activeView === 'catalog' }" @click="activeView = 'catalog'">称号目录</button>
-      <button :class="{ active: activeView === 'players' }" @click="activeView = 'players'">玩家授权</button>
-    </div>
+    <md-tabs class="view-switch" aria-label="称号管理视图">
+      <md-primary-tab
+        id="title-catalog-tab"
+        aria-controls="title-catalog-panel"
+        :active="activeView === 'catalog'"
+        @click="activeView = 'catalog'"
+      >称号目录</md-primary-tab>
+      <md-primary-tab
+        id="title-players-tab"
+        aria-controls="title-players-panel"
+        :active="activeView === 'players'"
+        @click="activeView = 'players'"
+      >玩家授权</md-primary-tab>
+    </md-tabs>
 
-    <div v-if="activeView === 'catalog'" class="card table-card">
+    <div
+      v-if="activeView === 'catalog'"
+      id="title-catalog-panel"
+      class="card table-card view-panel"
+      role="tabpanel"
+      aria-labelledby="title-catalog-tab"
+    >
       <div v-if="loading" class="empty">加载中…</div>
       <div v-else-if="!overview.titles.length" class="empty">暂无称号</div>
       <div v-else class="table-wrap">
@@ -288,7 +304,13 @@ onMounted(async () => {
       </div>
     </div>
 
-    <template v-else>
+    <div
+      v-else
+      id="title-players-panel"
+      class="view-panel"
+      role="tabpanel"
+      aria-labelledby="title-players-tab"
+    >
       <md-outlined-text-field class="player-search" label="搜索玩家或 UUID" :value="keyword" @input="keyword = ($event.target as HTMLInputElement).value">
         <md-icon slot="leading-icon">search</md-icon>
       </md-outlined-text-field>
@@ -309,14 +331,18 @@ onMounted(async () => {
           </table>
         </div>
       </div>
-    </template>
+    </div>
 
     <md-dialog ref="editorDialog" :open="editorOpen" :aria-busy="saving ? 'true' : 'false'" @closed="closeEditor">
       <div slot="headline">{{ editTarget ? '编辑称号' : '新建称号' }}</div>
       <div slot="content" class="dialog-form title-editor">
         <md-outlined-text-field label="称号 ID" :readonly="!!editTarget" :value="form.id" @input="form.id = ($event.target as HTMLInputElement).value"></md-outlined-text-field>
         <md-outlined-text-field label="后台显示名称" :value="form.display_name" @input="form.display_name = ($event.target as HTMLInputElement).value"></md-outlined-text-field>
-        <label class="native-field"><span>渲染类型</span><select :value="form.render_type" @change="setRenderType"><option value="text">文字</option><option value="texture">贴图</option><option value="text_texture">文字 + 贴图</option></select></label>
+        <md-outlined-select label="渲染类型" :value="form.render_type" @change="setRenderType">
+          <md-select-option value="text" :selected="form.render_type === 'text'"><div slot="headline">文字</div></md-select-option>
+          <md-select-option value="texture" :selected="form.render_type === 'texture'"><div slot="headline">贴图</div></md-select-option>
+          <md-select-option value="text_texture" :selected="form.render_type === 'text_texture'"><div slot="headline">文字 + 贴图</div></md-select-option>
+        </md-outlined-select>
         <md-outlined-text-field label="回退文字" :value="form.text_content" @input="form.text_content = ($event.target as HTMLInputElement).value"></md-outlined-text-field>
         <div class="two-columns">
           <md-outlined-text-field label="文字颜色" :value="form.text_color" @input="form.text_color = ($event.target as HTMLInputElement).value"></md-outlined-text-field>
@@ -361,18 +387,17 @@ onMounted(async () => {
 }
 
 .page-heading .page-title { margin-bottom: 18px; }
-.heading-actions, .actions, .grant-actions, .check-row, .two-columns, .unequip-row { display: flex; align-items: center; gap: 8px; }
+.heading-actions, .grant-actions, .check-row, .two-columns, .unequip-row { display: flex; align-items: center; gap: 8px; }
 .heading-actions { flex: 0 0 auto; }
-.view-switch { display: inline-grid; grid-template-columns: repeat(2, minmax(110px, 1fr)); padding: 3px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 8px; margin-bottom: 18px; }
-.view-switch button { min-height: 36px; border: 0; background: transparent; color: var(--md-sys-color-on-surface-variant); padding: 8px 14px; border-radius: 6px; cursor: pointer; font: inherit; }
-.view-switch button.active { background: var(--md-sys-color-secondary-container); color: var(--md-sys-color-on-secondary-container); font-weight: 600; }
+.view-switch { width: min(320px, 100%); margin-bottom: 18px; }
+.view-panel { min-width: 0; }
 .table-card { overflow: hidden; }
 .table-wrap { width: 100%; max-width: 100%; overflow: auto; }
 table { width: 100%; min-width: 720px; border-collapse: collapse; }
 th, td { text-align: left; padding: 13px 16px; border-bottom: 1px solid var(--md-sys-color-outline-variant); vertical-align: middle; }
 th { font-size: 13px; color: var(--md-sys-color-on-surface-variant); font-weight: 600; white-space: nowrap; }
 .actions-column { width: 64px; }
-.actions { justify-content: flex-end; }
+.actions { text-align: right; }
 .title-image { display: block; max-width: 116px; height: 22px; object-fit: contain; object-position: left center; image-rendering: pixelated; }
 .text-preview { white-space: nowrap; }
 .name { font-weight: 600; }
@@ -388,8 +413,6 @@ th { font-size: 13px; color: var(--md-sys-color-on-surface-variant); font-weight
 .two-columns > * { flex: 1; min-width: 0; }
 .check-row { flex-wrap: wrap; }
 .check-row label { display: flex; align-items: center; gap: 3px; }
-.native-field { display: grid; gap: 6px; color: var(--md-sys-color-on-surface-variant); font-size: 12px; }
-.native-field select { width: 100%; height: var(--app-control-height); border: 1px solid var(--md-sys-color-outline); border-radius: 4px; background: var(--md-sys-color-surface); color: var(--md-sys-color-on-surface); padding: 0 12px; font: inherit; }
 .grant-list { width: min(560px, calc(100vw - 72px)); min-width: 0; display: grid; gap: 0; max-height: 65vh; overflow: auto; }
 .unequip-row, .grant-row { justify-content: space-between; padding: 12px 2px; border-bottom: 1px solid var(--md-sys-color-outline-variant); }
 .grant-row { display: flex; align-items: center; gap: 16px; }
@@ -411,6 +434,7 @@ th { font-size: 13px; color: var(--md-sys-color-on-surface-variant); font-weight
   .two-columns { display: grid; grid-template-columns: minmax(0, 1fr); }
   .dialog-form, .grant-list { width: 100%; }
   .grant-row { align-items: flex-start; }
+  .grant-row > div:first-child { flex: 1; }
   .title-chip { margin-top: 4px; }
 }
 </style>

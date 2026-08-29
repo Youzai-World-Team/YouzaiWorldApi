@@ -1,10 +1,15 @@
 <script setup lang="ts">
 import { computed, ref, onMounted } from 'vue'
+import {
+  ADMIN_NAVIGATION_ORDER,
+  ADMIN_PAGE_DEFINITIONS,
+  normalizeAdminNavigationPreferences,
+  type AdminNavigationPreferences,
+  type AdminPagePermissionLevel,
+} from '#shared/admin-page-permissions'
+import type { PasswordExpiryStatus } from '#shared/password-policy'
 
-const oldPassword = ref('')
-const newPassword = ref('')
-const confirmPassword = ref('')
-const updating = ref(false)
+const passwordDialogOpen = ref(false)
 
 const fileInput = ref<HTMLInputElement | null>(null)
 const uploadingAvatar = ref(false)
@@ -19,6 +24,16 @@ interface CurrentUser {
   avatar: string
   fullName: string
   isOwner: boolean
+  passwordExpiry: PasswordExpiryStatus
+  permissions: Record<string, AdminPagePermissionLevel>
+  navigationPreferences: AdminNavigationPreferences
+}
+
+interface AccountNavigationItem {
+  key: string
+  label: string
+  icon: string
+  hidden: boolean
 }
 
 interface AccountDevice {
@@ -50,10 +65,27 @@ const devices = ref<AccountDevice[]>([])
 const devicesLoading = ref(false)
 const appInfo = ref<AppInfo | null>(null)
 const appInfoLoading = ref(false)
+const navigationItems = ref<AccountNavigationItem[]>([])
+const savingNavigation = ref(false)
+const draggingNavigationKey = ref('')
 const displayName = computed(() => currentUser.value?.fullName || currentUser.value?.username || '账户')
-const canChangePassword = computed(() => access.featureLevelForKey('account-password') === 'edit')
+const visibleNavigationCount = computed(() => navigationItems.value.filter((item) => !item.hidden).length)
+const canChangePassword = computed(() => (
+  access.featureLevelForKey('account-password') === 'edit' || currentUser.value?.passwordExpiry.expired === true
+))
 const canChangeFullName = computed(() => access.featureLevelForKey('account-full-name') === 'edit')
 const canChangeAvatar = computed(() => access.featureLevelForKey('account-avatar') === 'edit')
+const passwordExpiryLabel = computed(() => {
+  const status = currentUser.value?.passwordExpiry
+  if (!status?.enabled) return ''
+  if (status.expired) return '密码已过期'
+  if ((status.daysRemaining ?? 0) <= 1) return '密码将在 1 天内过期'
+  return `密码还有 ${status.daysRemaining} 天过期`
+})
+const passwordExpiryDate = computed(() => {
+  const expiresAt = currentUser.value?.passwordExpiry.expiresAt
+  return expiresAt ? new Date(expiresAt).toLocaleString('zh-CN') : ''
+})
 useHead({ title: '此账户' })
 
 onMounted(async () => {
@@ -62,36 +94,103 @@ onMounted(async () => {
     currentUser.value = result.user
     access.updateProfile(result.user)
     fullNameInput.value = result.user.fullName || ''
+    syncNavigationItems(result.user)
   } catch {}
+  if (currentUser.value?.passwordExpiry.expired) return
   await Promise.all([loadDevices(), loadAppInfo()])
 })
 
-function onInput(field: 'old' | 'new' | 'confirm', e: Event) {
-  const v = (e.target as HTMLInputElement).value
-  if (field === 'old') oldPassword.value = v
-  else if (field === 'new') newPassword.value = v
-  else confirmPassword.value = v
+function syncNavigationItems(user: CurrentUser) {
+  const preferences = normalizeAdminNavigationPreferences(user.navigationPreferences)
+  const hidden = new Set(preferences.hidden)
+  const pageMap = new Map(ADMIN_PAGE_DEFINITIONS.map((page) => [page.key, page]))
+  const items: AccountNavigationItem[] = []
+  for (const key of preferences.order) {
+    const page = pageMap.get(key)
+    if (!page || user.permissions[key] === 'hidden') continue
+    items.push({ key, label: page.label, icon: page.icon, hidden: hidden.has(key) })
+  }
+  navigationItems.value = items
 }
 
-async function updatePassword() {
-  if (updating.value || !canChangePassword.value) return
-  if (!newPassword.value || newPassword.value !== confirmPassword.value) {
-    showToast('两次输入的新密码不一致', 'error')
-    return
+function moveNavigationItem(index: number, offset: -1 | 1) {
+  const target = index + offset
+  if (target < 0 || target >= navigationItems.value.length) return
+  const items = [...navigationItems.value]
+  const [item] = items.splice(index, 1)
+  if (!item) return
+  items.splice(target, 0, item)
+  navigationItems.value = items
+}
+
+function setNavigationItemVisibility(key: string, event: Event) {
+  const selected = Boolean((event.target as HTMLElement & { selected?: boolean }).selected)
+  navigationItems.value = navigationItems.value.map((item) => (
+    item.key === key ? { ...item, hidden: !selected } : item
+  ))
+}
+
+function resetNavigationPreferences() {
+  const user = currentUser.value
+  if (!user) return
+  const pageMap = new Map(ADMIN_PAGE_DEFINITIONS.map((page) => [page.key, page]))
+  navigationItems.value = ADMIN_NAVIGATION_ORDER.flatMap((key) => {
+    const page = pageMap.get(key)
+    return page && user.permissions[key] !== 'hidden'
+      ? [{ key, label: page.label, icon: page.icon, hidden: false }]
+      : []
+  })
+}
+
+function onNavigationDragStart(key: string, event: Event) {
+  draggingNavigationKey.value = key
+  const dataTransfer = (event as DragEvent).dataTransfer
+  if (dataTransfer) {
+    dataTransfer.effectAllowed = 'move'
+    dataTransfer.setData('text/plain', key)
   }
-  updating.value = true
+}
+
+function onNavigationDrop(targetKey: string) {
+  const sourceKey = draggingNavigationKey.value
+  draggingNavigationKey.value = ''
+  if (!sourceKey || sourceKey === targetKey) return
+  const items = [...navigationItems.value]
+  const sourceIndex = items.findIndex((item) => item.key === sourceKey)
+  const targetIndex = items.findIndex((item) => item.key === targetKey)
+  if (sourceIndex < 0 || targetIndex < 0) return
+  const [item] = items.splice(sourceIndex, 1)
+  if (!item) return
+  items.splice(targetIndex, 0, item)
+  navigationItems.value = items
+}
+
+async function saveNavigationPreferences() {
+  if (savingNavigation.value || !currentUser.value) return
+  savingNavigation.value = true
   try {
-    const entry = await loadEntry()
-    await $fetch('/api/auth/password', {
+    const result = await $fetch<{ user: CurrentUser }>('/api/auth/navigation', {
       method: 'POST',
-      body: { oldPassword: oldPassword.value, newPassword: newPassword.value }
+      body: {
+        order: navigationItems.value.map((item) => item.key),
+        hidden: navigationItems.value.filter((item) => item.hidden).map((item) => item.key),
+      },
     })
-    await navigateTo('/' + entry)
+    currentUser.value = result.user
+    syncNavigationItems(result.user)
+    access.updateProfile(result.user)
+    window.dispatchEvent(new CustomEvent('admin-profile-updated', { detail: result.user }))
+    showToast('侧边栏偏好已保存')
   } catch (e: any) {
-    showToast(e?.data?.statusMessage || '更新失败', 'error')
+    showToast(e?.data?.statusMessage || '侧边栏偏好保存失败', 'error')
   } finally {
-    updating.value = false
+    savingNavigation.value = false
   }
+}
+
+function openPasswordDialog() {
+  if (!canChangePassword.value) return
+  passwordDialogOpen.value = true
 }
 
 function pickAvatar() {
@@ -283,29 +382,115 @@ async function logout() {
       <input ref="fileInput" class="hidden-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif" @change="onAvatarChange" />
     </section>
 
-    <section v-if="canChangePassword" class="card account-card">
-      <h2 class="card-title">更新密码</h2>
-      <div class="form">
-        <md-outlined-text-field
-          type="password"
-          label="当前密码"
-          :value="oldPassword"
-          @input="onInput('old', $event)"
-        ></md-outlined-text-field>
-        <md-outlined-text-field
-          type="password"
-          label="新密码"
-          :value="newPassword"
-          @input="onInput('new', $event)"
-        ></md-outlined-text-field>
-        <md-outlined-text-field
-          type="password"
-          label="确认新密码"
-          :value="confirmPassword"
-          @input="onInput('confirm', $event)"
-        ></md-outlined-text-field>
-        <md-filled-button :disabled="updating" @click="updatePassword">
-          {{ updating ? '更新中…' : '更新密码' }}
+    <section class="card account-card">
+      <h2 class="card-title">账户操作</h2>
+      <div class="account-operation-actions">
+        <md-text-button v-if="canChangePassword" @click="openPasswordDialog">
+          <md-icon slot="icon">lock_reset</md-icon>
+          更新密码
+        </md-text-button>
+        <md-text-button class="logout-btn" @click="logout">
+          <md-icon slot="icon">logout</md-icon>
+          登出账户
+        </md-text-button>
+      </div>
+      <div
+        v-if="currentUser?.passwordExpiry.enabled"
+        class="password-expiry-status"
+        :class="{
+          'password-expiry-status--warning': currentUser.passwordExpiry.warning,
+          'password-expiry-status--expired': currentUser.passwordExpiry.expired,
+        }"
+      >
+        <md-icon>{{ currentUser.passwordExpiry.expired ? 'error' : 'schedule' }}</md-icon>
+        <div>
+          <strong>{{ passwordExpiryLabel }}</strong>
+          <time
+            v-if="currentUser.passwordExpiry.expiresAt"
+            :datetime="new Date(currentUser.passwordExpiry.expiresAt).toISOString()"
+          >
+            到期时间：{{ passwordExpiryDate }}
+          </time>
+        </div>
+      </div>
+    </section>
+
+    <section class="card account-card navigation-preferences-card">
+      <div class="card-heading-row">
+        <div>
+          <h2 class="card-title">侧边栏</h2>
+          <span>{{ visibleNavigationCount }} / {{ navigationItems.length }} 个条目显示</span>
+        </div>
+        <md-icon-button
+          aria-label="恢复默认侧边栏"
+          title="恢复默认排序和显示"
+          :disabled="savingNavigation || !navigationItems.length"
+          @click="resetNavigationPreferences"
+        >
+          <md-icon>restart_alt</md-icon>
+        </md-icon-button>
+      </div>
+
+      <div v-if="navigationItems.length" class="navigation-preference-list">
+        <article
+          v-for="(item, index) in navigationItems"
+          :key="item.key"
+          class="navigation-preference-item"
+          :class="{
+            'navigation-preference-item--hidden': item.hidden,
+            'navigation-preference-item--dragging': draggingNavigationKey === item.key,
+          }"
+          @dragover.prevent
+          @drop.prevent="onNavigationDrop(item.key)"
+        >
+          <span
+            class="navigation-drag-handle"
+            draggable="true"
+            title="拖动排序"
+            @dragstart="onNavigationDragStart(item.key, $event)"
+            @dragend="draggingNavigationKey = ''"
+          >
+            <md-icon>drag_indicator</md-icon>
+          </span>
+          <span class="navigation-preference-icon"><md-icon>{{ item.icon }}</md-icon></span>
+          <strong>{{ item.label }}</strong>
+          <div class="navigation-item-actions">
+            <md-icon-button
+              :aria-label="`上移${item.label}`"
+              title="上移"
+              :disabled="index === 0"
+              @click="moveNavigationItem(index, -1)"
+            >
+              <md-icon>arrow_upward</md-icon>
+            </md-icon-button>
+            <md-icon-button
+              :aria-label="`下移${item.label}`"
+              title="下移"
+              :disabled="index === navigationItems.length - 1"
+              @click="moveNavigationItem(index, 1)"
+            >
+              <md-icon>arrow_downward</md-icon>
+            </md-icon-button>
+            <md-switch
+              :selected="!item.hidden"
+              :aria-label="`在侧边栏显示${item.label}`"
+              @change="setNavigationItemVisibility(item.key, $event)"
+            ></md-switch>
+          </div>
+        </article>
+      </div>
+      <div v-else class="navigation-preference-empty">
+        <md-icon>visibility_off</md-icon>
+        <span>暂无可配置的侧边栏条目</span>
+      </div>
+
+      <div class="navigation-preference-actions">
+        <md-filled-button
+          :disabled="savingNavigation || !navigationItems.length"
+          @click="saveNavigationPreferences"
+        >
+          <md-icon slot="icon">save</md-icon>
+          {{ savingNavigation ? '保存中…' : '保存侧边栏' }}
         </md-filled-button>
       </div>
     </section>
@@ -346,14 +531,6 @@ async function logout() {
       <div v-else class="devices-empty"><md-icon>devices</md-icon><span>暂无登录设备记录</span></div>
     </section>
 
-    <section class="card account-card">
-      <h2 class="card-title">账户操作</h2>
-      <md-text-button class="logout-btn" @click="logout">
-        <md-icon slot="icon">logout</md-icon>
-        登出账户
-      </md-text-button>
-    </section>
-
     <section class="card account-card app-info-card">
       <div class="card-heading-row">
         <h2 class="card-title">关于YouzaiWorld API</h2>
@@ -390,6 +567,12 @@ async function logout() {
       </dl>
     </section>
     </div>
+
+    <AdminPasswordDialog
+      v-if="canChangePassword"
+      :open="passwordDialogOpen"
+      @close="passwordDialogOpen = false"
+    />
   </div>
 </template>
 
@@ -482,13 +665,158 @@ async function logout() {
   width: 100%;
 }
 
-.form {
+.navigation-preference-list {
+  display: grid;
+  margin-top: 16px;
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.navigation-preference-item {
+  min-width: 0;
+  min-height: 56px;
+  display: grid;
+  grid-template-columns: 24px 36px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  transition: background-color 160ms ease, opacity 160ms ease;
+}
+
+.navigation-preference-item--hidden strong,
+.navigation-preference-item--hidden .navigation-preference-icon {
+  color: var(--md-sys-color-on-surface-variant);
+  opacity: 0.68;
+}
+
+.navigation-preference-item--dragging {
+  opacity: 0.48;
+  background: var(--md-sys-color-surface-container-high);
+}
+
+.navigation-drag-handle {
+  width: 24px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  color: var(--md-sys-color-on-surface-variant);
+  cursor: grab;
+}
+
+.navigation-drag-handle:active {
+  cursor: grabbing;
+}
+
+.navigation-drag-handle md-icon {
+  --md-icon-size: 20px;
+}
+
+.navigation-preference-icon {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--md-sys-color-on-surface-variant);
+  background: var(--md-sys-color-surface-container-high);
+}
+
+.navigation-preference-icon md-icon {
+  --md-icon-size: 19px;
+}
+
+.navigation-preference-item strong {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.navigation-item-actions {
   display: flex;
-  flex-direction: column;
-  gap: 16px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0;
+}
+
+.navigation-item-actions md-icon-button {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+}
+
+.navigation-item-actions md-switch {
+  margin-left: 4px;
+}
+
+.navigation-preference-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.navigation-preference-empty {
+  min-height: 96px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 12px;
+}
+
+.navigation-preference-empty md-icon {
+  --md-icon-size: 28px;
+}
+
+.account-operation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
 }
 
 .logout-btn {
+  color: var(--md-sys-color-error);
+}
+
+.password-expiry-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.password-expiry-status > md-icon {
+  flex: 0 0 auto;
+  --md-icon-size: 20px;
+}
+
+.password-expiry-status > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.password-expiry-status strong {
+  color: var(--md-sys-color-on-surface);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.password-expiry-status time {
+  font-size: 11px;
+}
+
+.password-expiry-status--warning,
+.password-expiry-status--warning strong {
+  color: var(--act-warning);
+}
+
+.password-expiry-status--expired,
+.password-expiry-status--expired strong {
   color: var(--md-sys-color-error);
 }
 
@@ -534,10 +862,6 @@ async function logout() {
     gap: 12px;
   }
 
-  .form md-filled-button {
-    width: 100%;
-  }
-
   .profile-row {
     align-items: flex-start;
   }
@@ -552,6 +876,26 @@ async function logout() {
   }
 
   .full-name-form md-filled-button {
+    width: 100%;
+  }
+
+  .navigation-preference-item {
+    grid-template-columns: 20px 32px minmax(0, 1fr);
+    row-gap: 2px;
+    padding: 8px 0;
+  }
+
+  .navigation-preference-icon {
+    width: 32px;
+    height: 32px;
+  }
+
+  .navigation-item-actions {
+    grid-column: 2 / -1;
+    justify-self: end;
+  }
+
+  .navigation-preference-actions md-filled-button {
     width: 100%;
   }
 

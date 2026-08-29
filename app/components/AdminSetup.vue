@@ -18,6 +18,7 @@ const dark = ref(false)
 const themeMode = ref<ThemeMode>('system')
 const { toggleTheme, themeIcon, themeModeLabel, themeButtonLabel } = useThemeTransition(dark, themeMode)
 const { showToast } = useToast()
+const { policy: passwordPolicy, load: loadPasswordPolicy, validate: validatePasswordPolicy } = usePasswordPolicy()
 const reservedEntries = new Set([
   'login', 'account', 'activity', 'donors', 'bans', 'updates', 'game-accounts', 'game-cosmetics',
   'game-account-email-templates', 'admin-users', 'audit-logs', 'chat', 'mail', 'settings', 'permissions',
@@ -25,6 +26,7 @@ const reservedEntries = new Set([
 ])
 
 onMounted(async () => {
+  void loadPasswordPolicy()
   try {
     const state = await $fetch<{ turnstile?: { siteKey?: string; hostnames?: string } }>('/api/auth/setup')
     if (state.turnstile?.siteKey) turnstileSiteKey.value = state.turnstile.siteKey
@@ -46,6 +48,11 @@ async function submit() {
   }
   if (password.value.length < 12 || password.value.length > 128) {
     showToast('后台密码需要为 12 至 128 位', 'error')
+    return
+  }
+  const passwordPolicyError = validatePasswordPolicy(password.value, 12, '后台密码')
+  if (passwordPolicyError) {
+    showToast(passwordPolicyError, 'error')
     return
   }
   if (password.value !== confirmPassword.value) {
@@ -177,7 +184,6 @@ async function submit() {
           <md-outlined-text-field
             :type="showPassword ? 'text' : 'password'"
             label="后台密码"
-            supporting-text="12 至 128 位"
             autocomplete="new-password"
             :value="password"
             @input="password = ($event.target as HTMLInputElement).value"
@@ -186,6 +192,11 @@ async function submit() {
             <md-icon>{{ showPassword ? 'visibility_off' : 'visibility' }}</md-icon>
           </md-icon-button>
         </div>
+        <PasswordStrength
+          :password="password"
+          :min-length="12"
+          :required-score="passwordPolicy.enabled ? passwordPolicy.minimumScore : 0"
+        />
 
         <md-outlined-text-field
           :type="showPassword ? 'text' : 'password'"
@@ -207,6 +218,7 @@ async function submit() {
 <style scoped>
 .setup-page {
   min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
   place-items: center;
   padding: 24px;
@@ -269,7 +281,7 @@ md-filled-button {
 @media (max-width: 480px) {
   .setup-page {
     place-items: start center;
-    padding: 72px 16px 24px;
+    padding: 72px 16px max(24px, env(safe-area-inset-bottom));
   }
 
   .theme-toggle {

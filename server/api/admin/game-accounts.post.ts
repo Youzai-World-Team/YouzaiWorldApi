@@ -1,15 +1,13 @@
 import { createError } from 'h3'
-import { gameAccountWire, getGameAccount, hashGamePassword, requireFeaturePermission, upsertGameAccount } from '../../utils/db'
+import { gameAccountWire, getGameAccount, hashGamePassword, requireFeaturePermission, requireGamePassword, upsertGameAccount } from '../../utils/db'
 import { offlinePlayerUuid, requireGameUsername } from '../../utils/game-input'
 
 export default defineEventHandler(async (event) => {
   requireFeaturePermission(event, 'game-accounts-manage', 'edit')
   const body = await readBody<any>(event)
   const username = requireGameUsername(body?.username)
-  const password = String(body?.password || '')
-  if (!/^[A-Za-z0-9_]{1,16}$/.test(username) || password.length < 4 || password.length > 128) {
-    throw createError({ statusCode: 400, statusMessage: '玩家代号或密码不符合要求' })
-  }
+  const password = requireGamePassword(body?.password)
+  if (!/^[A-Za-z0-9_]{1,16}$/.test(username)) throw createError({ statusCode: 400, statusMessage: '玩家代号不符合要求' })
   const uuid = offlinePlayerUuid(username)
   const current = getGameAccount(username)
   if (current?.password) throw createError({ statusCode: 409, statusMessage: '账户已存在' })

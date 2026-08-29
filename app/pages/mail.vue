@@ -320,7 +320,7 @@ function attachmentDetail(attachment: MailAttachment) {
 </script>
 
 <template>
-  <div class="page">
+  <div class="page page--wide">
     <div class="page-heading">
       <h1 class="page-title">服内邮件</h1>
       <div class="heading-actions">
@@ -360,7 +360,7 @@ function attachmentDetail(attachment: MailAttachment) {
               <th>已领取</th>
               <th>发送时间</th>
               <th>有效期</th>
-              <th></th>
+              <th class="cell-actions">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -393,7 +393,7 @@ function attachmentDetail(attachment: MailAttachment) {
       </div>
     </section>
 
-    <md-dialog ref="detailDialog" :open="detailOpen" @closed="onDetailClosed">
+    <md-dialog ref="detailDialog" class="mail-detail-dialog" :open="detailOpen" @closed="onDetailClosed">
       <div slot="headline">{{ detail?.title || '邮件详情' }}</div>
       <div slot="content">
         <p v-if="detailLoading" class="empty">加载中…</p>
@@ -589,6 +589,7 @@ function attachmentDetail(attachment: MailAttachment) {
 .badge-announcement { background: var(--md-sys-color-primary-container); color: var(--md-sys-color-on-primary-container); }
 .badge-expired { margin-left: 6px; background: var(--md-sys-color-error-container); color: var(--md-sys-color-on-error-container); }
 .badge-hidden { margin-left: 6px; }
+.mail-detail-dialog { --md-dialog-container-width: min(760px, calc(100vw - 32px)); --md-dialog-container-max-width: min(760px, calc(100vw - 32px)); }
 .detail { width: min(680px, 100%); min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px 20px; margin: 0 0 8px; }
 .meta dt { color: var(--md-sys-color-on-surface-variant); font-size: 12px; }
@@ -622,5 +623,14 @@ function attachmentDetail(attachment: MailAttachment) {
   .search { width: 100%; min-width: 0; flex-basis: 100%; }
   .meta { grid-template-columns: minmax(0, 1fr); }
   .inner-table { min-width: 440px; }
+  .data-table:not(.inner-table) { min-width: 680px; }
+  .data-table:not(.inner-table) th:nth-child(3),
+  .data-table:not(.inner-table) td:nth-child(3),
+  .data-table:not(.inner-table) th:nth-child(5),
+  .data-table:not(.inner-table) td:nth-child(5),
+  .data-table:not(.inner-table) th:nth-child(7),
+  .data-table:not(.inner-table) td:nth-child(7),
+  .data-table:not(.inner-table) th:nth-child(9),
+  .data-table:not(.inner-table) td:nth-child(9) { display: none; }
 }
 </style>

@@ -7,6 +7,7 @@ import {
 } from '../../utils/db'
 
 export default defineEventHandler((event) => {
+  setResponseHeader(event, 'Cache-Control', 'no-store')
   const user = requireAuth(event)
 
   const canViewAdmin = adminFeatureAllows(user, 'settings-turnstile-admin', 'view')
@@ -16,15 +17,16 @@ export default defineEventHandler((event) => {
   const chat = getChatTurnstileConfig()
   const chatOverrides = getChatTurnstileOverrides()
 
-  // 只回显公开信息与「是否已配置服务端密钥」，密钥本身永不出网。
   return {
     admin: canViewAdmin ? {
       siteKey: admin.siteKey,
+      secret: admin.secret,
       hostnames: admin.hostnames,
       secretConfigured: !!admin.secret,
     } : null,
     chat: canViewChat ? {
       siteKey: chat.siteKey,
+      secret: chatOverrides.secret,
       hostnames: chat.hostnames,
       secretConfigured: !!chat.secret,
       // 未单独配置时聊天区会复用后台那套，这通常就是

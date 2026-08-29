@@ -12,6 +12,11 @@ export interface AdminPageDefinition {
   maxNonOwnerLevel?: Exclude<AdminPagePermissionLevel, 'edit'>
 }
 
+export interface AdminNavigationPreferences {
+  order: string[]
+  hidden: string[]
+}
+
 export interface AdminFeatureDefinition {
   key: string
   label: string
@@ -87,6 +92,60 @@ export const ADMIN_PAGE_DEFINITIONS: AdminPageDefinition[] = [
     maxNonOwnerLevel: 'view',
   },
 ]
+
+export const ADMIN_NAVIGATION_ORDER = [
+  'dashboard',
+  'status',
+  'activity',
+  'server-manage',
+  'server-files',
+  'game-accounts',
+  'bans',
+  'game-cosmetics',
+  'game-titles',
+  'chat',
+  'mail',
+  'domain-mail',
+  'donors',
+  'downloads',
+  'updates',
+  'audit-logs',
+  'admin-users',
+  'permissions',
+  'settings',
+] as const
+
+const ADMIN_NAVIGATION_KEYS = new Set<string>(ADMIN_NAVIGATION_ORDER)
+
+export function normalizeAdminNavigationPreferences(value: unknown): AdminNavigationPreferences {
+  let source = value
+  if (typeof source === 'string' && source.trim()) {
+    try {
+      source = JSON.parse(source)
+    } catch {
+      source = null
+    }
+  }
+  const record = source && typeof source === 'object'
+    ? source as { order?: unknown; hidden?: unknown }
+    : {}
+  const requestedOrder = Array.isArray(record.order) ? record.order : []
+  const requestedHidden = Array.isArray(record.hidden) ? record.hidden : []
+  const order: string[] = []
+  const seen = new Set<string>()
+  for (const value of requestedOrder) {
+    const key = typeof value === 'string' ? value : ''
+    if (!ADMIN_NAVIGATION_KEYS.has(key) || seen.has(key)) continue
+    seen.add(key)
+    order.push(key)
+  }
+  for (const key of ADMIN_NAVIGATION_ORDER) {
+    if (!seen.has(key)) order.push(key)
+  }
+  const hidden = [...new Set(requestedHidden
+    .filter((key): key is string => typeof key === 'string' && ADMIN_NAVIGATION_KEYS.has(key)))]
+  return { order, hidden }
+}
 
 export const ADMIN_FEATURE_DEFINITIONS: AdminFeatureDefinition[] = [
   {

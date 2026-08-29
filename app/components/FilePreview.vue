@@ -556,7 +556,9 @@ watch(() => [props.path, props.kind], () => {
 .zip-type-icon { --md-icon-size: 20px; color: var(--md-sys-color-on-surface-variant); flex-shrink: 0; }
 .zip-type-icon--dir { color: var(--md-sys-color-primary); }
 .zip-name { min-width: 0; font-family: 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; overflow-wrap: anywhere; }
-.zip-actions { width: 48px; text-align: right; }
+.zip-actions { position: sticky; right: 0; width: 48px; text-align: right; background: var(--md-sys-color-surface-container-lowest); box-shadow: -8px 0 10px -10px var(--md-sys-color-shadow); }
+.zip-row:hover .zip-actions { background: var(--md-sys-color-surface-container); }
+.zip-row--dir:hover .zip-actions { background: color-mix(in srgb, var(--md-sys-color-secondary-container) 55%, var(--md-sys-color-surface-container-lowest)); }
 .zip-actions md-icon { --md-icon-size: 20px; color: var(--md-sys-color-on-surface-variant); }
 .xlsx-preview { display: flex; flex-direction: column; gap: 20px; }
 @media (max-width: 640px) {
