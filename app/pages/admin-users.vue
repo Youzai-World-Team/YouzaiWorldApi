@@ -247,6 +247,7 @@ onBeforeUnmount(() => {
             </tr>
           </tbody>
         </table>
+        <p v-if="loading" class="empty">加载中…</p>
         <p v-if="!loading && users.length === 0" class="empty">暂无后台用户</p>
       </div>
     </section>

@@ -509,8 +509,8 @@ onBeforeUnmount(() => {
 .online-admin-identity > div { min-width: 0; display: flex; align-items: center; gap: 7px; }
 .online-admin-identity strong, .online-admin-identity small, .online-admin-page span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .online-admin-identity strong { font-size: 12px; }
-.online-admin-identity > div span { flex: 0 0 auto; padding: 2px 5px; border-radius: 4px; color: var(--md-sys-color-on-primary-container); background: var(--md-sys-color-primary-container); font-size: 8px; font-weight: 700; }
-.online-admin-identity small, .online-admin-item time { color: var(--md-sys-color-on-surface-variant); font-size: 9px; }
+.online-admin-identity > div span { flex: 0 0 auto; padding: 2px 5px; border-radius: 4px; color: var(--md-sys-color-on-primary-container); background: var(--md-sys-color-primary-container); font-size: 10px; font-weight: 700; }
+.online-admin-identity small, .online-admin-item time { color: var(--md-sys-color-on-surface-variant); font-size: 10px; }
 .online-admin-page { min-width: 0; display: flex; align-items: center; gap: 6px; color: var(--md-sys-color-on-surface-variant); font-size: 10px; }
 .online-admin-page md-icon { flex: 0 0 auto; --md-icon-size: 16px; }
 .online-admin-item time { white-space: nowrap; }
@@ -591,9 +591,9 @@ onBeforeUnmount(() => {
 .session-item > div > span, .release-item > div > span { display: block; margin-top: 3px; overflow: hidden; color: var(--md-sys-color-on-surface-variant); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .session-meta, .release-meta { display: grid; justify-items: end; gap: 3px; }
 .session-meta code { color: var(--md-sys-color-on-surface-variant); font: 10px 'Roboto Mono', ui-monospace, monospace; }
-.session-meta small { display: inline-flex; align-items: center; gap: 2px; color: var(--md-sys-color-on-surface-variant); font-size: 9px; }
+.session-meta small { display: inline-flex; align-items: center; gap: 2px; color: var(--md-sys-color-on-surface-variant); font-size: 10px; }
 .session-meta small md-icon { --md-icon-size: 11px; }
-.release-meta small { padding: 2px 5px; border-radius: 4px; background: var(--md-sys-color-surface-container-high); color: var(--md-sys-color-on-surface-variant); font-size: 9px; }
+.release-meta small { padding: 2px 5px; border-radius: 4px; background: var(--md-sys-color-surface-container-high); color: var(--md-sys-color-on-surface-variant); font-size: 10px; }
 .panel-empty { margin: 0; padding: 28px 8px; color: var(--md-sys-color-on-surface-variant); font-size: 12px; text-align: center; }
 
 .tone-icon--info { background: color-mix(in srgb, var(--act-info) 13%, var(--md-sys-color-surface-container)); color: var(--act-info); }

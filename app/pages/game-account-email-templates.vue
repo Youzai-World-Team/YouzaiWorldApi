@@ -316,7 +316,7 @@ onBeforeUnmount(() => {
   <div class="page email-template-page">
     <div class="page-heading">
       <div class="title-row">
-        <md-icon-button aria-label="返回游戏账户" @click="navigateTo('/game-accounts')"><md-icon>arrow_back</md-icon></md-icon-button>
+        <md-icon-button aria-label="返回游戏账户" title="返回游戏账户" @click="navigateTo('/game-accounts')"><md-icon>arrow_back</md-icon></md-icon-button>
         <h1 class="page-title">验证码邮件模板</h1>
       </div>
       <div class="heading-actions">
@@ -403,6 +403,23 @@ onBeforeUnmount(() => {
   max-width: 1600px;
 }
 
+.page-heading {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.heading-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
 .title-row {
   display: flex;
   align-items: center;
@@ -424,7 +441,13 @@ onBeforeUnmount(() => {
   display: flex;
   gap: 6px;
   margin-bottom: 16px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
   border-bottom: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.email-template-tabs md-text-button {
+  flex: 0 0 auto;
 }
 
 .email-template-tab--active {
@@ -584,6 +607,7 @@ onBeforeUnmount(() => {
 
   .heading-actions {
     width: 100%;
+    flex-wrap: wrap;
   }
 
   .heading-actions md-filled-button,

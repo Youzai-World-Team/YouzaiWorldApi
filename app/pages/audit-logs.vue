@@ -355,7 +355,7 @@ onBeforeUnmount(() => {
 .account-session strong, .account-session code { overflow: hidden; color: var(--md-sys-color-on-surface); font-size: 11px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .account-session code { font-family: 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, monospace; }
 .connection-address { display: flex; align-items: center; gap: 5px; }
-.connection-address small { overflow: hidden; color: var(--md-sys-color-on-surface-variant); font-size: 9px; font-weight: 500; text-overflow: ellipsis; }
+.connection-address small { overflow: hidden; color: var(--md-sys-color-on-surface-variant); font-size: 10px; font-weight: 500; text-overflow: ellipsis; }
 .summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 14px 0; }
 .summary-item { min-width: 0; min-height: 76px; display: flex; align-items: center; gap: 12px; padding: 14px 16px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 8px; background: var(--md-sys-color-surface-container); }
 .summary-item > div { min-width: 0; display: grid; gap: 2px; }
@@ -391,8 +391,8 @@ onBeforeUnmount(() => {
 .presence-dot--offline { background: var(--md-sys-color-outline); }
 .member-copy { min-width: 0; display: grid; gap: 3px; }
 .member-copy strong { min-width: 0; display: flex; align-items: center; gap: 5px; overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.member-copy strong em { padding: 2px 4px; border-radius: 3px; color: var(--act-success); background: color-mix(in srgb, var(--act-success) 10%, transparent); font-size: 8px; font-style: normal; }
-.member-copy small { overflow: hidden; color: var(--md-sys-color-on-surface-variant); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.member-copy strong em { padding: 2px 4px; border-radius: 3px; color: var(--act-success); background: color-mix(in srgb, var(--act-success) 10%, transparent); font-size: 10px; font-style: normal; }
+.member-copy small { overflow: hidden; color: var(--md-sys-color-on-surface-variant); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .member-item--selected .member-copy small { color: color-mix(in srgb, var(--md-sys-color-on-primary-container) 72%, transparent); }
 .member-count { min-width: 22px; color: var(--md-sys-color-on-surface-variant); font-size: 10px; text-align: right; }
 .member-item--selected .member-count { color: var(--md-sys-color-on-primary-container); }
@@ -420,12 +420,12 @@ onBeforeUnmount(() => {
 .record-body { min-width: 0; display: grid; gap: 7px; }
 .record-title-row { min-width: 0; display: flex; align-items: center; gap: 7px; }
 .record-title-row strong { min-width: 0; overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.record-kind { flex: 0 0 auto; padding: 3px 6px; border-radius: 4px; font-size: 8px; font-weight: 700; }
+.record-kind { flex: 0 0 auto; padding: 3px 6px; border-radius: 4px; font-size: 10px; font-weight: 700; }
 .record-kind--action { color: var(--act-info); background: color-mix(in srgb, var(--act-info) 9%, transparent); }
 .record-kind--login { color: var(--act-success); background: color-mix(in srgb, var(--act-success) 9%, transparent); }
 .record-kind--logout { color: var(--act-warning); background: color-mix(in srgb, var(--act-warning) 9%, transparent); }
 .record-actor { min-width: 0; display: flex; align-items: center; gap: 6px; color: var(--md-sys-color-on-surface-variant); font-size: 10px; }
-.mini-avatar { width: 18px; height: 18px; display: grid; place-items: center; flex: 0 0 18px; border-radius: 50%; color: var(--md-sys-color-on-primary-container); background: var(--md-sys-color-primary-container); font-size: 7px; font-weight: 700; }
+.mini-avatar { width: 20px; height: 20px; display: grid; place-items: center; flex: 0 0 20px; border-radius: 50%; color: var(--md-sys-color-on-primary-container); background: var(--md-sys-color-primary-container); font-size: 10px; font-weight: 700; }
 .record-actor span:not(.mini-avatar), .record-actor small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .record-actor small { color: var(--md-sys-color-outline); }
 .record-detail { min-width: 0; display: flex; align-items: center; gap: 6px; color: var(--md-sys-color-on-surface-variant); font-size: 10px; }
@@ -437,10 +437,10 @@ onBeforeUnmount(() => {
 .path-code { max-width: min(100%, 440px); overflow: hidden; color: var(--md-sys-color-on-surface-variant); text-overflow: ellipsis; white-space: nowrap; }
 .record-meta span { min-width: 0; display: inline-flex; align-items: center; gap: 2px; color: var(--md-sys-color-on-surface-variant); }
 .record-meta span md-icon { --md-icon-size: 13px; }
-.record-meta span small { color: var(--md-sys-color-on-surface-variant); font-size: 9px; }
+.record-meta span small { color: var(--md-sys-color-on-surface-variant); font-size: 10px; }
 .record-item > time { display: grid; justify-items: end; align-content: start; gap: 3px; white-space: nowrap; }
 .record-item > time strong { font-size: 10px; }
-.record-item > time span { color: var(--md-sys-color-on-surface-variant); font-size: 8px; }
+.record-item > time span { color: var(--md-sys-color-on-surface-variant); font-size: 10px; }
 @keyframes refresh-spin { to { transform: rotate(360deg); } }
 @media (max-width: 1000px) {
   .account-status { grid-template-columns: minmax(220px, 1fr) auto; }

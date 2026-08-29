@@ -89,11 +89,12 @@ Nuxt API 服务端与管理页面。生产环境建议通过 Cloudflare 以 `htt
 |-----------|------|
 | `GET /api/admin/mails` | 邮件列表 + 阅读 / 领取统计 |
 | `GET /api/admin/mails/:id` | 单封详情 + 逐收件人状态 |
-| `POST /api/admin/mails` | 发布公告 / 通知 |
+| `GET /api/admin/mails/instances` | 读取邮件发布可通知的 MCSM 实例 |
+| `POST /api/admin/mails` | 发布公告 / 通知，并通知选中的 Minecraft 实例拉取 |
 
-发布提交 `{type, title, body, expireOption, scope, players}`。`type` 只接受 `ANNOUNCEMENT` / `NOTICE`；`expireOption` 与游戏内一致（0=1 天、1=7 天、2=30 天、3=永久）；`scope` 为 `all`（全体账户）或 `players`（配 `players` 玩家代号数组，一次最多 500 个，重复与大小写差异会归一，写库时回填账户表里的规范大小写以便游戏内编辑界面回查）。发件人取当前后台账户的全名或用户名，**不接受请求体指定**，避免冒用他人身份；每次发布都会记入 `/audit-logs`。
+发布提交 `{type, title, body, expireOption, scope, players, instanceUuid, daemonId}`。`type` 只接受 `ANNOUNCEMENT` / `NOTICE`；`expireOption` 与游戏内一致（0=1 天、1=7 天、2=30 天、3=永久）；`scope` 为 `all`（全体账户）或 `players`（配 `players` 玩家代号数组，一次最多 500 个，重复与大小写差异会归一，写库时回填账户表里的规范大小写以便游戏内编辑界面回查）。`instanceUuid` / `daemonId` 必须指向当前 MCSM ApiKey 名下的运行中实例。发件人取当前后台账户的全名或用户名，**不接受请求体指定**，避免冒用他人身份；每次发布都会记入 `/audit-logs`。
 
-奖励邮件、编辑与撤回仍然只在游戏内进行：物品附件的 NBT 只能从管理员物品栏里的物品序列化，网页无法构造。后台发布的邮件没有 S2C 触发点，玩家打开信箱即可看到；未读徽标由模组按 `mail_module.unread_refresh_interval_ticks`（默认约 2.5 分钟）批量刷新后点亮，不是即时的。
+奖励邮件、编辑与撤回仍然只在游戏内进行：物品附件的 NBT 只能从管理员物品栏里的物品序列化，网页无法构造。后台把邮件写入数据库后会通过 MCSM 发送 `yzwc mail pull <mailId>`；模组收到命令后从 `/api/game/mail/detail`、`/refs`、`/unread` 拉取权威数据，并即时更新在线收件人的信箱与未读徽标。MCSM 请求失败时邮件仍已发布，接口以 `sync.triggered=false` 返回失败原因，页面明确提示管理员；模组的周期未读刷新继续作为兜底。
 
 ## 域名邮件
 

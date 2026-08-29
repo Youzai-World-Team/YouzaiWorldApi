@@ -13,6 +13,7 @@ import {
   type MailTargetSpec,
   type MailType,
 } from '../../utils/game-input'
+import { assertInstanceAllowed, sendCommand } from '../../utils/mcsm'
 
 /** 与模组 MailManager.computeExpireTime 的选项编码保持一致：0=1 天、1=7 天、2=30 天、3=永久。 */
 const EXPIRE_OPTION_MS = [
@@ -92,6 +93,16 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 409, statusMessage: '没有可投递的收件人' })
   }
 
+  const instanceUuid = String(body?.instanceUuid ?? '')
+  const daemonId = String(body?.daemonId ?? '')
+  const instance = await assertInstanceAllowed(instanceUuid, daemonId)
+  if (instance.status !== 3) {
+    throw createError({
+      statusCode: 409,
+      statusMessage: `实例「${instance.nickname || instanceUuid}」当前不是运行状态，无法拉取邮件`,
+    })
+  }
+
   const result = insertGameMail({
     type,
     sender: requireMailSender(actor.fullName || actor.username),
@@ -103,6 +114,26 @@ export default defineEventHandler(async (event) => {
     attachments: [],
   }, recipients)
 
-  recordAudit(event, actor, `后台发布${type === 'ANNOUNCEMENT' ? '公告' : '通知'}：${title}`)
-  return { ok: true, id: result.mail.id, recipientCount: result.recipients.length }
+  const command = `yzwc mail pull ${result.mail.id}`
+  let syncTriggered = true
+  let syncMessage = ''
+  try {
+    await sendCommand(instanceUuid, daemonId, command)
+  } catch (error: any) {
+    syncTriggered = false
+    syncMessage = String(error?.statusMessage || error?.message || 'MCSM 命令发送失败')
+  }
+
+  const instanceName = instance.nickname || instanceUuid
+  recordAudit(event, actor,
+    `后台发布${type === 'ANNOUNCEMENT' ? '公告' : '通知'}：${title}；`
+    + (syncTriggered
+      ? `已通知实例「${instanceName}」拉取邮件`
+      : `通知实例「${instanceName}」失败：${syncMessage}`))
+  return {
+    ok: true,
+    id: result.mail.id,
+    recipientCount: result.recipients.length,
+    sync: { triggered: syncTriggered, instance: instanceName, message: syncMessage },
+  }
 })

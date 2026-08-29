@@ -505,7 +505,7 @@ async function logout() {
 .device-title-row { min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .device-title-row strong { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .device-copy > span { overflow: hidden; color: var(--md-sys-color-on-surface-variant); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.device-status { display: inline-flex; align-items: center; gap: 4px; padding: 3px 6px; border-radius: 4px; font-size: 8px; font-weight: 700; }
+.device-status { display: inline-flex; align-items: center; gap: 4px; padding: 3px 6px; border-radius: 4px; font-size: 10px; font-weight: 700; }
 .device-status--current { color: var(--md-sys-color-on-primary-container); background: var(--md-sys-color-primary-container); }
 .device-status--online { color: var(--act-success); background: color-mix(in srgb, var(--act-success) 10%, transparent); }
 .device-status--online i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
@@ -514,7 +514,7 @@ async function logout() {
 .device-location { display: inline-flex; align-items: center; gap: 2px; }
 .device-location md-icon { --md-icon-size: 12px; }
 .device-item time { display: grid; justify-items: end; gap: 4px; white-space: nowrap; }
-.device-item time span { color: var(--md-sys-color-on-surface-variant); font-size: 9px; }
+.device-item time span { color: var(--md-sys-color-on-surface-variant); font-size: 10px; }
 .device-item time strong { font-size: 10px; font-weight: 600; }
 .devices-loading, .devices-empty { min-height: 100px; display: grid; place-items: center; align-content: center; gap: 8px; color: var(--md-sys-color-on-surface-variant); font-size: 12px; }
 .devices-empty md-icon { --md-icon-size: 28px; }

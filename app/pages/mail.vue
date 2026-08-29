@@ -6,6 +6,15 @@ useHead({ title: '服内邮件' })
 interface MailTargetSpec { scope: number; args: string[] }
 interface MailAttachment { type: string; data: string; amount: number; itemNbt: string | null }
 interface MailRecipient { uuid: string; username: string | null; read: boolean; starred: boolean; claimed: boolean }
+interface MailInstance {
+  instanceUuid: string
+  daemonId: string
+  nickname: string
+  status: number
+  statusLabel: string
+  hostIp: string
+  remarks: string
+}
 
 interface MailSummary {
   id: string
@@ -80,6 +89,10 @@ const composePlayers = ref<string[]>([])
 const playerKeyword = ref('')
 const accounts = ref<string[]>([])
 const accountsLoading = ref(false)
+const instances = ref<MailInstance[]>([])
+const instancesConfigured = ref(false)
+const instancesLoading = ref(false)
+const selectedInstanceKey = ref('')
 const submitting = ref(false)
 
 const { showToast } = useToast()
@@ -101,6 +114,14 @@ const filteredAccounts = computed(() => {
   if (!text) return accounts.value
   return accounts.value.filter((name) => name.toLowerCase().includes(text))
 })
+
+const selectedInstance = computed(() => instances.value.find(
+  instance => instanceKey(instance) === selectedInstanceKey.value,
+) || null)
+
+function instanceKey(instance: Pick<MailInstance, 'instanceUuid' | 'daemonId'>) {
+  return `${instance.daemonId}:${instance.instanceUuid}`
+}
 
 onMounted(() => {
   load()
@@ -158,6 +179,28 @@ async function loadAccounts() {
   }
 }
 
+async function loadInstances() {
+  if (instancesLoading.value) return
+  instancesLoading.value = true
+  try {
+    const result = await $fetch<{ configured: boolean; instances: MailInstance[] }>('/api/admin/mails/instances')
+    instancesConfigured.value = result.configured
+    instances.value = result.instances
+    const selected = result.instances.find(instance => instanceKey(instance) === selectedInstanceKey.value)
+    if (!selected || selected.status !== 3) {
+      const running = result.instances.find(instance => instance.status === 3)
+      selectedInstanceKey.value = running ? instanceKey(running) : ''
+    }
+  } catch (error: any) {
+    instancesConfigured.value = false
+    instances.value = []
+    selectedInstanceKey.value = ''
+    showToast(error?.data?.statusMessage || 'MCSM 实例加载失败', 'error')
+  } finally {
+    instancesLoading.value = false
+  }
+}
+
 function openCompose() {
   if (!canPublish.value) return
   composeType.value = 'ANNOUNCEMENT'
@@ -167,8 +210,10 @@ function openCompose() {
   composeScope.value = 'all'
   composePlayers.value = []
   playerKeyword.value = ''
+  selectedInstanceKey.value = ''
   composeOpen.value = true
   loadAccounts()
+  loadInstances()
 }
 
 function closeCompose() {
@@ -189,6 +234,10 @@ function onComposeExpireChange(event: Event) {
   if (Number.isInteger(value)) composeExpire.value = value
 }
 
+function onInstanceChange(event: Event) {
+  selectedInstanceKey.value = (event.target as HTMLSelectElement).value
+}
+
 function togglePlayer(name: string) {
   const index = composePlayers.value.indexOf(name)
   if (index === -1) composePlayers.value.push(name)
@@ -205,9 +254,17 @@ async function submitCompose() {
     showToast('请至少选择一个收件玩家', 'error')
     return
   }
+  const instance = selectedInstance.value
+  if (!instance || instance.status !== 3) {
+    showToast('请选择一个运行中的服务器实例', 'error')
+    return
+  }
   submitting.value = true
   try {
-    const result = await $fetch<{ recipientCount: number }>('/api/admin/mails', {
+    const result = await $fetch<{
+      recipientCount: number
+      sync: { triggered: boolean; instance: string; message: string }
+    }>('/api/admin/mails', {
       method: 'POST',
       body: {
         type: composeType.value,
@@ -216,9 +273,15 @@ async function submitCompose() {
         expireOption: composeExpire.value,
         scope: composeScope.value,
         players: composeScope.value === 'players' ? composePlayers.value : [],
+        instanceUuid: instance.instanceUuid,
+        daemonId: instance.daemonId,
       },
     })
-    showToast(`已发布，投递给 ${result.recipientCount} 位玩家`)
+    if (result.sync.triggered) {
+      showToast(`已发布并通知 ${result.sync.instance}，投递给 ${result.recipientCount} 位玩家`)
+    } else {
+      showToast(`邮件已发布，但即时同步失败：${result.sync.message}`, 'error')
+    }
     composeOpen.value = false
     await load()
   } catch (error: any) {
@@ -402,6 +465,31 @@ function attachmentDetail(attachment: MailAttachment) {
         <div class="dialog-form">
           <p class="form-hint">发件人使用当前后台账户。</p>
 
+          <p v-if="instancesLoading" class="instance-state">正在读取 MCSM 实例…</p>
+          <p v-else-if="!instancesConfigured" class="instance-state error-text">
+            MCSM 面板尚未配置，无法从后台发布服内邮件。
+          </p>
+          <md-outlined-select
+            v-else-if="instances.length"
+            label="同步服务器"
+            :value="selectedInstanceKey"
+            @change="onInstanceChange"
+          >
+            <md-select-option
+              v-for="instance in instances"
+              :key="instanceKey(instance)"
+              :value="instanceKey(instance)"
+              :selected="instanceKey(instance) === selectedInstanceKey"
+              :disabled="instance.status !== 3"
+            >
+              <div slot="headline">{{ instance.nickname || instance.instanceUuid }}</div>
+              <div slot="supporting-text">
+                {{ instance.statusLabel }} · {{ instance.hostIp || instance.remarks || instance.daemonId }}
+              </div>
+            </md-select-option>
+          </md-outlined-select>
+          <p v-else class="instance-state error-text">当前 ApiKey 名下没有可用实例。</p>
+
           <md-outlined-select label="类型" @change="onComposeTypeChange">
             <md-select-option value="ANNOUNCEMENT" :selected="composeType === 'ANNOUNCEMENT'">
               <div slot="headline">公告</div>
@@ -471,7 +559,10 @@ function attachmentDetail(attachment: MailAttachment) {
       </div>
       <div slot="actions">
         <md-text-button @click="closeCompose">取消</md-text-button>
-        <md-filled-button :disabled="submitting" @click="submitCompose">
+        <md-filled-button
+          :disabled="submitting || instancesLoading || !selectedInstance || selectedInstance.status !== 3"
+          @click="submitCompose"
+        >
           {{ submitting ? '发布中…' : '发布' }}
         </md-filled-button>
       </div>
@@ -515,6 +606,8 @@ function attachmentDetail(attachment: MailAttachment) {
 .dialog-form { width: min(520px, 100%); min-width: 0; display: flex; flex-direction: column; gap: 16px; }
 .dialog-form md-outlined-select, .dialog-form md-outlined-text-field { width: 100%; }
 .form-hint { margin: 0; font-size: 12px; color: var(--md-sys-color-on-surface-variant); }
+.instance-state { margin: 0; font-size: 13px; color: var(--md-sys-color-on-surface-variant); }
+.error-text { color: var(--md-sys-color-error); }
 .field-group { display: flex; flex-direction: column; gap: 6px; }
 .field-label { font-size: 12px; color: var(--md-sys-color-on-surface-variant); }
 .scope-row, .picker-row { display: flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; }

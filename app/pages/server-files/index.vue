@@ -1423,6 +1423,7 @@ onBeforeUnmount(() => {
 .extract-option--selected .extract-option-desc { color: var(--md-sys-color-on-primary-container); }
 
 @media (max-width: 720px) {
+  .page-heading { align-items: stretch; flex-direction: column; }
   .instance-select { width: 100%; min-width: 0; }
   .tools { width: 100%; }
   .search { width: 100%; min-width: 0; flex: 1 1 100%; }

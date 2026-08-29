@@ -218,7 +218,7 @@ onBeforeUnmount(() => {
   overflow: hidden;
   flex: 0 0 auto;
   border: 1px solid var(--md-sys-color-outline-variant);
-  border-radius: 12px;
+  border-radius: 8px;
   background:
     linear-gradient(var(--md-sys-color-surface-container-high), var(--md-sys-color-surface-container));
   touch-action: none;

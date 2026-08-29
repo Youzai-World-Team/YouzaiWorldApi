@@ -1041,6 +1041,8 @@ onBeforeUnmount(() => {
 .confirm-preview { display: flex; align-items: center; gap: 8px; font-size: 14px; overflow-wrap: anywhere; }
 
 @media (max-width: 720px) {
+  .page-heading { align-items: stretch; flex-direction: column; }
+  .heading-actions { width: 100%; justify-content: flex-end; flex-wrap: wrap; }
   .panel-meta { text-align: left; }
   .console { height: 320px; }
   .instance-select { min-width: 0; flex-basis: 100%; }
