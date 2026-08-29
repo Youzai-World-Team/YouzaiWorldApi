@@ -1,5 +1,6 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
+import { uploadsDir } from '../../utils/data-dir'
 
 const MIME_BY_EXT: Record<string, string> = {
   png: 'image/png',
@@ -16,9 +17,8 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: '无效文件名' })
   }
 
-  const uploadDir = path.resolve(process.cwd(), 'server/data/uploads')
-  const filePath = path.resolve(uploadDir, name)
-  if (path.dirname(filePath) !== uploadDir) {
+  const filePath = path.resolve(uploadsDir, name)
+  if (path.dirname(filePath) !== uploadsDir) {
     throw createError({ statusCode: 400, statusMessage: '无效文件名' })
   }
 
