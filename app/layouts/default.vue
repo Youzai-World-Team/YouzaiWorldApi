@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, onMounted, onBeforeUnmount } from 'vue'
+import { computed, nextTick, ref, onMounted, onBeforeUnmount, watch } from 'vue'
 import { adminPageKeyForPath, adminPagePermissionNotice } from '#shared/admin-page-permissions'
 import type { ThemeMode } from '../composables/useThemeTransition'
 
@@ -37,6 +37,7 @@ const { load: loadEntry } = useEntry()
 
 const mq = typeof window !== 'undefined' ? window.matchMedia('(min-width: 900px)') : null
 let unreadRefreshTimer: ReturnType<typeof setInterval> | undefined
+let presenceHeartbeatTimer: ReturnType<typeof setInterval> | undefined
 
 function syncDrawer() {
   isDesktop.value = mq ? mq.matches : true
@@ -79,8 +80,23 @@ async function refreshDomainMailUnread() {
   }
 }
 
+async function heartbeatAdminPresence() {
+  if (document.hidden || !access.user.value) return
+  try {
+    await $fetch('/api/auth/presence', {
+      method: 'POST',
+      body: { path: route.path },
+    })
+  } catch {
+    // 在线状态是辅助信息；短暂失败交给下一轮心跳恢复。
+  }
+}
+
 function onVisibilityChange() {
-  if (!document.hidden) refreshDomainMailUnread()
+  if (!document.hidden) {
+    refreshDomainMailUnread()
+    heartbeatAdminPresence()
+  }
 }
 
 function onProfileUpdated(event: Event) {
@@ -96,9 +112,11 @@ onMounted(async () => {
     // 权限定义可能随版本新增，挂载布局时刷新快照，避免旧 useState 隐藏新页面。
     await access.load(true)
     await refreshDomainMailUnread()
+    await heartbeatAdminPresence()
     unreadRefreshTimer = window.setInterval(() => {
       if (!document.hidden) refreshDomainMailUnread()
     }, 60_000)
+    presenceHeartbeatTimer = window.setInterval(heartbeatAdminPresence, 25_000)
     document.addEventListener('visibilitychange', onVisibilityChange)
   } catch {
     const entry = await loadEntry()
@@ -111,6 +129,11 @@ onBeforeUnmount(() => {
   window.removeEventListener('admin-profile-updated', onProfileUpdated)
   document.removeEventListener('visibilitychange', onVisibilityChange)
   if (unreadRefreshTimer !== undefined) window.clearInterval(unreadRefreshTimer)
+  if (presenceHeartbeatTimer !== undefined) window.clearInterval(presenceHeartbeatTimer)
+})
+
+watch(() => route.path, () => {
+  if (import.meta.client && !document.hidden) heartbeatAdminPresence()
 })
 </script>
 

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { ADMIN_PAGE_DEFINITIONS, adminPageKeyForPath } from '#shared/admin-page-permissions'
 
 definePageMeta({ layout: false })
 
@@ -20,6 +21,16 @@ interface GameAccountRecord { username: string; email: string | null; last_authe
 interface AuditLogRecord { id: number; username: string; action: string; method: string; path: string; time: number }
 interface MailRecord { id: string; type: string; sender: string; title: string; createdTime: number; expired: boolean; hidden: boolean; recipientCount: number; readCount: number }
 interface ChatRecord { id: string; name: string; content: string; role: 'guest' | 'player' | 'admin'; time: number }
+interface AdminPresence {
+  id: number
+  username: string
+  avatar: string
+  fullName: string
+  isOwner: boolean
+  path: string
+  lastSeenAt: number
+  isCurrent: boolean
+}
 interface AvailabilityPoint { time: number; status: 'online' | 'offline' }
 interface StatusSnapshot {
   generatedAt: number
@@ -48,6 +59,7 @@ const gameAccounts = ref<GameAccountRecord[]>([])
 const auditLogs = ref<AuditLogRecord[]>([])
 const mails = ref<MailRecord[]>([])
 const chatMessages = ref<ChatRecord[]>([])
+const onlineAdmins = ref<AdminPresence[]>([])
 const statusSnapshot = ref<StatusSnapshot | null>(null)
 const statusError = ref('')
 const loading = ref(true)
@@ -56,6 +68,9 @@ const statusLoading = ref(false)
 const lastRefreshedAt = ref(0)
 const { showToast } = useToast()
 const access = useAdminAccess()
+const domainMailUnread = useDomainMailUnread()
+let presenceRefreshTimer: ReturnType<typeof setInterval> | undefined
+let presenceHeartbeatTimer: ReturnType<typeof setInterval> | undefined
 
 function canView(key: string) { return access.levelForKey(key) !== 'hidden' }
 function normalizeTimestamp(value: number | string | null | undefined) {
@@ -88,6 +103,11 @@ function formatRelativeTime(value: number) {
   return new Date(value).toLocaleDateString('zh-CN')
 }
 function formatClient(login: LoginRecord) { return [login.browser, login.os, login.device].filter(Boolean).join(' · ') || '未知设备' }
+function presencePageLabel(path: string) {
+  if (path === '/account') return '账户设置'
+  const key = adminPageKeyForPath(path)
+  return ADMIN_PAGE_DEFINITIONS.find((page) => page.key === key)?.label || '后台页面'
+}
 function activityLabel(type: ActivityType) { return ({ info: '信息', success: '完成', warning: '警报', error: '错误' })[type] }
 function isBanActive(ban: BanRecord) { return ban.unbanTime === 'permanent' || normalizeTimestamp(ban.unbanTime) > Date.now() }
 function sameLocalDay(value: number) {
@@ -102,13 +122,11 @@ const permanentBans = computed(() => activeBans.value.filter((ban) => ban.unbanT
 const donationTotal = computed(() => donors.value.reduce((sum, donor) => sum + (Number(donor.amount) || 0), 0))
 const forcedUpdates = computed(() => updates.value.filter((update) => update.forcedUpdate))
 const activeMails = computed(() => mails.value.filter((mail) => !mail.expired && !mail.hidden))
-const expiredMails = computed(() => mails.value.filter((mail) => mail.expired).length)
 const unreadMailDeliveries = computed(() => mails.value.reduce((sum, mail) => sum + Math.max(0, Number(mail.recipientCount || 0) - Number(mail.readCount || 0)), 0))
 const mailRecipientTotal = computed(() => mails.value.reduce((sum, mail) => sum + Number(mail.recipientCount || 0), 0))
 const mailReadTotal = computed(() => mails.value.reduce((sum, mail) => sum + Number(mail.readCount || 0), 0))
 const mailReadRate = computed(() => mailRecipientTotal.value ? mailReadTotal.value / mailRecipientTotal.value * 100 : 0)
 const accountsWithEmail = computed(() => gameAccounts.value.filter((account) => Boolean(account.email)).length)
-const accountEmailRate = computed(() => gameAccounts.value.length ? accountsWithEmail.value / gameAccounts.value.length * 100 : 0)
 const todayLoginCount = computed(() => logins.value.filter((login) => sameLocalDay(login.time)).length)
 const todayAuditCount = computed(() => auditLogs.value.filter((log) => sameLocalDay(log.time)).length)
 const uniqueLoginIps = computed(() => new Set(logins.value.map((login) => login.ip).filter(Boolean)).size)
@@ -181,7 +199,10 @@ const dashboardMetrics = computed<Metric[]>(() => {
 const healthMeters = computed<HealthMeter[]>(() => {
   const meters: HealthMeter[] = []
   if (canView('status') && availability.value !== null) meters.push({ key: 'availability', label: '服务可用性', value: availability.value, display: `${availability.value.toFixed(1)}%`, tone: availability.value >= 95 ? 'success' : availability.value >= 80 ? 'warning' : 'error' })
-  if (canView('game-accounts')) meters.push({ key: 'account-email', label: '账户邮箱覆盖', value: accountEmailRate.value, display: `${accountsWithEmail.value} / ${gameAccounts.value.length}`, tone: accountEmailRate.value >= 80 ? 'success' : 'info' })
+  if (canView('status') && statusSnapshot.value?.node) {
+    const resourceUsage = Math.max(cpuUsage.value, memoryUsage.value)
+    meters.push({ key: 'node-resource', label: '节点资源占用', value: resourceUsage, display: `CPU ${cpuUsage.value.toFixed(0)}% · 内存 ${memoryUsage.value.toFixed(0)}%`, tone: resourceUsage >= 85 ? 'warning' : resourceUsage >= 70 ? 'info' : 'success' })
+  }
   if (canView('mail')) meters.push({ key: 'mail-read', label: '邮件阅读率', value: mailReadRate.value, display: `${mailReadRate.value.toFixed(0)}%`, tone: mailReadRate.value >= 70 ? 'success' : mailReadRate.value >= 40 ? 'info' : 'warning' })
   if (canView('status') && statusSnapshot.value?.minecraft?.players?.max) meters.push({ key: 'capacity', label: '玩家容量占用', value: playerCapacity.value, display: `${playerCapacity.value.toFixed(0)}%`, tone: playerCapacity.value >= 90 ? 'warning' : 'info' })
   return meters
@@ -198,12 +219,8 @@ const attentionItems = computed<AttentionItem[]>(() => {
       items.push({ key: 'node-load', title: '节点资源占用偏高', detail, icon: 'memory', tone: 'warning', to: '/status' })
     }
   }
-  if (canView('updates') && forcedUpdates.value.length) items.push({ key: 'forced-updates', title: `${forcedUpdates.value.length} 个强制更新`, detail: forcedUpdates.value.slice(0, 2).map((item) => item.name).join('、'), icon: 'system_update_alt', tone: 'warning', to: '/updates' })
   if (canView('mail') && unreadMailDeliveries.value) items.push({ key: 'mail-unread', title: `${unreadMailDeliveries.value} 次投递尚未阅读`, detail: `${activeMails.value.length} 封有效邮件正在触达玩家`, icon: 'mark_email_unread', tone: 'info', to: '/mail' })
-  if (canView('mail') && expiredMails.value) items.push({ key: 'mail-expired', title: `${expiredMails.value} 封邮件已过期`, detail: '可在服内邮件中检查历史投递', icon: 'event_busy', tone: 'neutral', to: '/mail' })
-  if (canView('bans') && activeBans.value.length) items.push({ key: 'active-bans', title: `${activeBans.value.length} 个封禁仍在生效`, detail: permanentBans.value ? `其中 ${permanentBans.value} 个为永久封禁` : '均为限时封禁', icon: 'gavel', tone: 'neutral', to: '/bans' })
-  const activityErrors = activities.value.filter((activity) => activity.type === 'error').length
-  if (canView('activity') && activityErrors) items.push({ key: 'activity-errors', title: `${activityErrors} 条错误动态`, detail: '最近服务器动态中存在错误记录', icon: 'error', tone: 'error', to: '/activity' })
+  if (canView('domain-mail') && domainMailUnread.count.value) items.push({ key: 'domain-mail-unread', title: `${domainMailUnread.count.value} 封域名邮件尚未阅读`, detail: '请前往域名邮件查看新邮件', icon: 'alternate_email', tone: 'warning', to: '/domain-mail' })
   return items.slice(0, 6)
 })
 
@@ -246,7 +263,10 @@ async function loadDashboard() {
   if (refreshing.value) return
   refreshing.value = true
   if (canView('status')) void loadStatus()
-  const jobs: DashboardJob[] = [{ label: '登录记录', run: () => $fetch<LoginRecord[]>('/api/auth/logins'), apply: (value) => { logins.value = value } }]
+  const jobs: DashboardJob[] = [
+    { label: '登录记录', run: () => $fetch<LoginRecord[]>('/api/auth/logins'), apply: (value) => { logins.value = value } },
+    { label: '后台在线', run: () => $fetch<AdminPresence[]>('/api/auth/presence'), apply: (value) => { onlineAdmins.value = value } },
+  ]
   if (canView('activity')) jobs.push({ label: '服务器动态', run: () => $fetch<ActivityRecord[]>('/api/activities'), apply: (value) => { activities.value = value } })
   if (canView('bans')) jobs.push({ label: '封禁列表', run: () => $fetch<BanRecord[]>('/api/bans'), apply: (value) => { bans.value = value } })
   if (canView('donors')) jobs.push({ label: '捐赠列表', run: () => $fetch<DonorRecord[]>('/api/donors'), apply: (value) => { donors.value = value } })
@@ -255,6 +275,7 @@ async function loadDashboard() {
   if (canView('game-accounts')) jobs.push({ label: '游戏账户', run: () => $fetch<GameAccountRecord[]>('/api/admin/game-accounts'), apply: (value) => { gameAccounts.value = value } })
   if (canView('audit-logs')) jobs.push({ label: '操作记录', run: () => $fetch<AuditLogRecord[]>('/api/admin/audit-logs'), apply: (value) => { auditLogs.value = value } })
   if (canView('mail')) jobs.push({ label: '服内邮件', run: () => $fetch<MailRecord[]>('/api/admin/mails'), apply: (value) => { mails.value = value } })
+  if (canView('domain-mail')) jobs.push({ label: '域名邮件未读数', run: () => domainMailUnread.load(true), apply: (value) => { domainMailUnread.setCount(value) } })
   if (canView('chat')) jobs.push({ label: '聊天区', run: () => $fetch<ChatRecord[]>('/api/admin/chat'), apply: (value) => { chatMessages.value = value } })
   try {
     const results = await Promise.allSettled(jobs.map((job) => job.run()))
@@ -271,11 +292,46 @@ async function loadDashboard() {
   }
 }
 
+async function refreshOnlineAdmins() {
+  if (document.hidden) return
+  try {
+    onlineAdmins.value = await $fetch<AdminPresence[]>('/api/auth/presence')
+  } catch {
+    // 仪表盘其他数据仍可正常使用，在线列表等待下一轮恢复。
+  }
+}
+
+async function heartbeatDashboardPresence() {
+  if (document.hidden) return
+  try {
+    onlineAdmins.value = await $fetch<AdminPresence[]>('/api/auth/presence', {
+      method: 'POST',
+      body: { path: '/' },
+    })
+  } catch {
+    // 在线状态是辅助信息；短暂失败交给下一轮心跳恢复。
+  }
+}
+
+function onDashboardVisibilityChange() {
+  if (!document.hidden) heartbeatDashboardPresence()
+}
+
 onMounted(async () => {
   if (setupRequired.value) { loading.value = false; return }
   try { await access.load() }
   catch { showToast('后台权限信息加载失败', 'error') }
+  await heartbeatDashboardPresence()
   await loadDashboard()
+  presenceRefreshTimer = window.setInterval(refreshOnlineAdmins, 15_000)
+  presenceHeartbeatTimer = window.setInterval(heartbeatDashboardPresence, 25_000)
+  document.addEventListener('visibilitychange', onDashboardVisibilityChange)
+})
+
+onBeforeUnmount(() => {
+  if (presenceRefreshTimer !== undefined) window.clearInterval(presenceRefreshTimer)
+  if (presenceHeartbeatTimer !== undefined) window.clearInterval(presenceHeartbeatTimer)
+  document.removeEventListener('visibilitychange', onDashboardVisibilityChange)
 })
 </script>
 
@@ -324,6 +380,27 @@ onMounted(async () => {
           <span class="metric-icon" :class="`tone-icon--${metric.tone}`"><md-icon>{{ metric.icon }}</md-icon></span>
           <span class="metric-copy"><small>{{ metric.label }}</small><strong>{{ loading ? '—' : metric.value }}</strong><span>{{ loading ? '正在加载' : metric.detail }}</span></span>
         </NuxtLink>
+      </section>
+
+      <section class="dashboard-panel online-panel" aria-labelledby="online-admins-title">
+        <div class="section-heading">
+          <div><h2 id="online-admins-title">后台在线</h2><p>{{ onlineAdmins.length }} 人正在操作后台</p></div>
+          <span class="online-live"><i></i>实时</span>
+        </div>
+        <div v-if="loading" class="panel-empty">正在检查后台在线状态…</div>
+        <div v-else-if="onlineAdmins.length" class="online-admin-list">
+          <article v-for="admin in onlineAdmins" :key="admin.id" class="online-admin-item">
+            <img v-if="admin.avatar" class="online-admin-avatar" :src="admin.avatar" alt="" />
+            <span v-else class="online-admin-avatar online-admin-avatar--fallback">{{ (admin.fullName || admin.username || '?').slice(0, 1).toUpperCase() }}</span>
+            <div class="online-admin-identity">
+              <div><strong>{{ admin.fullName || admin.username }}</strong><span v-if="admin.isCurrent">当前账户</span></div>
+              <small>@{{ admin.username }} · {{ admin.isOwner ? '所有者' : '管理员' }}</small>
+            </div>
+            <div class="online-admin-page"><md-icon>web</md-icon><span>{{ presencePageLabel(admin.path) }}</span></div>
+            <time :title="formatTime(admin.lastSeenAt)">{{ formatRelativeTime(admin.lastSeenAt) }}</time>
+          </article>
+        </div>
+        <p v-else class="panel-empty">当前没有用户正在操作后台</p>
       </section>
 
       <div class="dashboard-primary-grid">
@@ -419,6 +496,24 @@ onMounted(async () => {
 .quick-link md-icon { flex: 0 0 auto; --md-icon-size: 20px; }
 .quick-link span, .quick-link small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .quick-link small { flex: 0 0 auto; padding: 2px 5px; border-radius: 4px; background: var(--md-sys-color-primary-container); color: var(--md-sys-color-on-primary-container); font-size: 10px; }
+
+.online-panel { margin-bottom: 16px; }
+.online-live { display: inline-flex; align-items: center; gap: 6px; color: var(--act-success); font-size: 11px; font-weight: 700; }
+.online-live i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 14%, transparent); }
+.online-admin-list { margin-top: 14px; display: grid; gap: 2px; }
+.online-admin-item { min-width: 0; min-height: 54px; display: grid; grid-template-columns: 36px minmax(0, 1fr) minmax(120px, .55fr) auto; align-items: center; gap: 11px; padding: 8px 10px; border-bottom: 1px solid var(--md-sys-color-outline-variant); }
+.online-admin-item:last-child { border-bottom: 0; }
+.online-admin-avatar { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; }
+.online-admin-avatar--fallback { display: grid; place-items: center; color: var(--md-sys-color-on-primary-container); background: var(--md-sys-color-primary-container); font-size: 12px; font-weight: 700; }
+.online-admin-identity { min-width: 0; display: grid; gap: 2px; }
+.online-admin-identity > div { min-width: 0; display: flex; align-items: center; gap: 7px; }
+.online-admin-identity strong, .online-admin-identity small, .online-admin-page span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.online-admin-identity strong { font-size: 12px; }
+.online-admin-identity > div span { flex: 0 0 auto; padding: 2px 5px; border-radius: 4px; color: var(--md-sys-color-on-primary-container); background: var(--md-sys-color-primary-container); font-size: 8px; font-weight: 700; }
+.online-admin-identity small, .online-admin-item time { color: var(--md-sys-color-on-surface-variant); font-size: 9px; }
+.online-admin-page { min-width: 0; display: flex; align-items: center; gap: 6px; color: var(--md-sys-color-on-surface-variant); font-size: 10px; }
+.online-admin-page md-icon { flex: 0 0 auto; --md-icon-size: 16px; }
+.online-admin-item time { white-space: nowrap; }
 
 .server-overview { position: relative; margin-bottom: 16px; overflow: hidden; border: 1px solid var(--md-sys-color-outline-variant); border-left-width: 4px; border-radius: 8px; background: var(--md-sys-color-surface-container); }
 .server-overview--success { border-left-color: var(--act-success); } .server-overview--error { border-left-color: var(--act-error); } .server-overview--neutral { border-left-color: var(--md-sys-color-outline); }
@@ -518,6 +613,8 @@ onMounted(async () => {
   .metric-strip, .dashboard-secondary-grid { grid-template-columns: minmax(0, 1fr); }
   .metric-item { min-height: 90px; border-right: 0; border-top: 1px solid var(--md-sys-color-outline-variant); } .metric-item:first-child { border-top: 0; }
   .health-meters { grid-template-columns: minmax(0, 1fr); }
+  .online-admin-item { grid-template-columns: 36px minmax(0, 1fr) auto; }
+  .online-admin-page { grid-column: 2 / -1; }
 }
 @media (max-width: 560px) {
   .dashboard-title-group .page-title { font-size: 22px; } .dashboard-title-group > p { max-width: 280px; line-height: 1.5; } .dashboard-updated { display: none; }
@@ -525,6 +622,9 @@ onMounted(async () => {
   .server-identity { grid-template-columns: 40px minmax(0, 1fr) 34px; gap: 9px; padding: 15px 13px 12px; } .server-state-icon { width: 40px; height: 40px; } .server-identity p { white-space: normal; }
   .server-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); } .server-fact, .server-fact:nth-child(3) { border-right: 1px solid var(--md-sys-color-outline-variant); } .server-fact:nth-child(2n) { border-right: 0; } .server-fact:nth-child(n + 3) { border-top: 1px solid var(--md-sys-color-outline-variant); }
   .dashboard-panel { padding: 16px; } .activity-legend { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .online-admin-item { grid-template-columns: 32px minmax(0, 1fr); padding-inline: 0; }
+  .online-admin-avatar { width: 32px; height: 32px; }
+  .online-admin-item > time, .online-admin-page { grid-column: 2; }
   .timeline-item { grid-template-columns: 34px minmax(0, 1fr); } .timeline-item > time { grid-column: 2; margin-top: -7px; }
   .session-item, .release-item { grid-template-columns: 34px minmax(0, 1fr); } .session-meta, .release-meta { grid-column: 2; justify-items: start; }
 }

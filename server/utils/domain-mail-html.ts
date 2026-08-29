@@ -1,3 +1,5 @@
+import { EMAIL_PREVIEW_SCROLLBAR_CSS } from './email-preview-scrollbar'
+
 interface SanitizedMailHtml {
   html: string
   css: string
@@ -97,6 +99,7 @@ blockquote {
     + `<title>${escapeHtml(subject || '邮件')}</title>`
     + `<style>${baseCss}</style>`
     + (resolvedContent.css ? `<style>${resolvedContent.css}</style>` : '')
+    + `<style>${EMAIL_PREVIEW_SCROLLBAR_CSS}</style>`
     + `<style>${markerCss}</style>`
     + `</head><body>${resolvedContent.html || '<p>（无 HTML 正文）</p>'}</body></html>`
 }

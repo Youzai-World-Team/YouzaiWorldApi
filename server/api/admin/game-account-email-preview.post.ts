@@ -8,6 +8,7 @@ import {
   VERIFICATION_EMAIL_TEMPLATE_KINDS,
   type VerificationEmailTemplateKind,
 } from '../../utils/email-templates'
+import { addEmailPreviewScrollbar } from '../../utils/email-preview-scrollbar'
 import { getRequestURL } from 'h3'
 export default defineEventHandler(async (event) => {
   const user = requirePagePermission(event, 'game-accounts', 'view')
@@ -25,10 +26,10 @@ export default defineEventHandler(async (event) => {
   }
   setResponseHeader(event, 'Cache-Control', 'no-store')
   setResponseHeader(event, 'Content-Type', 'text/html; charset=UTF-8')
-  return buildVerificationEmailFromTemplate(
+  return addEmailPreviewScrollbar(buildVerificationEmailFromTemplate(
     template,
     user.fullName || user.username,
     '123456',
     `${getRequestURL(event).origin}/images/uzw-tm.png`,
-  )
+  ))
 })

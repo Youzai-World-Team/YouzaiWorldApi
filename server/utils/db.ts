@@ -85,6 +85,12 @@ db.exec(`
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (user_id, feature_key)
   );
+  CREATE TABLE IF NOT EXISTS admin_presence (
+    user_id INTEGER PRIMARY KEY,
+    path TEXT NOT NULL DEFAULT '/',
+    last_seen INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS admin_presence_seen_idx ON admin_presence (last_seen DESC);
   CREATE TABLE IF NOT EXISTS audit_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER,
@@ -883,6 +889,57 @@ export interface AdminUser {
   featurePermissions: Record<string, AdminFeaturePermissionLevel>
 }
 
+export interface AdminPresence {
+  id: number
+  username: string
+  avatar: string
+  fullName: string
+  isOwner: boolean
+  path: string
+  lastSeenAt: number
+}
+
+export const ADMIN_PRESENCE_ONLINE_MS = 75_000
+
+function requireAdminPresencePath(value: unknown): string {
+  const path = String(value ?? '/').trim()
+  if (!path.startsWith('/') || path.startsWith('//') || path.length > 256 || /[\r\n\u0000]/.test(path)) return '/'
+  return path.split(/[?#]/, 1)[0] || '/'
+}
+
+export function touchAdminPresence(userId: number, pathValue: unknown, now = Date.now()): void {
+  run(`
+    INSERT INTO admin_presence (user_id, path, last_seen)
+    VALUES (?, ?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET path = excluded.path, last_seen = excluded.last_seen
+  `, userId, requireAdminPresencePath(pathValue), now)
+}
+
+export function clearAdminPresence(userId: number): void {
+  run('DELETE FROM admin_presence WHERE user_id = ?', userId)
+}
+
+export function listOnlineAdminPresence(now = Date.now()): AdminPresence[] {
+  const cutoff = now - ADMIN_PRESENCE_ONLINE_MS
+  run('DELETE FROM admin_presence WHERE last_seen < ?', cutoff)
+  return all(`
+    SELECT users.id, users.username, users.avatar, users.full_name, users.is_owner,
+           presence.path, presence.last_seen
+    FROM admin_presence AS presence
+    JOIN admin_users AS users ON users.id = presence.user_id
+    WHERE presence.last_seen >= ? AND users.is_active = 1
+    ORDER BY presence.last_seen DESC, users.username COLLATE NOCASE
+  `, cutoff).map((row) => ({
+    id: Number(row.id),
+    username: String(row.username ?? ''),
+    avatar: String(row.avatar ?? ''),
+    fullName: String(row.full_name ?? ''),
+    isOwner: Number(row.is_owner ?? 0) === 1,
+    path: String(row.path ?? '/'),
+    lastSeenAt: Number(row.last_seen ?? 0),
+  }))
+}
+
 function getAdminPagePermissions(userId: number, isOwner: boolean): Record<string, AdminPagePermissionLevel> {
   if (isOwner) return ownerAdminPagePermissions()
   const permissions = defaultAdminPagePermissions()
@@ -1201,6 +1258,7 @@ export function updateAdminUser(userId: number, changes: { password?: unknown; a
       if (!active) run('DELETE FROM sessions WHERE user_id = ?', userId)
     }
     if (password !== undefined || active === false) run('DELETE FROM admin_login_takeovers WHERE user_id = ?', userId)
+    if (password !== undefined || active === false) run('DELETE FROM admin_presence WHERE user_id = ?', userId)
     db.exec('COMMIT')
   } catch (error) {
     db.exec('ROLLBACK')
@@ -1220,6 +1278,7 @@ export function deleteAdminUser(userId: number): void {
   run('DELETE FROM admin_login_takeovers WHERE user_id = ?', userId)
   run('DELETE FROM admin_page_permissions WHERE user_id = ?', userId)
   run('DELETE FROM admin_feature_permissions WHERE user_id = ?', userId)
+  clearAdminPresence(userId)
   run('DELETE FROM domain_mail_reads WHERE user_id = ?', userId)
   run('DELETE FROM admin_users WHERE id = ?', userId)
 }
@@ -1350,6 +1409,7 @@ export function createSession(token: string, userId: number, ip: string, client:
   try {
     run('DELETE FROM sessions WHERE user_id = ?', userId)
     run('DELETE FROM admin_login_takeovers WHERE user_id = ?', userId)
+    run('DELETE FROM admin_presence WHERE user_id = ?', userId)
     run(
       'INSERT INTO sessions (token, time, user_id, last_seen, ip, browser, os, device) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
       tokenDigest(token), now, userId, now, ip, client.browser, client.os, client.device,
@@ -3961,6 +4021,7 @@ export function initializeAdmin(
     setTurnstileConfig(turnstileSiteKey, turnstileSecret, turnstileHostnames)
     setSetting(GAME_API_KEY_SETTING, normalizedGameApiKey)
     run('DELETE FROM sessions')
+    run('DELETE FROM admin_presence')
     run('DELETE FROM admin_users')
     const passwordHash = hashAdminPassword(rawPassword)
     run(
@@ -3982,6 +4043,7 @@ export function updateAdminPassword(user: AdminUser, oldPassword: string, newPas
   if (user.isOwner) deleteSetting(ADMIN_PASSWORD_SETTING)
   run('DELETE FROM sessions WHERE user_id = ?', user.id)
   run('DELETE FROM admin_login_takeovers WHERE user_id = ?', user.id)
+  run('DELETE FROM admin_presence WHERE user_id = ?', user.id)
 }
 
 export function verifyUserPassword(username: string, password: string): boolean {

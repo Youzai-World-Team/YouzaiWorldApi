@@ -4,6 +4,7 @@ import {
 import { getRequestURL } from 'h3'
 import { getVerificationEmailTemplates, requirePagePermission } from '../../utils/db'
 import type { VerificationEmailTemplateKind } from '../../utils/email-templates'
+import { addEmailPreviewScrollbar } from '../../utils/email-preview-scrollbar'
 
 const PREVIEW_KINDS: VerificationEmailTemplateKind[] = [
   'registration',
@@ -20,10 +21,10 @@ export default defineEventHandler((event) => {
 
   setResponseHeader(event, 'Cache-Control', 'no-store')
   setResponseHeader(event, 'Content-Type', 'text/html; charset=UTF-8')
-  return buildVerificationEmailFromTemplate(
+  return addEmailPreviewScrollbar(buildVerificationEmailFromTemplate(
     getVerificationEmailTemplates()[requestedKind],
     user.fullName || user.username,
     '123456',
     `${getRequestURL(event).origin}/images/uzw-tm.png`,
-  )
+  ))
 })

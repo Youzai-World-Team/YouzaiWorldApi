@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import path from 'node:path'
 import { createError } from 'h3'
+import { DOMAIN_MAIL_TEMPLATE_HTML } from './domain-mail-template'
 
 export interface DomainMailTemplateData {
   subject: string
@@ -37,16 +37,11 @@ function htmlByteLength(value: string): number {
   return Buffer.byteLength(value, 'utf8')
 }
 
-function templateCandidates(): string[] {
-  const configured = String(process.env.YZWC_REPLY_TEMPLATE_PATH || '').trim()
-  return [configured, path.resolve(process.cwd(), 'reply.html'), path.resolve(process.cwd(), '..', 'reply.html')]
-    .filter(Boolean)
-}
-
 export async function readDomainMailTemplate(): Promise<string> {
-  const filename = templateCandidates().find((candidate) => existsSync(candidate))
-  if (!filename) throw createError({ statusCode: 503, statusMessage: '默认邮件模板不存在' })
-  const html = await readFile(filename, 'utf8')
+  const configured = String(process.env.YZWC_REPLY_TEMPLATE_PATH || '').trim()
+  const html = configured && existsSync(configured)
+    ? await readFile(configured, 'utf8')
+    : DOMAIN_MAIL_TEMPLATE_HTML
   if (!html.trim() || htmlByteLength(html) > DOMAIN_MAIL_HTML_MAX_BYTES) {
     throw createError({ statusCode: 503, statusMessage: '默认邮件模板为空或过大' })
   }

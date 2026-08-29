@@ -28,6 +28,7 @@ let updateFrame = 0
 let dragStartY = 0
 let dragStartScrollTop = 0
 let observedTarget: HTMLElement | null = null
+let observedGeometryElements: Element[] = []
 
 const isWindowTarget = computed(() => props.page)
 const trackStyle = computed(() => {
@@ -56,9 +57,50 @@ function getMetrics() {
   }
 }
 
+function composedParent(element: Element): Element | null {
+  if (element.assignedSlot) return element.assignedSlot
+  if (element.parentElement) return element.parentElement
+  const root = element.getRootNode()
+  return root instanceof ShadowRoot ? root.host : null
+}
+
+function clippingAncestors(target: Element): Element[] {
+  const ancestors: Element[] = []
+  let current = composedParent(target)
+  while (current) {
+    const style = window.getComputedStyle(current)
+    if (style.overflowX !== 'visible' || style.overflowY !== 'visible') ancestors.push(current)
+    current = composedParent(current)
+  }
+  return ancestors
+}
+
+function visibleTargetRect(target: HTMLElement): DOMRect {
+  const targetBox = target.getBoundingClientRect()
+  let left = targetBox.left
+  let right = targetBox.right
+  let top = targetBox.top
+  let bottom = targetBox.bottom
+
+  for (const ancestor of clippingAncestors(target)) {
+    const style = window.getComputedStyle(ancestor)
+    const box = ancestor.getBoundingClientRect()
+    if (style.overflowX !== 'visible') {
+      left = Math.max(left, box.left)
+      right = Math.min(right, box.right)
+    }
+    if (style.overflowY !== 'visible') {
+      top = Math.max(top, box.top)
+      bottom = Math.min(bottom, box.bottom)
+    }
+  }
+
+  return new DOMRect(left, top, Math.max(0, right - left), Math.max(0, bottom - top))
+}
+
 function updateScrollbar() {
   updateFrame = 0
-  if (props.target) targetRect.value = props.target.getBoundingClientRect()
+  if (props.target) targetRect.value = visibleTargetRect(props.target)
   const metrics = getMetrics()
   const trackHeight = props.target && targetRect.value ? targetRect.value.height : track.value?.clientHeight || Math.max(0, metrics.viewport - 72)
   const max = Math.max(0, metrics.height - metrics.viewport)
@@ -143,7 +185,8 @@ function onKeydown(event: KeyboardEvent) {
 }
 
 function detachTarget() {
-  if (observedTarget) resizeObserver?.unobserve(observedTarget)
+  for (const element of observedGeometryElements) resizeObserver?.unobserve(element)
+  observedGeometryElements = []
   observedTarget?.removeEventListener('scroll', onScroll)
   observedTarget?.classList.remove('app-scrollbar-target')
   observedTarget = null
@@ -155,7 +198,9 @@ function attachTarget(target: HTMLElement | null) {
   observedTarget = target
   target.classList.add('app-scrollbar-target')
   target.addEventListener('scroll', onScroll, { passive: true })
-  resizeObserver?.observe(target)
+  observedGeometryElements = [target, ...clippingAncestors(target)]
+    .filter((element) => element !== document.documentElement && element !== document.body)
+  for (const element of observedGeometryElements) resizeObserver?.observe(element)
   scheduleUpdate()
 }
 
