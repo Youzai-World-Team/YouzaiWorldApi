@@ -11,6 +11,9 @@ function resolveDataDir(): string {
     if (existsSync(path.join(dir, 'package.json')) && existsSync(path.join(dir, 'server'))) {
       return path.join(dir, 'server/data')
     }
+    if (existsSync(path.join(dir, 'nitro.json'))) {
+      return path.join(path.dirname(dir), 'server/data')
+    }
     const parent = path.dirname(dir)
     if (parent === dir) break
     dir = parent
