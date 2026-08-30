@@ -90,6 +90,12 @@ const todayCount = computed(() => (overview.value?.records || []).filter((record
 const connectionCount = computed(() => (overview.value?.records || []).filter((record) => record.kind === 'login').length)
 const memberMap = computed(() => new Map(members.value.map((member) => [member.id, member])))
 const selectedMembers = computed(() => members.value.filter((member) => selectedMemberIds.value.includes(member.id)))
+const hasRecordFilters = computed(() => Boolean(
+  search.value.trim()
+  || mode.value !== 'all'
+  || selectedMemberId.value !== null
+  || selectedMemberIds.value.length,
+))
 const memberFilterLabel = computed(() => {
   if (!memberSelectionMode.value) {
     if (selectedMemberId.value === null) return '全部成员'
@@ -409,6 +415,12 @@ onBeforeUnmount(() => {
               <time :datetime="new Date(record.time).toISOString()" :title="formatFullTime(record.time)"><strong>{{ formatTime(record.time) }}</strong><span>{{ formatRelativeTime(record.time) }}</span></time>
             </article>
           </section>
+        </div>
+        <div v-else-if="!overview?.records.length && !hasRecordFilters" class="empty-state">
+          <EmptyState image="/images/empty-document-review.svg">
+            <template #title>暂无操作记录</template>
+            后台操作和登录活动会显示在这里。
+          </EmptyState>
         </div>
         <div v-else class="empty-state">
           <md-icon>manage_search</md-icon><strong>没有匹配的记录</strong>

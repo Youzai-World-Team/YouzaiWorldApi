@@ -518,9 +518,10 @@ onMounted(loadPermissions)
           </div>
         </section>
         <section v-else class="card permission-empty-state">
-          <md-icon>manage_accounts</md-icon>
-          <h2>暂无可管理账户</h2>
-          <p>请先在后台用户页面创建账户。</p>
+          <EmptyState image="/images/permission-private-data.svg">
+            <template #title>暂无可管理账户</template>
+            请先在后台用户页面创建账户。
+          </EmptyState>
         </section>
       </div>
     </template>

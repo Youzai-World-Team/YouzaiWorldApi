@@ -237,7 +237,7 @@ async function confirmDelete() {
         </table>
       </div>
       <EmptyState v-if="loading" :illustrated="false">加载中…</EmptyState>
-      <EmptyState v-else-if="bans.length === 0">暂无封禁记录</EmptyState>
+      <EmptyState v-else-if="bans.length === 0" image="/images/empty-protection-enabled.svg">暂无封禁记录</EmptyState>
     </section>
 
     <md-dialog ref="formDialog" :open="formOpen" @closed="onFormClosed">

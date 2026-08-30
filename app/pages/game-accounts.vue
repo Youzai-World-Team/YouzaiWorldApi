@@ -421,8 +421,8 @@ onUnmounted(() => {
     </div>
 
     <div class="card table-card">
-      <div v-if="loading" class="empty">加载中…</div>
-      <div v-else-if="!accounts.length" class="empty">暂无游戏账户</div>
+      <EmptyState v-if="loading" :illustrated="false">加载中…</EmptyState>
+      <EmptyState v-else-if="!accounts.length" image="/images/empty-profile.svg">暂无游戏账户</EmptyState>
       <div v-else class="table-wrap">
         <table>
           <thead>

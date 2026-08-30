@@ -387,8 +387,8 @@ function attachmentDetail(attachment: MailAttachment) {
             </tr>
           </tbody>
         </table>
-        <p v-if="loading" class="empty">加载中…</p>
-        <p v-else-if="mails.length === 0" class="empty">暂无邮件</p>
+        <EmptyState v-if="loading" :illustrated="false">加载中…</EmptyState>
+        <EmptyState v-else-if="mails.length === 0" image="/images/empty-personal-notes.svg">暂无邮件</EmptyState>
         <p v-else-if="filtered.length === 0" class="empty">没有匹配的邮件</p>
       </div>
     </section>

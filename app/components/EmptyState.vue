@@ -1,8 +1,10 @@
 <script setup lang="ts">
 withDefaults(defineProps<{
   illustrated?: boolean
+  image?: string
 }>(), {
   illustrated: true,
+  image: '/images/empty-looking-for-answers.svg',
 })
 </script>
 
@@ -15,16 +17,18 @@ withDefaults(defineProps<{
     <img
       v-if="illustrated"
       class="empty-state__image"
-      src="/images/empty-looking-for-answers.svg"
+      :src="image"
       alt=""
       aria-hidden="true"
     />
+    <strong v-if="$slots.title" class="empty-state__title"><slot name="title" /></strong>
     <p class="empty-state__text"><slot /></p>
   </div>
 </template>
 
 <style scoped>
 .empty-state {
+  width: 100%;
   min-height: 246px;
   display: flex;
   flex-direction: column;
@@ -41,10 +45,18 @@ withDefaults(defineProps<{
 
 .empty-state__image {
   width: min(220px, 68vw);
-  height: auto;
+  height: 160px;
   display: block;
   box-sizing: border-box;
   object-fit: contain;
+}
+
+.empty-state__title {
+  margin: 0;
+  color: var(--md-sys-color-on-surface);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.4;
 }
 
 .empty-state__text {
@@ -72,6 +84,7 @@ withDefaults(defineProps<{
 
   .empty-state__image {
     width: min(188px, 64vw);
+    height: 140px;
   }
 }
 </style>

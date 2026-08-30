@@ -306,10 +306,16 @@ onBeforeUnmount(() => {
         <span>正在加载用户列表…</span>
       </div>
       <div v-else-if="!filteredUsers.length" class="users-state users-state--empty">
-        <md-icon>person_search</md-icon>
-        <strong>{{ users.length ? '没有匹配的账户' : '暂无后台用户' }}</strong>
-        <span v-if="users.length">尝试调整搜索关键词或状态筛选。</span>
-        <md-text-button v-if="hasUserFilters" @click="clearUserFilters">清除筛选</md-text-button>
+        <EmptyState v-if="!users.length" image="/images/empty-team.svg">
+          <template #title>暂无后台用户</template>
+          请先创建一个后台账户。
+        </EmptyState>
+        <template v-else>
+          <md-icon>person_search</md-icon>
+          <strong>没有匹配的账户</strong>
+          <span>尝试调整搜索关键词或状态筛选。</span>
+          <md-text-button v-if="hasUserFilters" @click="clearUserFilters">清除筛选</md-text-button>
+        </template>
       </div>
       <div v-else class="user-grid">
         <article

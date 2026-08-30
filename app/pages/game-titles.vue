@@ -282,8 +282,8 @@ onMounted(async () => {
       role="tabpanel"
       aria-labelledby="title-catalog-tab"
     >
-      <div v-if="loading" class="empty">加载中…</div>
-      <div v-else-if="!overview.titles.length" class="empty">暂无称号</div>
+      <EmptyState v-if="loading" :illustrated="false">加载中…</EmptyState>
+      <EmptyState v-else-if="!overview.titles.length" image="/images/empty-winner.svg">暂无称号</EmptyState>
       <div v-else class="table-wrap">
         <table>
           <thead><tr><th>预览</th><th>称号</th><th>ID</th><th>类型</th><th>状态</th><th class="actions-column">操作</th></tr></thead>

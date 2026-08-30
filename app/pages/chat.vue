@@ -269,8 +269,8 @@ async function confirmClear() {
           </tbody>
         </table>
       </div>
-      <p v-if="loading" class="empty">加载中…</p>
-      <p v-else-if="messages.length === 0" class="empty">暂无留言记录</p>
+      <EmptyState v-if="loading" :illustrated="false">加载中…</EmptyState>
+      <EmptyState v-else-if="messages.length === 0" image="/images/empty-live-support.svg">暂无留言记录</EmptyState>
     </div>
 
     <md-dialog ref="composeDialog" :open="composeOpen" @closed="onComposeClosed">

@@ -267,7 +267,7 @@ async function confirmDelete() {
         </table>
       </div>
       <EmptyState v-if="loading" :illustrated="false">加载中…</EmptyState>
-      <EmptyState v-else-if="donors.length === 0">暂无捐赠者</EmptyState>
+      <EmptyState v-else-if="donors.length === 0" image="/images/empty-thumbs-up.svg">暂无捐赠者</EmptyState>
     </section>
 
     <md-dialog ref="formDialog" :open="formOpen" @closed="onFormClosed">
