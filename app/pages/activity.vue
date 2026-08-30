@@ -228,8 +228,8 @@ async function confirmDelete() {
         </tbody>
         </table>
       </div>
-      <p v-if="loading" class="empty">加载中…</p>
-      <p v-else-if="activities.length === 0" class="empty">暂无记录</p>
+      <EmptyState v-if="loading" :illustrated="false">加载中…</EmptyState>
+      <EmptyState v-else-if="activities.length === 0">暂无记录</EmptyState>
     </section>
 
     <md-dialog ref="formDialog" :open="formOpen" @closed="onFormClosed">
@@ -459,18 +459,6 @@ async function confirmDelete() {
 
 .delete-confirm {
   color: var(--md-sys-color-error);
-}
-
-.empty {
-  min-height: 120px;
-  display: grid;
-  place-items: center;
-  align-content: center;
-  margin: 0;
-  padding: 28px 20px 32px;
-  font-size: 13px;
-  color: var(--md-sys-color-on-surface-variant);
-  text-align: center;
 }
 
 .activity-table tbody tr { transition: background-color 160ms ease; }

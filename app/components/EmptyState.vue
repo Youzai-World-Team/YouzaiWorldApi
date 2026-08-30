@@ -1,0 +1,77 @@
+<script setup lang="ts">
+withDefaults(defineProps<{
+  illustrated?: boolean
+}>(), {
+  illustrated: true,
+})
+</script>
+
+<template>
+  <div
+    class="empty-state"
+    :class="{ 'empty-state--compact': !illustrated }"
+    role="status"
+  >
+    <img
+      v-if="illustrated"
+      class="empty-state__image"
+      src="/images/empty-looking-for-answers.svg"
+      alt=""
+      aria-hidden="true"
+    />
+    <p class="empty-state__text"><slot /></p>
+  </div>
+</template>
+
+<style scoped>
+.empty-state {
+  min-height: 246px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 28px 20px 32px;
+  text-align: center;
+}
+
+.empty-state--compact {
+  min-height: 120px;
+}
+
+.empty-state__image {
+  width: min(220px, 68vw);
+  height: auto;
+  display: block;
+  box-sizing: border-box;
+  object-fit: contain;
+}
+
+.empty-state__text {
+  margin: 0;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+:global(:root[data-theme='dark']) .empty-state__image {
+  padding: 6px;
+  border-radius: 8px;
+  background: #f7faf4;
+}
+
+@media (max-width: 640px) {
+  .empty-state {
+    min-height: 220px;
+    padding: 24px 16px 28px;
+  }
+
+  .empty-state--compact {
+    min-height: 104px;
+  }
+
+  .empty-state__image {
+    width: min(188px, 64vw);
+  }
+}
+</style>
