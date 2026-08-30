@@ -1,5 +1,6 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
+import { uploadsDir } from '../utils/data-dir'
 import { requireAuth, requireFeaturePermission, requireOwner, requirePagePermission } from '../utils/db'
 
 const EXT_BY_TYPE: Record<string, string> = {
@@ -39,10 +40,9 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: '只支持 PNG/JPG/WebP/GIF/AVIF 图片' })
   }
 
-  const uploadDir = path.resolve(process.cwd(), 'server/data/uploads')
-  await fs.mkdir(uploadDir, { recursive: true })
+  await fs.mkdir(uploadsDir, { recursive: true })
   const filename = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}.${ext}`
-  await fs.writeFile(path.join(uploadDir, filename), file.data)
+  await fs.writeFile(path.join(uploadsDir, filename), file.data)
 
   return { url: `/api/uploads/${filename}` }
 })

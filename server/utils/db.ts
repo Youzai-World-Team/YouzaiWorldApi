@@ -10,9 +10,10 @@ import {
   randomUUID,
   timingSafeEqual,
 } from 'node:crypto'
-import { mkdirSync, promises as fs } from 'node:fs'
+import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { getCookie, getHeader, createError, type H3Event } from 'h3'
+import { dataDir, ensureDataDirs } from './data-dir'
 import { offlinePlayerUuid, requireEmailAddress, requireGameUsername } from './game-input'
 import type { MailAction, MailAttachment, MailTargetSpec, MailType } from './game-input'
 import type { InboundMailPayload } from './inbound-mail'
@@ -58,9 +59,7 @@ import {
   type PasswordExpiryStatus,
 } from '#shared/password-policy'
 
-const dataDir = path.resolve(process.cwd(), 'server/data')
-mkdirSync(dataDir, { recursive: true })
-mkdirSync(path.join(dataDir, 'uploads'), { recursive: true })
+ensureDataDirs()
 
 const db = new DatabaseSync(path.join(dataDir, 'database.db'))
 
