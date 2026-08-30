@@ -984,7 +984,27 @@ export function getGameApiKey(): string {
 
 export function setGameApiKey(value: unknown): string {
   const key = requireGameApiKeyValue(value)
-  setSetting(GAME_API_KEY_SETTING, key)
+  const currentKey = getGameApiKey()
+  if (key === currentKey) {
+    setSetting(GAME_API_KEY_SETTING, key)
+    return key
+  }
+
+  // SMTP 密码使用游戏 API 密钥派生的密钥加密。轮换游戏 API 密钥时先用
+  // 当前密钥解密，再在同一事务内使用新密钥重新加密，避免保存站点设置后
+  // 已配置的 SMTP 认证立即失效。
+  const encryptedSmtpPassword = getSetting(SMTP_PASSWORD_SETTING) || ''
+  const smtpPassword = encryptedSmtpPassword ? decryptSmtpPassword(encryptedSmtpPassword) : ''
+
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    setSetting(GAME_API_KEY_SETTING, key)
+    if (smtpPassword) setSetting(SMTP_PASSWORD_SETTING, encryptSmtpPassword(smtpPassword))
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
   return key
 }
 
@@ -2851,14 +2871,6 @@ function safeEqualHex(actual: string, expected: string): boolean {
   return a.length === b.length && timingSafeEqual(a, b)
 }
 
-function requireSecret(name: string, minLength: number): string {
-  const value = process.env[name]?.trim() || ''
-  if (value.length < minLength) {
-    throw createError({ statusCode: 503, message: `${name} 未配置或长度不足` })
-  }
-  return value
-}
-
 export function validateRuntimeSecurityConfig(): void {
   if (isAdminInitialized()) {
     requireConfiguredGameApiKey()
@@ -3354,8 +3366,8 @@ function smtpSettingsAreComplete(settings: StoredSmtpSettings): boolean {
   }
 }
 
-function smtpEncryptionKey(): Buffer {
-  return createHash('sha256').update(`yzwc-smtp:${requireSecret(GAME_API_KEY_ENV, 32)}`).digest()
+function smtpEncryptionKey(secret = requireConfiguredGameApiKey()): Buffer {
+  return createHash('sha256').update(`yzwc-smtp:${secret}`).digest()
 }
 
 function encryptSmtpPassword(password: string): string {
@@ -3367,18 +3379,32 @@ function encryptSmtpPassword(password: string): string {
 }
 
 function decryptSmtpPassword(payload: string): string {
-  try {
-    const [version, ivText, tagText, encryptedText] = payload.split('.')
-    if (version !== 'v1' || !ivText || !tagText || !encryptedText) throw new Error('invalid payload')
-    const decipher = createDecipheriv('aes-256-gcm', smtpEncryptionKey(), Buffer.from(ivText, 'base64url'))
-    decipher.setAuthTag(Buffer.from(tagText, 'base64url'))
-    return Buffer.concat([
-      decipher.update(Buffer.from(encryptedText, 'base64url')),
-      decipher.final(),
-    ]).toString('utf8')
-  } catch {
+  const [version, ivText, tagText, encryptedText] = payload.split('.')
+  if (version !== 'v1' || !ivText || !tagText || !encryptedText) {
     throw createError({ statusCode: 503, message: 'SMTP 密码无法解密，请重新保存 SMTP 配置' })
   }
+
+  const configuredSecret = requireConfiguredGameApiKey()
+  const legacyEnvironmentSecret = process.env[GAME_API_KEY_ENV]?.trim() || ''
+  const candidateSecrets = [configuredSecret]
+  if (legacyEnvironmentSecret.length >= 32 && legacyEnvironmentSecret !== configuredSecret) {
+    candidateSecrets.push(legacyEnvironmentSecret)
+  }
+
+  for (const secret of candidateSecrets) {
+    try {
+      const decipher = createDecipheriv('aes-256-gcm', smtpEncryptionKey(secret), Buffer.from(ivText, 'base64url'))
+      decipher.setAuthTag(Buffer.from(tagText, 'base64url'))
+      return Buffer.concat([
+        decipher.update(Buffer.from(encryptedText, 'base64url')),
+        decipher.final(),
+      ]).toString('utf8')
+    } catch {
+      // 兼容旧版本使用进程环境变量加密的 SMTP 密码。
+    }
+  }
+
+  throw createError({ statusCode: 503, message: 'SMTP 密码无法解密，请重新保存 SMTP 配置' })
 }
 
 function smtpSettingsAreUsable(settings: StoredSmtpSettings): boolean {
