@@ -66,6 +66,8 @@ const overview = ref<AuditOverview | null>(null)
 const loading = ref(false)
 const refreshing = ref(false)
 const selectedMemberId = ref<number | null>(null)
+const selectedMemberIds = ref<number[]>([])
+const memberSelectionMode = ref(false)
 const mode = ref<RecordMode>('all')
 const search = ref('')
 const now = ref(Date.now())
@@ -87,11 +89,24 @@ const loggedInCount = computed(() => members.value.filter((member) => member.log
 const todayCount = computed(() => (overview.value?.records || []).filter((record) => sameLocalDay(record.time, now.value)).length)
 const connectionCount = computed(() => (overview.value?.records || []).filter((record) => record.kind === 'login').length)
 const memberMap = computed(() => new Map(members.value.map((member) => [member.id, member])))
+const selectedMembers = computed(() => members.value.filter((member) => selectedMemberIds.value.includes(member.id)))
+const memberFilterLabel = computed(() => {
+  if (!memberSelectionMode.value) {
+    if (selectedMemberId.value === null) return '全部成员'
+    const member = memberMap.value.get(selectedMemberId.value)
+    return member ? (member.fullName || member.username) : '已选成员'
+  }
+  return selectedMembers.value.length ? `已选 ${selectedMembers.value.length} 位成员` : '全部成员'
+})
 
 const filteredRecords = computed(() => {
   const needle = search.value.trim().toLocaleLowerCase('zh-CN')
   return (overview.value?.records || []).filter((record) => {
-    if (selectedMemberId.value !== null && record.userId !== selectedMemberId.value) return false
+    if (memberSelectionMode.value && selectedMemberIds.value.length > 0) {
+      if (record.userId === null || !selectedMemberIds.value.includes(record.userId)) return false
+    } else if (!memberSelectionMode.value && selectedMemberId.value !== null && record.userId !== selectedMemberId.value) {
+      return false
+    }
     if (mode.value === 'actions' && record.kind !== 'action') return false
     if (mode.value === 'connections' && record.kind === 'action') return false
     if (!needle) return true
@@ -122,6 +137,9 @@ async function loadRecords(silent = false) {
     overview.value = await $fetch<AuditOverview>('/api/admin/audit-logs', {
       query: { view: 'overview', limit: 800 },
     })
+    const availableIds = new Set(overview.value.members.map((member) => member.id))
+    selectedMemberIds.value = selectedMemberIds.value.filter((id) => availableIds.has(id))
+    if (selectedMemberId.value !== null && !availableIds.has(selectedMemberId.value)) selectedMemberId.value = null
     now.value = Date.now()
   } catch (error: any) {
     if (!silent) showToast(error?.data?.statusMessage || '操作记录加载失败', 'error')
@@ -184,6 +202,50 @@ function memberRecordCount(memberId: number) {
   return (overview.value?.records || []).filter((record) => record.userId === memberId).length
 }
 
+function isMemberSelected(memberId: number) {
+  return memberSelectionMode.value
+    ? selectedMemberIds.value.includes(memberId)
+    : selectedMemberId.value === memberId
+}
+
+function isAllMembersSelected() {
+  return memberSelectionMode.value ? selectedMemberIds.value.length === 0 : selectedMemberId.value === null
+}
+
+function toggleMemberSelectionMode() {
+  if (members.value.length < 2) return
+  if (memberSelectionMode.value) {
+    const keep = selectedMemberIds.value[0] ?? null
+    memberSelectionMode.value = false
+    selectedMemberIds.value = []
+    selectedMemberId.value = keep
+    return
+  }
+  memberSelectionMode.value = true
+  selectedMemberIds.value = selectedMemberId.value === null ? [] : [selectedMemberId.value]
+  selectedMemberId.value = null
+}
+
+function selectAllMembers() {
+  if (memberSelectionMode.value) {
+    selectedMemberIds.value = []
+    return
+  }
+  selectedMemberId.value = null
+}
+
+function toggleMember(memberId: number) {
+  if (!memberSelectionMode.value) {
+    selectedMemberId.value = memberId
+    selectedMemberIds.value = []
+    return
+  }
+  selectedMemberId.value = null
+  selectedMemberIds.value = selectedMemberIds.value.includes(memberId)
+    ? selectedMemberIds.value.filter((id) => id !== memberId)
+    : [...selectedMemberIds.value, memberId]
+}
+
 function memberStatusLabel(member: MemberStatus) {
   if (!member.isActive) return '已停用'
   if (member.online) return '在线'
@@ -204,6 +266,7 @@ function recordKindLabel(kind: RecordKind) {
 
 function clearFilters() {
   selectedMemberId.value = null
+  selectedMemberIds.value = []
   mode.value = 'all'
   search.value = ''
 }
@@ -223,7 +286,8 @@ onBeforeUnmount(() => {
 <template>
   <div class="page audit-page">
     <header class="page-heading">
-      <div>
+      <div class="audit-title-block">
+        <span class="audit-eyebrow"><md-icon>history</md-icon>后台审计</span>
         <h1 class="page-title">操作记录</h1>
         <p v-if="overview" class="sync-time">最后同步 {{ formatRelativeTime(overview.generatedAt) }}</p>
       </div>
@@ -262,13 +326,34 @@ onBeforeUnmount(() => {
 
     <div class="activity-workspace">
       <aside class="member-panel">
-        <div class="panel-heading"><div><h2>成员状态</h2><span>{{ onlineCount }} / {{ members.length }} 在线</span></div><md-icon>group</md-icon></div>
+        <div class="panel-heading member-heading">
+          <div>
+            <h2>成员状态</h2>
+            <span>{{ memberSelectionMode && selectedMemberIds.length ? `已选 ${selectedMemberIds.length} / ${members.length}` : `${onlineCount} / ${members.length} 在线` }}</span>
+          </div>
+          <div class="member-heading-actions">
+            <md-icon-button
+              :aria-label="memberSelectionMode ? '完成多选' : '多选成员'"
+              :title="memberSelectionMode ? '完成多选' : '多选成员'"
+              :aria-pressed="memberSelectionMode"
+              :disabled="members.length < 2"
+              @click="toggleMemberSelectionMode"
+            >
+              <md-icon>{{ memberSelectionMode ? 'done' : 'group_add' }}</md-icon>
+            </md-icon-button>
+            <md-icon aria-hidden="true">groups</md-icon>
+          </div>
+        </div>
         <div class="member-list">
-          <button type="button" class="member-item member-item--all" :aria-pressed="selectedMemberId === null" :class="{ 'member-item--selected': selectedMemberId === null }" @click="selectedMemberId = null">
+          <button v-if="!memberSelectionMode" type="button" class="member-item member-item--all" :aria-pressed="isAllMembersSelected()" :class="{ 'member-item--selected': isAllMembersSelected() }" @click="selectAllMembers">
             <span class="member-avatar member-avatar--all"><md-icon>groups</md-icon></span>
             <span class="member-copy"><strong>全部成员</strong><small>{{ overview?.records.length || 0 }} 条记录</small></span>
+            <span class="member-count">
+              <md-checkbox v-if="memberSelectionMode" :checked="isAllMembersSelected()" tabindex="-1"></md-checkbox>
+              <md-icon v-else :title="isAllMembersSelected() ? '当前筛选' : '查看全部成员'">{{ isAllMembersSelected() ? 'radio_button_checked' : 'radio_button_unchecked' }}</md-icon>
+            </span>
           </button>
-          <button v-for="member in members" :key="member.id" type="button" class="member-item" :aria-pressed="selectedMemberId === member.id" :class="{ 'member-item--selected': selectedMemberId === member.id }" @click="selectedMemberId = member.id">
+          <button v-for="member in members" :key="member.id" type="button" class="member-item" :aria-pressed="isMemberSelected(member.id)" :class="{ 'member-item--selected': isMemberSelected(member.id) }" @click="toggleMember(member.id)">
             <span class="member-avatar-wrap">
               <img v-if="member.avatar" class="member-avatar" :src="member.avatar" alt="" />
               <span v-else class="member-avatar member-avatar--fallback">{{ memberInitial(member) }}</span>
@@ -278,13 +363,17 @@ onBeforeUnmount(() => {
               <strong>{{ member.fullName || member.username }}<em v-if="member.isCurrent">当前</em></strong>
               <small>{{ memberStatusLabel(member) }} · {{ formatRelativeTime(member.lastSeenAt) }}</small>
             </span>
-            <span class="member-count">{{ memberRecordCount(member.id) }}</span>
+            <span class="member-count">
+              <span>{{ memberRecordCount(member.id) }}</span>
+              <md-checkbox v-if="memberSelectionMode" :checked="isMemberSelected(member.id)" tabindex="-1"></md-checkbox>
+              <md-icon v-else :title="isMemberSelected(member.id) ? '当前筛选' : '查看此成员'">{{ isMemberSelected(member.id) ? 'radio_button_checked' : 'radio_button_unchecked' }}</md-icon>
+            </span>
           </button>
         </div>
       </aside>
 
       <section class="records-panel">
-        <div class="panel-heading records-heading"><div><h2>记录时间线</h2><span>{{ filteredRecords.length }} 条</span></div><md-icon>history</md-icon></div>
+        <div class="panel-heading records-heading"><div><h2>记录时间线</h2><span>{{ memberFilterLabel }} · {{ filteredRecords.length }} 条</span></div><md-icon>history</md-icon></div>
         <div class="record-controls">
           <md-outlined-text-field class="record-search" label="搜索记录" :value="search" @input="search = ($event.target as HTMLInputElement).value"><md-icon slot="leading-icon">search</md-icon></md-outlined-text-field>
           <div class="mode-control" role="group" aria-label="记录类型">
@@ -323,7 +412,7 @@ onBeforeUnmount(() => {
         </div>
         <div v-else class="empty-state">
           <md-icon>manage_search</md-icon><strong>没有匹配的记录</strong>
-          <md-text-button v-if="search || mode !== 'all' || selectedMemberId !== null" @click="clearFilters">清除筛选</md-text-button>
+          <md-text-button v-if="search || mode !== 'all' || selectedMemberId !== null || selectedMemberIds.length" @click="clearFilters">清除筛选</md-text-button>
         </div>
       </section>
     </div>
@@ -370,6 +459,14 @@ onBeforeUnmount(() => {
 .activity-workspace { min-width: 0; display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 14px; align-items: start; }
 .member-panel, .records-panel { min-width: 0; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 8px; background: var(--md-sys-color-surface-container); }
 .member-panel { position: sticky; top: calc(var(--app-bar-height) + 16px); overflow: hidden; }
+.audit-title-block { min-width: 0; }
+.audit-eyebrow { display: inline-flex; align-items: center; gap: 6px; color: var(--md-sys-color-primary); font-size: 11px; font-weight: 700; }
+.audit-eyebrow md-icon { --md-icon-size: 16px; }
+.audit-title-block .page-title { margin: 6px 0 3px; }
+.panel-heading > .member-heading-actions { min-width: 0; display: inline-flex; align-items: center; justify-content: flex-end; gap: 2px; color: var(--md-sys-color-on-surface-variant); }
+.member-heading-actions md-icon-button { width: 40px; height: 40px; }
+.member-heading-actions md-icon-button[aria-pressed="true"] { color: var(--md-sys-color-primary); background: color-mix(in srgb, var(--md-sys-color-primary) 12%, transparent); }
+.member-heading-actions > md-icon { --md-icon-size: 20px; }
 .panel-heading { min-height: 62px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--md-sys-color-outline-variant); }
 .panel-heading > div { min-width: 0; display: grid; gap: 2px; }
 .panel-heading h2 { margin: 0; font-size: 14px; font-weight: 650; }
@@ -394,8 +491,12 @@ onBeforeUnmount(() => {
 .member-copy strong em { padding: 2px 4px; border-radius: 3px; color: var(--act-success); background: color-mix(in srgb, var(--act-success) 10%, transparent); font-size: 10px; font-style: normal; }
 .member-copy small { overflow: hidden; color: var(--md-sys-color-on-surface-variant); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .member-item--selected .member-copy small { color: color-mix(in srgb, var(--md-sys-color-on-primary-container) 72%, transparent); }
-.member-count { min-width: 22px; color: var(--md-sys-color-on-surface-variant); font-size: 10px; text-align: right; }
+.member-count { min-width: 42px; display: inline-flex; align-items: center; justify-content: flex-end; gap: 2px; color: var(--md-sys-color-on-surface-variant); font-size: 10px; text-align: right; white-space: nowrap; }
+.member-count md-checkbox { pointer-events: none; }
+.member-count > md-icon { --md-icon-size: 17px; }
+.member-item--selected .member-count md-checkbox { --md-checkbox-selected-container-color: var(--md-sys-color-on-primary-container); --md-checkbox-selected-icon-color: var(--md-sys-color-primary-container); }
 .member-item--selected .member-count { color: var(--md-sys-color-on-primary-container); }
+.member-item--selected .member-count > md-icon { color: currentColor; }
 .records-panel { overflow: hidden; }
 .records-heading { border-bottom: 0; }
 .record-controls { display: flex; align-items: center; gap: 10px; padding: 0 16px 14px; border-bottom: 1px solid var(--md-sys-color-outline-variant); }

@@ -47,6 +47,10 @@ const deleteDialog = ref<HTMLElement | null>(null)
 const { showToast } = useToast()
 const { apply: applyDialogAnimation } = useDialogAnimation()
 
+const completedCount = computed(() => activities.value.filter((activity) => activity.type === 'success').length)
+const alertCount = computed(() => activities.value.filter((activity) => activity.type === 'warning' || activity.type === 'error').length)
+const latestActivityDate = computed(() => activities.value[0]?.date || '暂无日期')
+
 onMounted(() => {
   load()
   applyDialogAnimation(formDialog.value)
@@ -168,21 +172,29 @@ async function confirmDelete() {
 </script>
 
 <template>
-  <div class="page">
-    <div class="page-heading">
-      <h1 class="page-title">服务器动态</h1>
-      <md-icon-button :href="endpoint" target="_blank" rel="noopener" aria-label="打开数据 API" title="打开数据 API">
-        <md-icon>link</md-icon>
-      </md-icon-button>
+  <div class="page page--wide catalog-page activity-page">
+    <header class="catalog-header">
+      <div class="catalog-title-block">
+        <span class="catalog-eyebrow"><md-icon>campaign</md-icon>内容发布</span>
+        <h1 class="page-title">服务器动态</h1>
+        <p>发布服务器公告、活动进展和需要玩家关注的最新消息。</p>
+      </div>
+      <div class="catalog-header-actions">
+        <md-icon-button :href="endpoint" target="_blank" rel="noopener" aria-label="打开数据 API" title="打开数据 API"><md-icon>link</md-icon></md-icon-button>
+        <md-filled-button v-if="canEdit" @click="openAdd"><md-icon slot="icon">add</md-icon>添加动态</md-filled-button>
+      </div>
+    </header>
+    <div class="catalog-summary" aria-label="服务器动态概览">
+      <article class="summary-item summary-item--primary"><span class="summary-icon"><md-icon>campaign</md-icon></span><div><strong>{{ activities.length }}</strong><span>动态总数</span></div></article>
+      <article class="summary-item summary-item--success"><span class="summary-icon"><md-icon>task_alt</md-icon></span><div><strong>{{ completedCount }}</strong><span>完成消息</span></div></article>
+      <article class="summary-item summary-item--warning"><span class="summary-icon"><md-icon>notifications_active</md-icon></span><div><strong>{{ alertCount }}</strong><span>提醒消息</span></div></article>
+      <article class="summary-item summary-item--neutral"><span class="summary-icon"><md-icon>event</md-icon></span><div><strong>{{ latestActivityDate }}</strong><span>最近发布日期</span></div></article>
     </div>
 
-    <div class="card">
+    <section class="card catalog-card">
       <div class="card-head">
-        <h2 class="card-title">动态列表</h2>
-        <md-filled-button v-if="canEdit" @click="openAdd">
-          <md-icon slot="icon">add</md-icon>
-          添加项目
-        </md-filled-button>
+        <div><span class="section-overline">官网内容</span><h2 class="card-title">动态列表</h2></div>
+        <span class="card-caption">{{ activities.length }} 条动态</span>
       </div>
 
       <div class="table-wrap">
@@ -197,12 +209,12 @@ async function confirmDelete() {
         </thead>
         <tbody>
           <tr v-for="a in activities" :key="a.id">
-            <td class="cell-type">
+            <td class="cell-type" data-label="类型">
               <span class="badge" :class="`badge--${a.type}`">{{ typeLabel(a.type) }}</span>
             </td>
-            <td class="cell-date">{{ a.date }}</td>
-            <td class="cell-content">{{ a.content }}</td>
-            <td class="cell-actions">
+            <td class="cell-date" data-label="日期">{{ a.date }}</td>
+            <td class="cell-content" data-label="内容">{{ a.content }}</td>
+            <td class="cell-actions" data-label="操作">
               <md-text-button v-if="canEdit" @click="openEdit(a)">
                 <md-icon slot="icon">edit</md-icon>
                 编辑
@@ -218,7 +230,7 @@ async function confirmDelete() {
       </div>
       <p v-if="loading" class="empty">加载中…</p>
       <p v-else-if="activities.length === 0" class="empty">暂无记录</p>
-    </div>
+    </section>
 
     <md-dialog ref="formDialog" :open="formOpen" @closed="onFormClosed">
       <div slot="headline">{{ formMode === 'add' ? '添加项目' : '编辑项目' }}</div>
@@ -273,30 +285,44 @@ async function confirmDelete() {
 </template>
 
 <style scoped>
-.page-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 20px;
-}
-
-.page-title {
-  margin: 0;
-}
+.catalog-page { width: min(100%, 1320px); }
+.catalog-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 22px; padding-bottom: 20px; border-bottom: 1px solid var(--md-sys-color-outline-variant); }
+.catalog-title-block { min-width: 0; }
+.catalog-eyebrow, .section-overline { display: inline-flex; align-items: center; gap: 6px; color: var(--md-sys-color-primary); font-size: 11px; font-weight: 700; }
+.catalog-eyebrow md-icon { --md-icon-size: 16px; }
+.catalog-title-block .page-title { margin: 6px 0 5px; }
+.catalog-title-block p { max-width: 620px; margin: 0; color: var(--md-sys-color-on-surface-variant); font-size: 13px; }
+.catalog-header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex: 0 0 auto; }
+.catalog-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+.summary-item { min-width: 0; min-height: 76px; display: flex; align-items: center; gap: 12px; padding: 14px 16px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 8px; background: var(--md-sys-color-surface-container); }
+.summary-item > div { min-width: 0; display: grid; gap: 3px; }
+.summary-item strong { overflow: hidden; font-size: 20px; line-height: 1.1; text-overflow: ellipsis; white-space: nowrap; }
+.summary-item span:not(.summary-icon) { color: var(--md-sys-color-on-surface-variant); font-size: 11px; }
+.summary-value-text { font-size: 13px !important; }
+.summary-icon { width: 36px; height: 36px; display: grid; place-items: center; flex: 0 0 36px; border-radius: 8px; color: var(--md-sys-color-primary); background: var(--md-sys-color-primary-container); }
+.summary-icon md-icon { --md-icon-size: 20px; }
+.summary-item--danger .summary-icon { color: var(--act-error); background: color-mix(in srgb, var(--act-error) 11%, transparent); }
+.summary-item--warning .summary-icon { color: var(--act-warning); background: color-mix(in srgb, var(--act-warning) 11%, transparent); }
+.summary-item--info .summary-icon { color: var(--act-info); background: color-mix(in srgb, var(--act-info) 11%, transparent); }
+.summary-item--success .summary-icon { color: var(--act-success); background: color-mix(in srgb, var(--act-success) 11%, transparent); }
+.summary-item--neutral .summary-icon { color: var(--md-sys-color-on-surface-variant); background: var(--md-sys-color-surface-container-high); }
+.catalog-card { padding: 0; overflow: hidden; border: 1px solid var(--md-sys-color-outline-variant); box-shadow: var(--md-sys-elevation-level1); }
 
 .card-head {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 16px;
-  margin-bottom: 16px;
+  gap: 12px;
+  margin: 0;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
 }
 
-.card-head .card-title {
-  margin: 0;
-}
+.card-head > div { min-width: 0; display: grid; gap: 4px; }
+.card-head .card-title { margin: 0; }
+.card-caption { color: var(--md-sys-color-on-surface-variant); font-size: 11px; }
+.table-wrap { overflow-x: auto; padding: 0 20px 12px; }
 
 .activity-table {
   width: 100%;
@@ -307,7 +333,7 @@ async function confirmDelete() {
 
 .activity-table th,
 .activity-table td {
-  padding: 12px;
+  padding: 13px 10px;
   text-align: left;
   border-bottom: 1px solid var(--md-sys-color-outline-variant);
   vertical-align: middle;
@@ -436,24 +462,35 @@ async function confirmDelete() {
 }
 
 .empty {
-  margin: 16px 0 0;
-  font-size: 14px;
+  min-height: 120px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  margin: 0;
+  padding: 28px 20px 32px;
+  font-size: 13px;
   color: var(--md-sys-color-on-surface-variant);
+  text-align: center;
 }
 
+.activity-table tbody tr { transition: background-color 160ms ease; }
+.activity-table tbody tr:hover { background: color-mix(in srgb, var(--md-sys-color-primary) 4%, transparent); }
+
 @media (max-width: 640px) {
-  .card-head {
-    align-items: stretch;
-    gap: 12px;
-  }
-
-  .card-head md-filled-button {
-    width: 100%;
-  }
-
-  .activity-table th,
-  .activity-table td {
-    padding: 10px;
-  }
+  .catalog-header { align-items: stretch; flex-direction: column; gap: 16px; }
+  .catalog-header-actions { justify-content: flex-start; }
+  .catalog-header-actions md-filled-button { flex: 1; }
+  .catalog-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .catalog-card .card-head { align-items: flex-start; }
+  .table-wrap { overflow: visible; padding: 0 16px 10px; }
+  .activity-table, .activity-table tbody, .activity-table tr, .activity-table td { display: block; width: auto; min-width: 0; }
+  .activity-table thead { display: none; }
+  .activity-table tr { padding: 10px 0; border-bottom: 1px solid var(--md-sys-color-outline-variant); }
+  .activity-table tr:last-child { border-bottom: 0; }
+  .activity-table td { display: grid; grid-template-columns: minmax(64px, 0.3fr) minmax(0, 1fr); gap: 12px; align-items: start; padding: 7px 0; border: 0; }
+  .activity-table td::before { content: attr(data-label); color: var(--md-sys-color-on-surface-variant); font-size: 11px; font-weight: 600; }
+  .activity-table .cell-actions { display: flex; justify-content: flex-end; gap: 4px; padding-top: 10px; }
+  .activity-table .cell-actions::before { content: none; }
+  .activity-table .cell-content { overflow-wrap: anywhere; }
 }
 </style>

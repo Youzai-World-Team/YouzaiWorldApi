@@ -14,7 +14,7 @@ interface AdminUser {
 }
 
 const users = ref<AdminUser[]>([])
-const loading = ref(false)
+const loading = ref(true)
 const createOpen = ref(false)
 const saving = ref(false)
 const username = ref('')
@@ -29,11 +29,31 @@ const resetDialog = ref<HTMLElement | null>(null)
 const resetTarget = ref<AdminUser | null>(null)
 const resetPassword = ref('')
 const deleteTarget = ref<AdminUser | null>(null)
+const userKeyword = ref('')
+const statusFilter = ref<'all' | 'active' | 'inactive'>('all')
 const { showToast } = useToast()
 const { apply: applyDialogAnimation } = useDialogAnimation()
 const access = useAdminAccess()
 const { policy: passwordPolicy, load: loadPasswordPolicy, validate: validatePasswordPolicy } = usePasswordPolicy()
 const canEdit = computed(() => access.user.value?.isOwner === true)
+const activeUsers = computed(() => users.value.filter((user) => user.isActive))
+const inactiveUsers = computed(() => users.value.filter((user) => !user.isActive))
+const manageableUsers = computed(() => users.value.filter((user) => !user.isOwner))
+const filteredUsers = computed(() => {
+  const keyword = userKeyword.value.trim().toLocaleLowerCase()
+  return users.value.filter((user) => {
+    if (statusFilter.value === 'active' && !user.isActive) return false
+    if (statusFilter.value === 'inactive' && user.isActive) return false
+    if (!keyword) return true
+    return `${user.username} ${user.fullName}`.toLocaleLowerCase().includes(keyword)
+  })
+})
+const hasUserFilters = computed(() => Boolean(userKeyword.value.trim()) || statusFilter.value !== 'all')
+
+function clearUserFilters() {
+  userKeyword.value = ''
+  statusFilter.value = 'all'
+}
 
 function closeResetDialog() {
   resetTarget.value = null
@@ -222,45 +242,121 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="page">
-    <div class="page-heading">
-      <div>
+  <div class="page admin-users-page">
+    <header class="admin-users-header">
+      <div class="admin-users-title-block">
+        <span class="admin-users-eyebrow"><md-icon>manage_accounts</md-icon>账户中心</span>
         <h1 class="page-title">后台用户</h1>
-        <p class="page-subtitle">仅初始账户可以创建、停用和重置后台用户。</p>
+        <p>集中管理后台账户、访问状态和安全操作。</p>
       </div>
-      <div class="page-heading-actions">
-        <md-icon-button v-if="canEdit" aria-label="创建后台用户" title="创建后台用户" @click="openCreateDialog"><md-icon>add</md-icon></md-icon-button>
-        <md-icon-button aria-label="刷新" title="刷新" :disabled="loading" @click="loadUsers"><md-icon>refresh</md-icon></md-icon-button>
+      <div class="admin-users-header-actions">
+        <md-filled-button v-if="canEdit" @click="openCreateDialog">
+          <md-icon slot="icon">person_add</md-icon>
+          新建用户
+        </md-filled-button>
+        <md-icon-button aria-label="刷新用户列表" title="刷新用户列表" :disabled="loading" @click="loadUsers">
+          <md-icon :class="{ 'refresh-icon--loading': loading }">refresh</md-icon>
+        </md-icon-button>
       </div>
-    </div>
+    </header>
 
-    <section class="card">
-      <div class="table-wrap">
-        <table class="data-table">
-          <thead><tr><th>用户名</th><th>全名</th><th>状态</th><th>类型</th><th>创建时间</th><th class="row-actions">操作</th></tr></thead>
-          <tbody>
-            <tr v-for="user in users" :key="user.id">
-              <td class="primary-cell">
-                <div class="username-cell">
-                  <img v-if="user.avatar" class="user-avatar" :src="user.avatar" :alt="`${user.username}的头像`" />
-                  <md-icon v-else class="user-avatar-fallback">account_circle</md-icon>
-                  <span>{{ user.username }}</span>
-                </div>
-              </td>
-              <td>{{ user.fullName || '未设置' }}</td>
-              <td><span class="status" :class="user.isActive ? 'status--ok' : 'status--pending'">{{ user.isActive ? '启用' : '停用' }}</span></td>
-              <td>{{ user.isOwner ? '所有者' : '管理员' }}</td>
-              <td>{{ formatDate(user.createdAt) }}</td>
-              <td class="row-actions">
-                <md-icon-button v-if="canEdit && !user.isOwner" aria-label="重置密码" title="重置密码" @click="resetTarget = user"><md-icon>lock_reset</md-icon></md-icon-button>
-                <md-icon-button v-if="canEdit && !user.isOwner" :aria-label="user.isActive ? '停用' : '启用'" :title="user.isActive ? '停用' : '启用'" @click="toggleUser(user)"><md-icon>{{ user.isActive ? 'person_off' : 'person' }}</md-icon></md-icon-button>
-                <md-icon-button v-if="canEdit && !user.isOwner" aria-label="删除用户" title="删除用户" @click="deleteTarget = user"><md-icon>delete</md-icon></md-icon-button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-        <p v-if="loading" class="empty">加载中…</p>
-        <p v-if="!loading && users.length === 0" class="empty">暂无后台用户</p>
+    <section class="user-overview" aria-label="用户概览">
+      <article class="overview-item overview-item--total">
+        <span class="overview-icon"><md-icon>groups</md-icon></span>
+        <div><strong>{{ users.length }}</strong><span>账户总数</span></div>
+      </article>
+      <article class="overview-item overview-item--manageable">
+        <span class="overview-icon"><md-icon>admin_panel_settings</md-icon></span>
+        <div><strong>{{ manageableUsers.length }}</strong><span>可管理账户</span></div>
+      </article>
+      <article class="overview-item overview-item--active">
+        <span class="overview-icon"><md-icon>person_check</md-icon></span>
+        <div><strong>{{ activeUsers.length }}</strong><span>已启用</span></div>
+      </article>
+      <article class="overview-item overview-item--inactive">
+        <span class="overview-icon"><md-icon>person_off</md-icon></span>
+        <div><strong>{{ inactiveUsers.length }}</strong><span>已停用</span></div>
+      </article>
+    </section>
+
+    <section class="user-directory" aria-label="后台用户列表">
+      <div class="directory-toolbar">
+        <md-outlined-text-field
+          class="user-search"
+          label="搜索用户名或全名"
+          type="search"
+          :value="userKeyword"
+          @input="userKeyword = ($event.target as HTMLInputElement).value"
+        >
+          <md-icon slot="leading-icon">search</md-icon>
+        </md-outlined-text-field>
+        <div class="status-filter" role="group" aria-label="账户状态筛选">
+          <button type="button" :aria-pressed="statusFilter === 'all'" :class="{ 'status-filter__button--active': statusFilter === 'all' }" @click="statusFilter = 'all'">全部</button>
+          <button type="button" :aria-pressed="statusFilter === 'active'" :class="{ 'status-filter__button--active': statusFilter === 'active' }" @click="statusFilter = 'active'">已启用</button>
+          <button type="button" :aria-pressed="statusFilter === 'inactive'" :class="{ 'status-filter__button--active': statusFilter === 'inactive' }" @click="statusFilter = 'inactive'">已停用</button>
+        </div>
+        <md-text-button v-if="hasUserFilters" class="clear-filter-button" @click="clearUserFilters">
+          <md-icon slot="icon">filter_alt_off</md-icon>
+          清除筛选
+        </md-text-button>
+      </div>
+
+      <div v-if="loading" class="users-state">
+        <md-circular-progress indeterminate></md-circular-progress>
+        <span>正在加载用户列表…</span>
+      </div>
+      <div v-else-if="!filteredUsers.length" class="users-state users-state--empty">
+        <md-icon>person_search</md-icon>
+        <strong>{{ users.length ? '没有匹配的账户' : '暂无后台用户' }}</strong>
+        <span v-if="users.length">尝试调整搜索关键词或状态筛选。</span>
+        <md-text-button v-if="hasUserFilters" @click="clearUserFilters">清除筛选</md-text-button>
+      </div>
+      <div v-else class="user-grid">
+        <article
+          v-for="user in filteredUsers"
+          :key="user.id"
+          class="user-card"
+          :class="{ 'user-card--owner': user.isOwner, 'user-card--inactive': !user.isActive }"
+        >
+          <div class="user-card-header">
+            <div class="user-identity">
+              <span class="user-avatar">
+                <img v-if="user.avatar" :src="user.avatar" :alt="`${user.username}的头像`" />
+                <md-icon v-else>account_circle</md-icon>
+              </span>
+              <div class="user-identity-copy">
+                <strong>{{ user.fullName || user.username }}</strong>
+                <span>@{{ user.username }}</span>
+              </div>
+            </div>
+            <span class="status-badge" :class="user.isActive ? 'status-badge--active' : 'status-badge--inactive'">
+              <i></i>{{ user.isActive ? '已启用' : '已停用' }}
+            </span>
+          </div>
+
+          <div class="user-card-details">
+            <div>
+              <span>账户类型</span>
+              <strong><md-icon>{{ user.isOwner ? 'verified_user' : 'admin_panel_settings' }}</md-icon>{{ user.isOwner ? '初始所有者' : '后台管理员' }}</strong>
+            </div>
+            <div>
+              <span>创建时间</span>
+              <time :datetime="new Date(user.createdAt).toISOString()">{{ formatDate(user.createdAt) }}</time>
+            </div>
+          </div>
+
+          <footer class="user-card-footer">
+            <span class="user-card-note" :class="{ 'user-card-note--owner': user.isOwner }">
+              <md-icon>{{ user.isOwner ? 'lock' : user.isActive ? 'shield' : 'pause_circle' }}</md-icon>
+              {{ user.isOwner ? '初始账户不可操作' : user.isActive ? '账户可正常登录' : '账户暂时不可登录' }}
+            </span>
+            <div v-if="canEdit && !user.isOwner" class="user-card-actions">
+              <md-icon-button aria-label="重置密码" title="重置密码" @click="resetTarget = user"><md-icon>lock_reset</md-icon></md-icon-button>
+              <md-icon-button :aria-label="user.isActive ? '停用账户' : '启用账户'" :title="user.isActive ? '停用账户' : '启用账户'" @click="toggleUser(user)"><md-icon>{{ user.isActive ? 'person_off' : 'person' }}</md-icon></md-icon-button>
+              <md-icon-button class="user-card-action--danger" aria-label="删除用户" title="删除用户" @click="deleteTarget = user"><md-icon>delete</md-icon></md-icon-button>
+            </div>
+          </footer>
+        </article>
       </div>
     </section>
 
@@ -338,37 +434,573 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.page-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
-.page-heading-actions { display: flex; align-items: center; gap: 4px; }
-.page-subtitle { margin: -12px 0 20px; color: var(--md-sys-color-on-surface-variant); font-size: 13px; }
-.data-table { width: 100%; border-collapse: collapse; }
-.data-table th, .data-table td { padding: 12px 10px; border-bottom: 1px solid var(--md-sys-color-outline-variant); text-align: left; white-space: nowrap; }
-.data-table th { color: var(--md-sys-color-on-surface-variant); font-size: 12px; font-weight: 500; }
-.primary-cell { font-weight: 600; }
-.username-cell { display: flex; align-items: center; gap: 8px; }
-.user-avatar, .user-avatar-fallback { width: 32px; height: 32px; flex: 0 0 32px; border-radius: 50%; }
-.user-avatar { object-fit: cover; }
-.user-avatar-fallback { --md-icon-size: 32px; color: var(--md-sys-color-on-surface-variant); }
-.row-actions { text-align: right !important; }
-.dialog-form { display: grid; gap: 12px; min-width: min(360px, calc(100vw - 72px)); }
-.dialog-form p { margin: 0; color: var(--md-sys-color-on-surface-variant); }
-.create-dialog-form { min-width: min(420px, calc(100vw - 72px)); }
-.create-avatar-control { display: flex; align-items: center; gap: 16px; }
-.create-avatar-preview { width: 64px; height: 64px; display: grid; place-items: center; overflow: hidden; flex: 0 0 64px; border-radius: 50%; color: var(--md-sys-color-on-surface-variant); background: var(--md-sys-color-surface-container-high); }
-.create-avatar-preview img { width: 100%; height: 100%; object-fit: cover; }
-.create-avatar-preview md-icon { --md-icon-size: 36px; }
-.create-avatar-actions { display: flex; flex-wrap: wrap; gap: 4px; }
-.hidden-input { display: none; }
-.empty { padding: 16px 0; color: var(--md-sys-color-on-surface-variant); }
-@media (max-width: 640px) {
-  .page-heading { align-items: stretch; flex-direction: column; }
-  .page-heading-actions { align-self: flex-end; }
-  .page-subtitle { margin-bottom: 8px; overflow-wrap: anywhere; }
-  .data-table { min-width: 620px; }
-  .data-table th:nth-child(5),
-  .data-table td:nth-child(5) { display: none; }
+.admin-users-page {
+  width: min(100%, 1280px);
+}
+
+.admin-users-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 24px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.admin-users-title-block {
+  min-width: 0;
+}
+
+.admin-users-eyebrow,
+.section-overline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--md-sys-color-primary);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.admin-users-eyebrow md-icon {
+  --md-icon-size: 16px;
+}
+
+.admin-users-title-block .page-title {
+  margin: 6px 0 4px;
+}
+
+.admin-users-title-block p {
+  max-width: 560px;
+  margin: 0;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 13px;
+}
+
+.admin-users-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.refresh-icon--loading {
+  animation: refresh-spin 800ms linear infinite;
+}
+
+@keyframes refresh-spin {
+  to { transform: rotate(360deg); }
+}
+
+.user-overview {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 26px;
+}
+
+.overview-item {
+  min-width: 0;
+  min-height: 78px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: 8px;
+  background: var(--md-sys-color-surface-container);
+}
+
+.overview-icon {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 38px;
+  border-radius: 8px;
+  color: var(--md-sys-color-primary);
+  background: var(--md-sys-color-primary-container);
+}
+
+.overview-icon md-icon {
+  --md-icon-size: 21px;
+}
+
+.overview-item > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.overview-item strong {
+  color: var(--md-sys-color-on-surface);
+  font-size: 21px;
+  line-height: 1;
+}
+
+.overview-item > div > span {
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 11px;
+}
+
+.overview-item--manageable .overview-icon {
+  color: var(--act-info);
+  background: color-mix(in srgb, var(--act-info) 12%, transparent);
+}
+
+.overview-item--active .overview-icon {
+  color: var(--act-success);
+  background: color-mix(in srgb, var(--act-success) 12%, transparent);
+}
+
+.overview-item--inactive .overview-icon {
+  color: var(--act-warning);
+  background: color-mix(in srgb, var(--act-warning) 13%, transparent);
+}
+
+.user-directory {
+  min-width: 0;
+}
+
+.directory-toolbar {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 0 0 14px;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.user-search {
+  min-width: 220px;
+  flex: 1 1 280px;
+  width: 100%;
+}
+
+.status-filter {
+  height: 40px;
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: max-content;
+  align-items: center;
+  padding: 3px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: 7px;
+  background: var(--md-sys-color-surface-container);
+}
+
+.status-filter button {
+  height: 32px;
+  border: 0;
+  border-radius: 5px;
+  padding: 0 12px;
+  color: var(--md-sys-color-on-surface-variant);
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  transition:
+    color var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard),
+    background-color var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard);
+}
+
+.status-filter button:hover:not(.status-filter__button--active) {
+  color: var(--md-sys-color-on-surface);
+  background: color-mix(in srgb, var(--md-sys-color-on-surface) var(--md-sys-state-hover-state-layer-opacity), transparent);
+}
+
+.status-filter__button--active {
+  color: var(--md-sys-color-on-primary-container) !important;
+  background: var(--md-sys-color-primary-container) !important;
+  font-weight: 700;
+}
+
+.clear-filter-button {
+  flex: 0 0 auto;
+}
+
+.users-state {
+  min-height: 300px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 10px;
+  color: var(--md-sys-color-on-surface-variant);
+  text-align: center;
+}
+
+.users-state > md-circular-progress {
+  width: 32px;
+  height: 32px;
+}
+
+.users-state--empty > md-icon {
+  --md-icon-size: 34px;
+}
+
+.users-state--empty strong {
+  color: var(--md-sys-color-on-surface);
+  font-size: 14px;
+}
+
+.users-state--empty span {
+  font-size: 12px;
+}
+
+.user-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.user-card {
+  min-width: 0;
+  display: grid;
+  overflow: hidden;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: 8px;
+  background: var(--md-sys-color-surface-container);
+  transition:
+    border-color var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard),
+    box-shadow var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard),
+    transform var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard);
+}
+
+.user-card:hover {
+  border-color: color-mix(in srgb, var(--md-sys-color-primary) 35%, var(--md-sys-color-outline-variant));
+  box-shadow: var(--md-sys-elevation-level1);
+  transform: translateY(-1px);
+}
+
+.user-card--owner {
+  border-color: color-mix(in srgb, var(--md-sys-color-primary) 42%, var(--md-sys-color-outline-variant));
+}
+
+.user-card--inactive {
+  background: color-mix(in srgb, var(--act-warning) 3%, var(--md-sys-color-surface-container));
+}
+
+.user-card-header {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.user-identity {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.user-avatar {
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 48px;
+  overflow: hidden;
+  border-radius: 50%;
+  color: var(--md-sys-color-on-primary-container);
+  background: var(--md-sys-color-primary-container);
+}
+
+.user-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.user-avatar md-icon {
+  --md-icon-size: 28px;
+}
+
+.user-identity-copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.user-identity-copy strong,
+.user-identity-copy span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-identity-copy strong {
+  color: var(--md-sys-color-on-surface);
+  font-size: 15px;
+}
+
+.user-identity-copy span {
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 11px;
+}
+
+.status-badge {
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding: 0 8px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.status-badge i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.status-badge--active {
+  border-color: color-mix(in srgb, var(--act-success) 42%, transparent);
+  color: var(--act-success);
+  background: color-mix(in srgb, var(--act-success) 8%, transparent);
+}
+
+.status-badge--inactive {
+  border-color: color-mix(in srgb, var(--act-warning) 44%, transparent);
+  color: var(--act-warning);
+  background: color-mix(in srgb, var(--act-warning) 9%, transparent);
+}
+
+.user-card-details {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 14px 16px;
+}
+
+.user-card-details > div {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.user-card-details > div > span {
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 10px;
+}
+
+.user-card-details strong,
+.user-card-details time {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+  color: var(--md-sys-color-on-surface);
+  font-size: 11px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-card-details md-icon {
+  --md-icon-size: 16px;
+  flex: 0 0 auto;
+  color: var(--md-sys-color-primary);
+}
+
+.user-card-footer {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 12px 9px 16px;
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.user-card-note {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-card-note md-icon {
+  --md-icon-size: 15px;
+  flex: 0 0 auto;
+}
+
+.user-card-note--owner {
+  color: var(--md-sys-color-primary);
+}
+
+.user-card-actions {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 0;
+}
+
+.user-card-action--danger {
+  color: var(--act-error);
+}
+
+.dialog-form {
+  min-width: min(360px, calc(100vw - 72px));
+  display: grid;
+  gap: 14px;
+}
+
+.dialog-form md-outlined-text-field,
+.dialog-form md-outlined-select {
+  width: 100%;
+}
+
+.dialog-form p {
+  margin: 0;
+  color: var(--md-sys-color-on-surface-variant);
+  line-height: 1.6;
+}
+
+.create-dialog-form {
+  min-width: min(420px, calc(100vw - 72px));
+}
+
+.create-avatar-control {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.create-avatar-preview {
+  width: 64px;
+  height: 64px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  flex: 0 0 64px;
+  border-radius: 50%;
+  color: var(--md-sys-color-on-surface-variant);
+  background: var(--md-sys-color-surface-container-high);
+}
+
+.create-avatar-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.create-avatar-preview md-icon {
+  --md-icon-size: 36px;
+}
+
+.create-avatar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.hidden-input {
+  display: none;
+}
+
+@media (max-width: 1000px) {
+  .user-overview {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .admin-users-header {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .admin-users-header-actions {
+    justify-content: flex-end;
+  }
+
+  .directory-toolbar {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
+  .user-search {
+    flex-basis: 100%;
+  }
+
+  .status-filter {
+    flex: 1;
+  }
+
+  .status-filter button {
+    width: 100%;
+  }
+
+  .user-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 520px) {
+  .admin-users-header-actions {
+    justify-content: space-between;
+  }
+
+  .admin-users-header-actions md-filled-button {
+    flex: 1;
+  }
+
+  .clear-filter-button {
+    margin-left: auto;
+  }
+
+  .user-card-header {
+    padding: 14px;
+  }
+
+  .user-card-footer {
+    align-items: flex-start;
+  }
+
+  .user-card-note {
+    white-space: normal;
+  }
+
   .dialog-form,
-  .create-dialog-form { width: 100%; min-width: 0; }
-  .create-avatar-control { align-items: flex-start; }
+  .create-dialog-form {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .create-avatar-control {
+    align-items: flex-start;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .user-card,
+  .status-filter button {
+    transition-duration: 1ms;
+  }
+
+  .refresh-icon--loading {
+    animation: none;
+  }
 }
 </style>

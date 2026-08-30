@@ -114,11 +114,6 @@ async function create() {
     insertSpaces: true,
     wordWrap: 'off',
     scrollBeyondLastLine: false,
-    scrollbar: {
-      horizontal: 'visible',
-      horizontalScrollbarSize: 12,
-      alwaysConsumeMouseWheel: false,
-    },
     renderWhitespace: 'selection',
     padding: { top: 12, bottom: 12 },
     lineNumbersMinChars: 3,

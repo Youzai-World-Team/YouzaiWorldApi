@@ -41,6 +41,10 @@ const deleteDialog = ref<HTMLElement | null>(null)
 const { showToast } = useToast()
 const { apply: applyDialogAnimation } = useDialogAnimation()
 
+const permanentBanCount = computed(() => bans.value.filter((ban) => ban.unbanTime === 'permanent').length)
+const scheduledBanCount = computed(() => bans.value.filter((ban) => ban.unbanTime !== 'permanent').length)
+const latestBan = computed(() => bans.value[0]?.banTime || '暂无记录')
+
 onMounted(() => {
   load()
   applyDialogAnimation(formDialog.value)
@@ -173,21 +177,29 @@ async function confirmDelete() {
 </script>
 
 <template>
-  <div class="page">
-    <div class="page-heading">
-      <h1 class="page-title">封禁列表</h1>
-      <md-icon-button :href="endpoint" target="_blank" rel="noopener" aria-label="打开数据 API" title="打开数据 API">
-        <md-icon>link</md-icon>
-      </md-icon-button>
+  <div class="page page--wide catalog-page bans-page">
+    <header class="catalog-header">
+      <div class="catalog-title-block">
+        <span class="catalog-eyebrow"><md-icon>gavel</md-icon>社区秩序</span>
+        <h1 class="page-title">封禁列表</h1>
+        <p>维护服务器封禁规则，清晰记录处罚时段和处理原因。</p>
+      </div>
+      <div class="catalog-header-actions">
+        <md-icon-button :href="endpoint" target="_blank" rel="noopener" aria-label="打开数据 API" title="打开数据 API"><md-icon>link</md-icon></md-icon-button>
+        <md-filled-button v-if="canEdit" @click="openAdd"><md-icon slot="icon">add</md-icon>添加封禁</md-filled-button>
+      </div>
+    </header>
+    <div class="catalog-summary" aria-label="封禁列表概览">
+      <article class="summary-item summary-item--danger"><span class="summary-icon"><md-icon>gavel</md-icon></span><div><strong>{{ bans.length }}</strong><span>封禁记录</span></div></article>
+      <article class="summary-item summary-item--danger"><span class="summary-icon"><md-icon>block</md-icon></span><div><strong>{{ permanentBanCount }}</strong><span>永久封禁</span></div></article>
+      <article class="summary-item summary-item--warning"><span class="summary-icon"><md-icon>event_repeat</md-icon></span><div><strong>{{ scheduledBanCount }}</strong><span>定期解封</span></div></article>
+      <article class="summary-item summary-item--neutral"><span class="summary-icon"><md-icon>history</md-icon></span><div><strong class="summary-value-text">{{ latestBan }}</strong><span>最近封禁时间</span></div></article>
     </div>
 
-    <div class="card">
+    <section class="card catalog-card">
       <div class="card-head">
-        <h2 class="card-title">封禁记录</h2>
-        <md-filled-button v-if="canEdit" @click="openAdd">
-          <md-icon slot="icon">add</md-icon>
-          添加封禁
-        </md-filled-button>
+        <div><span class="section-overline">服务器黑名单</span><h2 class="card-title">封禁记录</h2></div>
+        <span class="card-caption">{{ bans.length }} 条记录</span>
       </div>
 
       <div class="table-wrap">
@@ -203,14 +215,14 @@ async function confirmDelete() {
         </thead>
         <tbody>
           <tr v-for="b in bans" :key="b.id">
-            <td class="cell-player">{{ b.player }}</td>
-            <td class="cell-ban">{{ b.banTime }}</td>
-            <td class="cell-unban">
+            <td class="cell-player" data-label="玩家名">{{ b.player }}</td>
+            <td class="cell-ban" data-label="封禁时间">{{ b.banTime }}</td>
+            <td class="cell-unban" data-label="解封时间">
               <span v-if="b.unbanTime === 'permanent'" class="permanent-badge">永久</span>
               <span v-else>{{ b.unbanTime }}</span>
             </td>
-            <td class="cell-reason">{{ b.reason || '—' }}</td>
-            <td class="cell-actions">
+            <td class="cell-reason" data-label="原因">{{ b.reason || '—' }}</td>
+            <td class="cell-actions" data-label="操作">
               <md-text-button v-if="canEdit" @click="openEdit(b)">
                 <md-icon slot="icon">edit</md-icon>
                 编辑
@@ -226,7 +238,7 @@ async function confirmDelete() {
       </div>
       <p v-if="loading" class="empty">加载中…</p>
       <p v-else-if="bans.length === 0" class="empty">暂无封禁记录</p>
-    </div>
+    </section>
 
     <md-dialog ref="formDialog" :open="formOpen" @closed="onFormClosed">
       <div slot="headline">{{ formMode === 'add' ? '添加封禁' : '编辑封禁' }}</div>
@@ -288,30 +300,44 @@ async function confirmDelete() {
 </template>
 
 <style scoped>
-.page-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 20px;
-}
-
-.page-title {
-  margin: 0;
-}
+.catalog-page { width: min(100%, 1320px); }
+.catalog-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 22px; padding-bottom: 20px; border-bottom: 1px solid var(--md-sys-color-outline-variant); }
+.catalog-title-block { min-width: 0; }
+.catalog-eyebrow, .section-overline { display: inline-flex; align-items: center; gap: 6px; color: var(--md-sys-color-primary); font-size: 11px; font-weight: 700; }
+.catalog-eyebrow md-icon { --md-icon-size: 16px; }
+.catalog-title-block .page-title { margin: 6px 0 5px; }
+.catalog-title-block p { max-width: 620px; margin: 0; color: var(--md-sys-color-on-surface-variant); font-size: 13px; }
+.catalog-header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex: 0 0 auto; }
+.catalog-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+.summary-item { min-width: 0; min-height: 76px; display: flex; align-items: center; gap: 12px; padding: 14px 16px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 8px; background: var(--md-sys-color-surface-container); }
+.summary-item > div { min-width: 0; display: grid; gap: 3px; }
+.summary-item strong { overflow: hidden; font-size: 20px; line-height: 1.1; text-overflow: ellipsis; white-space: nowrap; }
+.summary-item span:not(.summary-icon) { color: var(--md-sys-color-on-surface-variant); font-size: 11px; }
+.summary-value-text { font-size: 13px !important; }
+.summary-icon { width: 36px; height: 36px; display: grid; place-items: center; flex: 0 0 36px; border-radius: 8px; color: var(--md-sys-color-primary); background: var(--md-sys-color-primary-container); }
+.summary-icon md-icon { --md-icon-size: 20px; }
+.summary-item--danger .summary-icon { color: var(--act-error); background: color-mix(in srgb, var(--act-error) 11%, transparent); }
+.summary-item--warning .summary-icon { color: var(--act-warning); background: color-mix(in srgb, var(--act-warning) 11%, transparent); }
+.summary-item--info .summary-icon { color: var(--act-info); background: color-mix(in srgb, var(--act-info) 11%, transparent); }
+.summary-item--success .summary-icon { color: var(--act-success); background: color-mix(in srgb, var(--act-success) 11%, transparent); }
+.summary-item--neutral .summary-icon { color: var(--md-sys-color-on-surface-variant); background: var(--md-sys-color-surface-container-high); }
+.catalog-card { padding: 0; overflow: hidden; border: 1px solid var(--md-sys-color-outline-variant); box-shadow: var(--md-sys-elevation-level1); }
 
 .card-head {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 16px;
-  margin-bottom: 16px;
+  gap: 12px;
+  margin: 0;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
 }
 
-.card-head .card-title {
-  margin: 0;
-}
+.card-head > div { min-width: 0; display: grid; gap: 4px; }
+.card-head .card-title { margin: 0; }
+.card-caption { color: var(--md-sys-color-on-surface-variant); font-size: 11px; }
+.table-wrap { overflow-x: auto; padding: 0 20px 12px; }
 
 .ban-table {
   width: 100%;
@@ -322,7 +348,7 @@ async function confirmDelete() {
 
 .ban-table th,
 .ban-table td {
-  padding: 12px;
+  padding: 13px 10px;
   text-align: left;
   border-bottom: 1px solid var(--md-sys-color-outline-variant);
   vertical-align: middle;
@@ -459,33 +485,35 @@ async function confirmDelete() {
 }
 
 .empty {
-  margin: 16px 0 0;
-  font-size: 14px;
+  min-height: 120px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  margin: 0;
+  padding: 28px 20px 32px;
+  font-size: 13px;
   color: var(--md-sys-color-on-surface-variant);
+  text-align: center;
 }
 
+.ban-table tbody tr { transition: background-color 160ms ease; }
+.ban-table tbody tr:hover { background: color-mix(in srgb, var(--md-sys-color-primary) 4%, transparent); }
+
 @media (max-width: 640px) {
-  .card-head {
-    align-items: stretch;
-    gap: 12px;
-  }
-
-  .card-head md-filled-button {
-    width: 100%;
-  }
-
-  .ban-table th,
-  .ban-table td {
-    padding: 10px;
-  }
-
-  .ban-table {
-    min-width: 690px;
-  }
-
-  .ban-table th:nth-child(2),
-  .ban-table td:nth-child(2) {
-    display: none;
-  }
+  .catalog-header { align-items: stretch; flex-direction: column; gap: 16px; }
+  .catalog-header-actions { justify-content: flex-start; }
+  .catalog-header-actions md-filled-button { flex: 1; }
+  .catalog-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .catalog-card .card-head { align-items: flex-start; }
+  .table-wrap { overflow: visible; padding: 0 16px 10px; }
+  .ban-table, .ban-table tbody, .ban-table tr, .ban-table td { display: block; width: auto; min-width: 0; }
+  .ban-table thead { display: none; }
+  .ban-table tr { padding: 10px 0; border-bottom: 1px solid var(--md-sys-color-outline-variant); }
+  .ban-table tr:last-child { border-bottom: 0; }
+  .ban-table td { display: grid; grid-template-columns: minmax(82px, 0.35fr) minmax(0, 1fr); gap: 12px; align-items: start; padding: 7px 0; border: 0; }
+  .ban-table td::before { content: attr(data-label); color: var(--md-sys-color-on-surface-variant); font-size: 11px; font-weight: 600; }
+  .ban-table .cell-actions { display: flex; justify-content: flex-end; gap: 4px; padding-top: 10px; }
+  .ban-table .cell-actions::before { content: none; }
+  .ban-table .cell-reason { overflow-wrap: anywhere; }
 }
 </style>

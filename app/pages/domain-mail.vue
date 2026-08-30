@@ -398,6 +398,7 @@ function setComposeSourceFullscreen(value: boolean) {
     document.body.style.overflow = composePreviousBodyOverflow
     composePreviousBodyOverflow = ''
   }
+  composeDialog.value?.toggleAttribute('data-yzw-source-fullscreen', nextValue)
   composeSourceFullscreen.value = nextValue
   void nextTick(() => {
     composeSourceEditor.value?.layout()
@@ -1489,8 +1490,8 @@ function readerInitial(reader: MailReader) {
 }
 .delete-confirm { color: var(--md-sys-color-error); }
 .delete-preview { display: flex; align-items: center; gap: 8px; font-size: 14px; word-break: break-all; }
-.compose-mail-dialog { --md-dialog-container-width: min(1180px, calc(100vw - 32px)); --md-dialog-container-max-width: min(1180px, calc(100vw - 32px)); }
-.compose-dialog { width: min(1100px, calc(100vw - 88px)); min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+.compose-mail-dialog { --md-dialog-container-width: min(1320px, calc(100vw - 32px)); --md-dialog-container-max-width: min(1320px, calc(100vw - 32px)); }
+.compose-dialog { width: min(1240px, calc(100vw - 88px)); min-width: 0; display: flex; flex-direction: column; gap: 14px; }
 .compose-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .compose-sender-grid { min-width: 0; display: grid; gap: 12px; }
 .compose-sender-grid--owner, .compose-sender-grid--template { grid-template-columns: repeat(2, minmax(0, 1fr)); }

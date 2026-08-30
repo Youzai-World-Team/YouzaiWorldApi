@@ -336,12 +336,29 @@ async function logout() {
 </script>
 
 <template>
-  <div class="page">
-    <h1 class="page-title">此账户</h1>
+  <div class="page account-page">
+    <header class="account-header">
+      <div class="account-title-block">
+        <span class="account-eyebrow"><md-icon>account_circle</md-icon>账户中心</span>
+        <h1 class="page-title">此账户</h1>
+        <p>管理个人资料、侧边栏偏好和登录设备。</p>
+      </div>
+      <span v-if="currentUser" class="account-access-badge">
+        <md-icon>{{ currentUser.isOwner ? 'verified_user' : 'person' }}</md-icon>
+        {{ currentUser.isOwner ? '初始所有者' : '后台账户' }}
+      </span>
+    </header>
 
-    <div class="account-stack">
-    <section class="card account-card profile-card">
-      <h2 class="card-title">个人资料</h2>
+    <div class="account-layout">
+      <div class="account-column account-column--left">
+    <section class="card account-card account-card--profile profile-card">
+      <div class="account-card-heading">
+        <div>
+          <span class="section-overline">个人信息</span>
+          <h2 class="card-title">个人资料</h2>
+        </div>
+        <md-icon>badge</md-icon>
+      </div>
       <div class="profile-row">
         <div class="profile-avatar" role="img" :aria-label="`${currentUser?.username || '用户'}的头像`">
           <img v-if="currentUser?.avatar" :src="currentUser.avatar" alt="" />
@@ -351,6 +368,11 @@ async function logout() {
         <div class="profile-info">
           <strong>{{ displayName }}</strong>
           <span v-if="currentUser?.fullName" class="profile-username">用户名：{{ currentUser.username }}</span>
+          <span v-else class="profile-username">用户名：{{ currentUser?.username || '正在读取…' }}</span>
+          <span v-if="currentUser" class="profile-role">
+            <md-icon>{{ currentUser.isOwner ? 'verified_user' : 'admin_panel_settings' }}</md-icon>
+            {{ currentUser.isOwner ? '拥有全部后台权限' : '按分配的权限访问后台' }}
+          </span>
           <div class="profile-actions">
             <md-text-button v-if="canChangeAvatar" :disabled="uploadingAvatar" @click="pickAvatar">
               <md-icon slot="icon">upload</md-icon>
@@ -382,8 +404,14 @@ async function logout() {
       <input ref="fileInput" class="hidden-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif" @change="onAvatarChange" />
     </section>
 
-    <section class="card account-card">
-      <h2 class="card-title">账户操作</h2>
+    <section class="card account-card account-card--operations">
+      <div class="account-card-heading">
+        <div>
+          <span class="section-overline">安全与会话</span>
+          <h2 class="card-title">账户操作</h2>
+        </div>
+        <md-icon>security</md-icon>
+      </div>
       <div class="account-operation-actions">
         <md-text-button v-if="canChangePassword" @click="openPasswordDialog">
           <md-icon slot="icon">lock_reset</md-icon>
@@ -412,86 +440,6 @@ async function logout() {
             到期时间：{{ passwordExpiryDate }}
           </time>
         </div>
-      </div>
-    </section>
-
-    <section class="card account-card navigation-preferences-card">
-      <div class="card-heading-row">
-        <div>
-          <h2 class="card-title">侧边栏</h2>
-          <span>{{ visibleNavigationCount }} / {{ navigationItems.length }} 个条目显示</span>
-        </div>
-        <md-icon-button
-          aria-label="恢复默认侧边栏"
-          title="恢复默认排序和显示"
-          :disabled="savingNavigation || !navigationItems.length"
-          @click="resetNavigationPreferences"
-        >
-          <md-icon>restart_alt</md-icon>
-        </md-icon-button>
-      </div>
-
-      <div v-if="navigationItems.length" class="navigation-preference-list">
-        <article
-          v-for="(item, index) in navigationItems"
-          :key="item.key"
-          class="navigation-preference-item"
-          :class="{
-            'navigation-preference-item--hidden': item.hidden,
-            'navigation-preference-item--dragging': draggingNavigationKey === item.key,
-          }"
-          @dragover.prevent
-          @drop.prevent="onNavigationDrop(item.key)"
-        >
-          <span
-            class="navigation-drag-handle"
-            draggable="true"
-            title="拖动排序"
-            @dragstart="onNavigationDragStart(item.key, $event)"
-            @dragend="draggingNavigationKey = ''"
-          >
-            <md-icon>drag_indicator</md-icon>
-          </span>
-          <span class="navigation-preference-icon"><md-icon>{{ item.icon }}</md-icon></span>
-          <strong>{{ item.label }}</strong>
-          <div class="navigation-item-actions">
-            <md-icon-button
-              :aria-label="`上移${item.label}`"
-              title="上移"
-              :disabled="index === 0"
-              @click="moveNavigationItem(index, -1)"
-            >
-              <md-icon>arrow_upward</md-icon>
-            </md-icon-button>
-            <md-icon-button
-              :aria-label="`下移${item.label}`"
-              title="下移"
-              :disabled="index === navigationItems.length - 1"
-              @click="moveNavigationItem(index, 1)"
-            >
-              <md-icon>arrow_downward</md-icon>
-            </md-icon-button>
-            <md-switch
-              :selected="!item.hidden"
-              :aria-label="`在侧边栏显示${item.label}`"
-              @change="setNavigationItemVisibility(item.key, $event)"
-            ></md-switch>
-          </div>
-        </article>
-      </div>
-      <div v-else class="navigation-preference-empty">
-        <md-icon>visibility_off</md-icon>
-        <span>暂无可配置的侧边栏条目</span>
-      </div>
-
-      <div class="navigation-preference-actions">
-        <md-filled-button
-          :disabled="savingNavigation || !navigationItems.length"
-          @click="saveNavigationPreferences"
-        >
-          <md-icon slot="icon">save</md-icon>
-          {{ savingNavigation ? '保存中…' : '保存侧边栏' }}
-        </md-filled-button>
       </div>
     </section>
 
@@ -566,6 +514,89 @@ async function logout() {
         </div>
       </dl>
     </section>
+      </div>
+
+      <div class="account-column account-column--right">
+        <section class="card account-card navigation-preferences-card">
+          <div class="card-heading-row">
+            <div>
+              <h2 class="card-title">侧边栏</h2>
+              <span>{{ visibleNavigationCount }} / {{ navigationItems.length }} 个条目显示</span>
+            </div>
+            <md-icon-button
+              aria-label="恢复默认侧边栏"
+              title="恢复默认排序和显示"
+              :disabled="savingNavigation || !navigationItems.length"
+              @click="resetNavigationPreferences"
+            >
+              <md-icon>restart_alt</md-icon>
+            </md-icon-button>
+          </div>
+
+          <div v-if="navigationItems.length" class="navigation-preference-list">
+            <article
+              v-for="(item, index) in navigationItems"
+              :key="item.key"
+              class="navigation-preference-item"
+              :class="{
+                'navigation-preference-item--hidden': item.hidden,
+                'navigation-preference-item--dragging': draggingNavigationKey === item.key,
+              }"
+              @dragover.prevent
+              @drop.prevent="onNavigationDrop(item.key)"
+            >
+              <span
+                class="navigation-drag-handle"
+                draggable="true"
+                title="拖动排序"
+                @dragstart="onNavigationDragStart(item.key, $event)"
+                @dragend="draggingNavigationKey = ''"
+              >
+                <md-icon>drag_indicator</md-icon>
+              </span>
+              <span class="navigation-preference-icon"><md-icon>{{ item.icon }}</md-icon></span>
+              <strong>{{ item.label }}</strong>
+              <div class="navigation-item-actions">
+                <md-icon-button
+                  :aria-label="`上移${item.label}`"
+                  title="上移"
+                  :disabled="index === 0"
+                  @click="moveNavigationItem(index, -1)"
+                >
+                  <md-icon>arrow_upward</md-icon>
+                </md-icon-button>
+                <md-icon-button
+                  :aria-label="`下移${item.label}`"
+                  title="下移"
+                  :disabled="index === navigationItems.length - 1"
+                  @click="moveNavigationItem(index, 1)"
+                >
+                  <md-icon>arrow_downward</md-icon>
+                </md-icon-button>
+                <md-switch
+                  :selected="!item.hidden"
+                  :aria-label="`在侧边栏显示${item.label}`"
+                  @change="setNavigationItemVisibility(item.key, $event)"
+                ></md-switch>
+              </div>
+            </article>
+          </div>
+          <div v-else class="navigation-preference-empty">
+            <md-icon>visibility_off</md-icon>
+            <span>暂无可配置的侧边栏条目</span>
+          </div>
+
+          <div class="navigation-preference-actions">
+            <md-filled-button
+              :disabled="savingNavigation || !navigationItems.length"
+              @click="saveNavigationPreferences"
+            >
+              <md-icon slot="icon">save</md-icon>
+              {{ savingNavigation ? '保存中…' : '保存侧边栏' }}
+            </md-filled-button>
+          </div>
+        </section>
+      </div>
     </div>
 
     <AdminPasswordDialog
@@ -577,14 +608,126 @@ async function logout() {
 </template>
 
 <style scoped>
-.account-stack {
-  width: min(100%, 520px);
+.account-page {
+  width: min(100%, 1200px);
+}
+
+.account-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 24px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.account-title-block {
+  min-width: 0;
+}
+
+.account-eyebrow,
+.section-overline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--md-sys-color-primary);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.account-eyebrow md-icon {
+  --md-icon-size: 16px;
+}
+
+.account-title-block .page-title {
+  margin: 6px 0 4px;
+}
+
+.account-title-block p {
+  max-width: 620px;
+  margin: 0;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 13px;
+}
+
+.account-access-badge {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding: 0 9px;
+  border: 1px solid color-mix(in srgb, var(--md-sys-color-primary) 30%, var(--md-sys-color-outline-variant));
+  border-radius: 5px;
+  color: var(--md-sys-color-primary);
+  background: color-mix(in srgb, var(--md-sys-color-primary) 7%, transparent);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.account-access-badge md-icon {
+  --md-icon-size: 16px;
+}
+
+.account-layout {
+  min-width: 0;
   display: grid;
-  gap: 20px;
+  grid-template-columns: minmax(0, 0.88fr) minmax(0, 1.12fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.account-column {
+  min-width: 0;
+  display: grid;
+  gap: 14px;
+  align-content: start;
 }
 
 .account-card {
   min-width: 0;
+  width: auto;
+  display: block;
+  margin: 0;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  box-shadow: var(--md-sys-elevation-level1);
+}
+
+.account-card-heading {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.account-card-heading > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.account-card-heading .card-title {
+  margin: 0;
+}
+
+.account-card-heading > md-icon {
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.profile-role {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--md-sys-color-primary);
+  font-size: 11px;
+}
+
+.profile-role md-icon {
+  --md-icon-size: 15px;
 }
 
 .profile-row {
@@ -773,6 +916,7 @@ async function logout() {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
+  margin-top: 2px;
 }
 
 .logout-btn {
@@ -857,9 +1001,21 @@ async function logout() {
 .refresh-icon--active { animation: device-refresh 900ms linear infinite; }
 @keyframes device-refresh { to { transform: rotate(360deg); } }
 
+@media (max-width: 860px) {
+  .account-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 @media (max-width: 480px) {
-  .account-stack {
-    gap: 12px;
+  .account-header {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .account-access-badge {
+    align-self: flex-start;
   }
 
   .profile-row {

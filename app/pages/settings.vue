@@ -487,10 +487,22 @@ function generateInboundMailKey() {
 </script>
 
 <template>
-  <div class="page">
-    <h1 class="page-title">站点设置</h1>
+  <div class="page settings-page">
+    <header class="settings-header">
+      <div class="settings-title-block">
+        <span class="settings-eyebrow"><md-icon>tune</md-icon>系统配置</span>
+        <h1 class="page-title">站点设置</h1>
+        <p>管理后台安全策略、外部服务连接和人机验证。</p>
+      </div>
+      <span class="settings-access-badge">
+        <md-icon>{{ canEditPage ? 'edit' : 'visibility' }}</md-icon>
+        {{ canEditPage ? '可编辑设置' : '只读设置' }}
+      </span>
+    </header>
 
-    <div v-if="canManageSecurityEntry" class="card">
+    <div class="settings-sections">
+
+    <section v-if="canManageSecurityEntry" class="card settings-card">
       <h2 class="card-title">后台安全入口</h2>
       <p class="card-note">当前入口：<code>/{{ currentSecurityEntry || '…' }}</code></p>
       <div class="setting-form">
@@ -521,9 +533,9 @@ function generateInboundMailKey() {
           </md-filled-button>
         </div>
       </div>
-    </div>
+    </section>
 
-    <div class="card">
+    <section class="card settings-card">
       <h2 class="card-title">后台账户密码策略</h2>
       <p class="card-note">仅应用于后台账户的新建、修改和重置密码，不会影响游戏账户，也不会要求现有后台账户立即改密。</p>
 
@@ -578,9 +590,9 @@ function generateInboundMailKey() {
           </md-filled-button>
         </div>
       </div>
-    </div>
+    </section>
 
-    <div v-if="canManagePasswordExpiry" class="card">
+    <section v-if="canManagePasswordExpiry" class="card settings-card">
       <h2 class="card-title">后台密码有效期</h2>
       <p class="card-note">启用后，后台账户会在密码到期前 10 天收到提醒；到期后必须更新密码才能继续操作后台。</p>
 
@@ -616,9 +628,9 @@ function generateInboundMailKey() {
           </md-filled-button>
         </div>
       </div>
-    </div>
+    </section>
 
-    <div v-if="canViewGameApiKey" class="card">
+    <section v-if="canViewGameApiKey" class="card settings-card">
       <h2 class="card-title">游戏 API 密钥</h2>
 
       <div class="setting-form">
@@ -660,9 +672,9 @@ function generateInboundMailKey() {
           </md-filled-button>
         </div>
       </div>
-    </div>
+    </section>
 
-    <div v-if="canViewInboundMailKey" class="card">
+    <section v-if="canViewInboundMailKey" class="card settings-card">
       <h2 class="card-title">域名邮件投递密钥</h2>
       <p class="card-note">请勿与游戏 API 密钥复用。</p>
 
@@ -719,9 +731,9 @@ function generateInboundMailKey() {
           保存后需在 Worker 执行 <code>npx wrangler secret put INBOUND_MAIL_KEY</code> 并填入相同值；不一致会拒收（401）。
         </p>
       </div>
-    </div>
+    </section>
 
-    <div v-if="canViewMcsm" class="card">
+    <section v-if="canViewMcsm" class="card settings-card">
       <h2 class="card-title">MCSManager 面板</h2>
       <p class="card-note">ApiKey 权限与面板账户完全一致，请当作密码保管。</p>
 
@@ -798,9 +810,9 @@ function generateInboundMailKey() {
           <span v-else>配置已保存，但连接面板失败：{{ mcsmProbe.message }}</span>
         </p>
       </div>
-    </div>
+    </section>
 
-    <div v-if="canViewAdminTurnstile" class="card">
+    <section v-if="canViewAdminTurnstile" class="card settings-card">
       <h2 class="card-title">后台登录人机验证</h2>
       <p class="card-note">保护本后台的登录页，允许域名应填写 API 站点域名。</p>
 
@@ -854,9 +866,9 @@ function generateInboundMailKey() {
           </md-filled-button>
         </div>
       </div>
-    </div>
+    </section>
 
-    <div v-if="canViewChatTurnstile" class="card">
+    <section v-if="canViewChatTurnstile" class="card settings-card">
       <h2 class="card-title">聊天区人机验证</h2>
       <p class="card-note">
         保护官网首页聊天区的发言与玩家登录，允许域名应填写主站域名。
@@ -918,14 +930,95 @@ function generateInboundMailKey() {
           </md-filled-button>
         </div>
       </div>
-    </div>
+    </section>
 
+    </div>
   </div>
 </template>
 
 <style scoped>
-.card + .card {
-  margin-top: 20px;
+.settings-page {
+  width: min(100%, 1200px);
+}
+
+.settings-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 24px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.settings-title-block {
+  min-width: 0;
+}
+
+.settings-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--md-sys-color-primary);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.settings-eyebrow md-icon {
+  --md-icon-size: 16px;
+}
+
+.settings-title-block .page-title {
+  margin: 6px 0 4px;
+}
+
+.settings-title-block p {
+  max-width: 620px;
+  margin: 0;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 13px;
+}
+
+.settings-access-badge {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding: 0 9px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: 5px;
+  color: var(--md-sys-color-on-surface-variant);
+  background: var(--md-sys-color-surface-container);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.settings-access-badge md-icon {
+  --md-icon-size: 16px;
+  color: var(--md-sys-color-primary);
+}
+
+.settings-sections {
+  min-width: 0;
+  column-count: 2;
+  column-gap: 14px;
+  column-fill: balance;
+}
+
+.settings-card {
+  min-width: 0;
+  width: 100% !important;
+  display: inline-block;
+  margin: 0 0 14px !important;
+  vertical-align: top;
+  break-inside: avoid;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  box-shadow: var(--md-sys-elevation-level1);
+}
+
+.settings-card .card-title {
+  margin-bottom: 0;
 }
 
 .card-note {
@@ -987,16 +1080,17 @@ function generateInboundMailKey() {
   font-size: 12px;
 }
 
-.page > .card {
-  width: min(100%, 608px);
-}
-
 .setting-form {
   display: flex;
   flex-direction: column;
   gap: 20px;
   max-width: 560px;
   margin-top: 20px;
+}
+
+.settings-card .setting-form {
+  width: 100%;
+  max-width: none;
 }
 
 .password-policy-form {
@@ -1127,7 +1221,27 @@ function generateInboundMailKey() {
   gap: 12px;
 }
 
+@media (max-width: 860px) {
+  .settings-sections {
+    column-count: 1;
+  }
+
+  .settings-card {
+    display: block;
+  }
+}
+
 @media (max-width: 640px) {
+  .settings-header {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .settings-access-badge {
+    align-self: flex-start;
+  }
+
   .setting-form {
     max-width: none;
   }

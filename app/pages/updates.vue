@@ -49,6 +49,10 @@ const apiOpen = ref(false)
 const { showToast } = useToast()
 const { apply: applyDialogAnimation } = useDialogAnimation()
 
+const forcedUpdateCount = computed(() => list.value.filter((entry) => entry.forcedUpdate).length)
+const updateTypeCount = computed(() => new Set(list.value.map((entry) => entry.type || 'release')).size)
+const latestRelease = computed(() => list.value[0] ? releaseLabel(list.value[0]) : '暂无发布时间')
+
 onMounted(() => {
   load()
   applyDialogAnimation(formDialog.value)
@@ -237,21 +241,35 @@ async function confirmDelete() {
 </script>
 
 <template>
-  <div class="page">
-    <div class="page-heading">
-      <h1 class="page-title">更新服务</h1>
-      <md-icon-button aria-label="打开数据 API" title="打开数据 API" @click="onEndpointClick">
-        <md-icon>link</md-icon>
-      </md-icon-button>
-    </div>
-
-    <div class="card">
-      <div class="card-head">
-        <h2 class="card-title">程序列表</h2>
+  <div class="page page--wide catalog-page updates-page">
+    <header class="catalog-header">
+      <div class="catalog-title-block">
+        <span class="catalog-eyebrow"><md-icon>system_update_alt</md-icon>版本分发</span>
+        <h1 class="page-title">更新服务</h1>
+        <p>为客户端提供版本检查、更新类型和变更日志。</p>
+      </div>
+      <div class="catalog-header-actions">
+        <md-icon-button aria-label="打开数据 API" title="打开数据 API" @click="onEndpointClick">
+          <md-icon>link</md-icon>
+        </md-icon-button>
         <md-filled-button v-if="canEdit" @click="openAdd">
           <md-icon slot="icon">add</md-icon>
           添加程序
         </md-filled-button>
+      </div>
+    </header>
+
+    <div class="catalog-summary" aria-label="更新服务概览">
+      <article class="summary-item summary-item--primary"><span class="summary-icon"><md-icon>inventory_2</md-icon></span><div><strong>{{ list.length }}</strong><span>已登记程序</span></div></article>
+      <article class="summary-item summary-item--danger"><span class="summary-icon"><md-icon>priority_high</md-icon></span><div><strong>{{ forcedUpdateCount }}</strong><span>强制更新</span></div></article>
+      <article class="summary-item summary-item--info"><span class="summary-icon"><md-icon>category</md-icon></span><div><strong>{{ updateTypeCount }}</strong><span>版本类型</span></div></article>
+      <article class="summary-item summary-item--neutral"><span class="summary-icon"><md-icon>event</md-icon></span><div><strong>{{ latestRelease }}</strong><span>最近发布时间</span></div></article>
+    </div>
+
+    <section class="card catalog-card">
+      <div class="card-head">
+        <div><span class="section-overline">客户端目录</span><h2 class="card-title">程序列表</h2></div>
+        <span class="card-caption">{{ list.length }} 个程序</span>
       </div>
 
       <div class="table-wrap">
@@ -269,18 +287,18 @@ async function confirmDelete() {
         </thead>
         <tbody>
           <tr v-for="u in list" :key="u.id">
-            <td class="cell-name">{{ u.name }}</td>
-            <td class="cell-key"><code>{{ u.key }}</code></td>
-            <td class="cell-version">{{ u.latestVersion }}</td>
-            <td class="cell-type">
+            <td class="cell-name" data-label="名称">{{ u.name }}</td>
+            <td class="cell-key" data-label="标识"><code>{{ u.key }}</code></td>
+            <td class="cell-version" data-label="最新版本">{{ u.latestVersion }}</td>
+            <td class="cell-type" data-label="类型">
               <span class="type-badge" :class="`type-badge--${typeColor(u.type)}`">{{ u.type || 'release' }}</span>
             </td>
-            <td class="cell-forced">
+            <td class="cell-forced" data-label="强制更新">
               <span v-if="u.forcedUpdate" class="forced-badge">强制</span>
               <span v-else class="muted">否</span>
             </td>
-            <td class="cell-release">{{ releaseLabel(u) }}</td>
-            <td class="cell-actions">
+            <td class="cell-release" data-label="发布时间">{{ releaseLabel(u) }}</td>
+            <td class="cell-actions" data-label="操作">
               <md-text-button v-if="canEdit" @click="openEdit(u)">
                 <md-icon slot="icon">edit</md-icon>
                 编辑
@@ -296,7 +314,7 @@ async function confirmDelete() {
       </div>
       <p v-if="loading" class="empty">加载中…</p>
       <p v-else-if="list.length === 0" class="empty">暂无程序</p>
-    </div>
+    </section>
 
     <md-dialog ref="formDialog" :open="formOpen" @closed="onFormClosed">
       <div slot="headline">{{ formMode === 'add' ? '添加程序' : '编辑程序' }}</div>
@@ -397,17 +415,28 @@ async function confirmDelete() {
 </template>
 
 <style scoped>
-.page-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 20px;
-}
-
-.page-title {
-  margin: 0;
-}
+.catalog-page { width: min(100%, 1320px); }
+.catalog-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 22px; padding-bottom: 20px; border-bottom: 1px solid var(--md-sys-color-outline-variant); }
+.catalog-title-block { min-width: 0; }
+.catalog-eyebrow, .section-overline { display: inline-flex; align-items: center; gap: 6px; color: var(--md-sys-color-primary); font-size: 11px; font-weight: 700; }
+.catalog-eyebrow md-icon { --md-icon-size: 16px; }
+.catalog-title-block .page-title { margin: 6px 0 5px; }
+.catalog-title-block p { max-width: 620px; margin: 0; color: var(--md-sys-color-on-surface-variant); font-size: 13px; }
+.catalog-header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex: 0 0 auto; }
+.catalog-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+.summary-item { min-width: 0; min-height: 76px; display: flex; align-items: center; gap: 12px; padding: 14px 16px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 8px; background: var(--md-sys-color-surface-container); }
+.summary-item > div { min-width: 0; display: grid; gap: 3px; }
+.summary-item strong { overflow: hidden; font-size: 20px; line-height: 1.1; text-overflow: ellipsis; white-space: nowrap; }
+.summary-item span:not(.summary-icon) { color: var(--md-sys-color-on-surface-variant); font-size: 11px; }
+.summary-value-text { font-size: 13px !important; }
+.summary-icon { width: 36px; height: 36px; display: grid; place-items: center; flex: 0 0 36px; border-radius: 8px; color: var(--md-sys-color-primary); background: var(--md-sys-color-primary-container); }
+.summary-icon md-icon { --md-icon-size: 20px; }
+.summary-item--danger .summary-icon { color: var(--act-error); background: color-mix(in srgb, var(--act-error) 11%, transparent); }
+.summary-item--warning .summary-icon { color: var(--act-warning); background: color-mix(in srgb, var(--act-warning) 11%, transparent); }
+.summary-item--info .summary-icon { color: var(--act-info); background: color-mix(in srgb, var(--act-info) 11%, transparent); }
+.summary-item--success .summary-icon { color: var(--act-success); background: color-mix(in srgb, var(--act-success) 11%, transparent); }
+.summary-item--neutral .summary-icon { color: var(--md-sys-color-on-surface-variant); background: var(--md-sys-color-surface-container-high); }
+.catalog-card { padding: 0; overflow: hidden; border: 1px solid var(--md-sys-color-outline-variant); box-shadow: var(--md-sys-elevation-level1); }
 
 .api-list {
   --md-list-container-color: transparent;
@@ -415,16 +444,19 @@ async function confirmDelete() {
 
 .card-head {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 16px;
-  margin-bottom: 16px;
+  gap: 12px;
+  margin: 0;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
 }
 
-.card-head .card-title {
-  margin: 0;
-}
+.card-head > div { min-width: 0; display: grid; gap: 4px; }
+.card-head .card-title { margin: 0; }
+.card-caption { color: var(--md-sys-color-on-surface-variant); font-size: 11px; }
+.table-wrap { overflow-x: auto; padding: 0 20px 12px; }
 
 .update-table {
   width: 100%;
@@ -435,7 +467,7 @@ async function confirmDelete() {
 
 .update-table th,
 .update-table td {
-  padding: 12px;
+  padding: 13px 10px;
   text-align: left;
   border-bottom: 1px solid var(--md-sys-color-outline-variant);
   vertical-align: middle;
@@ -597,33 +629,35 @@ async function confirmDelete() {
 }
 
 .empty {
-  margin: 16px 0 0;
-  font-size: 14px;
+  min-height: 120px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  margin: 0;
+  padding: 28px 20px 32px;
+  font-size: 13px;
   color: var(--md-sys-color-on-surface-variant);
+  text-align: center;
 }
 
+.update-table tbody tr { transition: background-color 160ms ease; }
+.update-table tbody tr:hover { background: color-mix(in srgb, var(--md-sys-color-primary) 4%, transparent); }
+
 @media (max-width: 640px) {
-  .card-head {
-    align-items: stretch;
-    gap: 12px;
-  }
-
-  .card-head md-filled-button {
-    width: 100%;
-  }
-
-  .update-table th,
-  .update-table td {
-    padding: 10px;
-  }
-
-  .update-table {
-    min-width: 700px;
-  }
-
-  .update-table th:nth-child(2),
-  .update-table td:nth-child(2) {
-    display: none;
-  }
+  .catalog-header { align-items: stretch; flex-direction: column; gap: 16px; }
+  .catalog-header-actions { justify-content: flex-start; }
+  .catalog-header-actions md-filled-button { flex: 1; }
+  .catalog-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .catalog-card .card-head { align-items: flex-start; }
+  .table-wrap { overflow: visible; padding: 0 16px 10px; }
+  .update-table, .update-table tbody, .update-table tr, .update-table td { display: block; width: auto; min-width: 0; }
+  .update-table thead { display: none; }
+  .update-table tr { padding: 10px 0; border-bottom: 1px solid var(--md-sys-color-outline-variant); }
+  .update-table tr:last-child { border-bottom: 0; }
+  .update-table td { display: grid; grid-template-columns: minmax(82px, 0.35fr) minmax(0, 1fr); gap: 12px; align-items: start; padding: 7px 0; border: 0; }
+  .update-table td::before { content: attr(data-label); color: var(--md-sys-color-on-surface-variant); font-size: 11px; font-weight: 600; }
+  .update-table .cell-actions { display: flex; justify-content: flex-end; gap: 4px; padding-top: 10px; }
+  .update-table .cell-actions::before { content: none; }
+  .update-table .cell-key code, .update-table .cell-release { overflow-wrap: anywhere; white-space: normal; }
 }
 </style>

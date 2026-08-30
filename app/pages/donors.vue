@@ -42,6 +42,16 @@ const deleteDialog = ref<HTMLElement | null>(null)
 const { showToast } = useToast()
 const { apply: applyDialogAnimation } = useDialogAnimation()
 
+const totalAmount = computed(() => donors.value.reduce((total, donor) => {
+  const amount = Number(donor.amount)
+  return total + (Number.isFinite(amount) ? amount : 0)
+}, 0))
+const donorWithLargestAmount = computed(() => donors.value.reduce<Donor | null>((top, donor) => {
+  if (!top || Number(donor.amount) > Number(top.amount)) return donor
+  return top
+}, null))
+const donorIntroCount = computed(() => donors.value.filter((donor) => donor.intro).length)
+
 onMounted(() => {
   load()
   applyDialogAnimation(formDialog.value)
@@ -195,21 +205,29 @@ async function confirmDelete() {
 </script>
 
 <template>
-  <div class="page">
-    <div class="page-heading">
-      <h1 class="page-title">捐赠列表</h1>
-      <md-icon-button :href="endpoint" target="_blank" rel="noopener" aria-label="打开数据 API" title="打开数据 API">
-        <md-icon>link</md-icon>
-      </md-icon-button>
+  <div class="page page--wide catalog-page donors-page">
+    <header class="catalog-header">
+      <div class="catalog-title-block">
+        <span class="catalog-eyebrow"><md-icon>volunteer_activism</md-icon>社区支持</span>
+        <h1 class="page-title">捐赠列表</h1>
+        <p>整理支持者展示信息，记录每一份对服务器的帮助。</p>
+      </div>
+      <div class="catalog-header-actions">
+        <md-icon-button :href="endpoint" target="_blank" rel="noopener" aria-label="打开数据 API" title="打开数据 API"><md-icon>link</md-icon></md-icon-button>
+        <md-filled-button v-if="canEdit" @click="openAdd"><md-icon slot="icon">add</md-icon>添加捐赠者</md-filled-button>
+      </div>
+    </header>
+    <div class="catalog-summary" aria-label="捐赠列表概览">
+      <article class="summary-item summary-item--primary"><span class="summary-icon"><md-icon>groups</md-icon></span><div><strong>{{ donors.length }}</strong><span>支持者</span></div></article>
+      <article class="summary-item summary-item--success"><span class="summary-icon"><md-icon>volunteer_activism</md-icon></span><div><strong>{{ formatAmount(totalAmount) }}</strong><span>累计金额</span></div></article>
+      <article class="summary-item summary-item--info"><span class="summary-icon"><md-icon>workspace_premium</md-icon></span><div><strong class="summary-value-text">{{ donorWithLargestAmount?.name || '暂无' }}</strong><span>最高金额支持者</span></div></article>
+      <article class="summary-item summary-item--neutral"><span class="summary-icon"><md-icon>public</md-icon></span><div><strong>{{ donorIntroCount }}</strong><span>含介绍</span></div></article>
     </div>
 
-    <div class="card">
+    <section class="card catalog-card">
       <div class="card-head">
-        <h2 class="card-title">捐赠者列表</h2>
-        <md-filled-button v-if="canEdit" @click="openAdd">
-          <md-icon slot="icon">add</md-icon>
-          添加捐赠者
-        </md-filled-button>
+        <div><span class="section-overline">公开展示目录</span><h2 class="card-title">捐赠者列表</h2></div>
+        <span class="card-caption">{{ donors.length }} 位支持者</span>
       </div>
 
       <div class="table-wrap">
@@ -225,16 +243,16 @@ async function confirmDelete() {
         </thead>
         <tbody>
           <tr v-for="d in donors" :key="d.id">
-            <td class="cell-avatar">
+            <td class="cell-avatar" data-label="头像">
               <div class="avatar">
                 <img v-if="d.avatar" :src="d.avatar" alt="" />
                 <md-icon v-else>person</md-icon>
               </div>
             </td>
-            <td class="cell-name">{{ d.name }}</td>
-            <td class="cell-amount">{{ formatAmount(d.amount) }}</td>
-            <td class="cell-intro">{{ d.intro || '—' }}</td>
-            <td class="cell-actions">
+            <td class="cell-name" data-label="名称">{{ d.name }}</td>
+            <td class="cell-amount" data-label="金额">{{ formatAmount(d.amount) }}</td>
+            <td class="cell-intro" data-label="介绍">{{ d.intro || '—' }}</td>
+            <td class="cell-actions" data-label="操作">
               <md-text-button v-if="canEdit" @click="openEdit(d)">
                 <md-icon slot="icon">edit</md-icon>
                 编辑
@@ -250,7 +268,7 @@ async function confirmDelete() {
       </div>
       <p v-if="loading" class="empty">加载中…</p>
       <p v-else-if="donors.length === 0" class="empty">暂无捐赠者</p>
-    </div>
+    </section>
 
     <md-dialog ref="formDialog" :open="formOpen" @closed="onFormClosed">
       <div slot="headline">{{ formMode === 'add' ? '添加捐赠者' : '编辑捐赠者' }}</div>
@@ -317,30 +335,44 @@ async function confirmDelete() {
 </template>
 
 <style scoped>
-.page-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 20px;
-}
-
-.page-title {
-  margin: 0;
-}
+.catalog-page { width: min(100%, 1320px); }
+.catalog-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 22px; padding-bottom: 20px; border-bottom: 1px solid var(--md-sys-color-outline-variant); }
+.catalog-title-block { min-width: 0; }
+.catalog-eyebrow, .section-overline { display: inline-flex; align-items: center; gap: 6px; color: var(--md-sys-color-primary); font-size: 11px; font-weight: 700; }
+.catalog-eyebrow md-icon { --md-icon-size: 16px; }
+.catalog-title-block .page-title { margin: 6px 0 5px; }
+.catalog-title-block p { max-width: 620px; margin: 0; color: var(--md-sys-color-on-surface-variant); font-size: 13px; }
+.catalog-header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex: 0 0 auto; }
+.catalog-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+.summary-item { min-width: 0; min-height: 76px; display: flex; align-items: center; gap: 12px; padding: 14px 16px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 8px; background: var(--md-sys-color-surface-container); }
+.summary-item > div { min-width: 0; display: grid; gap: 3px; }
+.summary-item strong { overflow: hidden; font-size: 20px; line-height: 1.1; text-overflow: ellipsis; white-space: nowrap; }
+.summary-item span:not(.summary-icon) { color: var(--md-sys-color-on-surface-variant); font-size: 11px; }
+.summary-value-text { font-size: 13px !important; }
+.summary-icon { width: 36px; height: 36px; display: grid; place-items: center; flex: 0 0 36px; border-radius: 8px; color: var(--md-sys-color-primary); background: var(--md-sys-color-primary-container); }
+.summary-icon md-icon { --md-icon-size: 20px; }
+.summary-item--danger .summary-icon { color: var(--act-error); background: color-mix(in srgb, var(--act-error) 11%, transparent); }
+.summary-item--warning .summary-icon { color: var(--act-warning); background: color-mix(in srgb, var(--act-warning) 11%, transparent); }
+.summary-item--info .summary-icon { color: var(--act-info); background: color-mix(in srgb, var(--act-info) 11%, transparent); }
+.summary-item--success .summary-icon { color: var(--act-success); background: color-mix(in srgb, var(--act-success) 11%, transparent); }
+.summary-item--neutral .summary-icon { color: var(--md-sys-color-on-surface-variant); background: var(--md-sys-color-surface-container-high); }
+.catalog-card { padding: 0; overflow: hidden; border: 1px solid var(--md-sys-color-outline-variant); box-shadow: var(--md-sys-elevation-level1); }
 
 .card-head {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 16px;
-  margin-bottom: 16px;
+  gap: 12px;
+  margin: 0;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
 }
 
-.card-head .card-title {
-  margin: 0;
-}
+.card-head > div { min-width: 0; display: grid; gap: 4px; }
+.card-head .card-title { margin: 0; }
+.card-caption { color: var(--md-sys-color-on-surface-variant); font-size: 11px; }
+.table-wrap { overflow-x: auto; padding: 0 20px 12px; }
 
 .donor-table {
   width: 100%;
@@ -351,7 +383,7 @@ async function confirmDelete() {
 
 .donor-table th,
 .donor-table td {
-  padding: 12px;
+  padding: 13px 10px;
   text-align: left;
   border-bottom: 1px solid var(--md-sys-color-outline-variant);
   vertical-align: middle;
@@ -497,24 +529,35 @@ async function confirmDelete() {
 }
 
 .empty {
-  margin: 16px 0 0;
-  font-size: 14px;
+  min-height: 120px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  margin: 0;
+  padding: 28px 20px 32px;
+  font-size: 13px;
   color: var(--md-sys-color-on-surface-variant);
+  text-align: center;
 }
 
+.donor-table tbody tr { transition: background-color 160ms ease; }
+.donor-table tbody tr:hover { background: color-mix(in srgb, var(--md-sys-color-primary) 4%, transparent); }
+
 @media (max-width: 640px) {
-  .card-head {
-    align-items: stretch;
-    gap: 12px;
-  }
-
-  .card-head md-filled-button {
-    width: 100%;
-  }
-
-  .donor-table th,
-  .donor-table td {
-    padding: 10px;
-  }
+  .catalog-header { align-items: stretch; flex-direction: column; gap: 16px; }
+  .catalog-header-actions { justify-content: flex-start; }
+  .catalog-header-actions md-filled-button { flex: 1; }
+  .catalog-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .catalog-card .card-head { align-items: flex-start; }
+  .table-wrap { overflow: visible; padding: 0 16px 10px; }
+  .donor-table, .donor-table tbody, .donor-table tr, .donor-table td { display: block; width: auto; min-width: 0; }
+  .donor-table thead { display: none; }
+  .donor-table tr { padding: 10px 0; border-bottom: 1px solid var(--md-sys-color-outline-variant); }
+  .donor-table tr:last-child { border-bottom: 0; }
+  .donor-table td { display: grid; grid-template-columns: minmax(64px, 0.3fr) minmax(0, 1fr); gap: 12px; align-items: center; width: auto; padding: 7px 0; border: 0; }
+  .donor-table td::before { content: attr(data-label); color: var(--md-sys-color-on-surface-variant); font-size: 11px; font-weight: 600; }
+  .donor-table .cell-actions { display: flex; justify-content: flex-end; gap: 4px; padding-top: 10px; }
+  .donor-table .cell-actions::before { content: none; }
+  .donor-table .cell-intro { overflow-wrap: anywhere; }
 }
 </style>
