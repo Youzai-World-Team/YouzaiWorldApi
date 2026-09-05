@@ -1305,7 +1305,7 @@ function readerInitial(reader: MailReader) {
               ></iframe>
               <div v-else class="compose-preview-empty" :class="{ 'compose-preview-empty--error': composePreviewError }">
                 <md-circular-progress v-if="composePreviewLoading" indeterminate></md-circular-progress>
-                <img v-else-if="!composePreviewError" class="compose-preview-empty-image" src="/images/empty-personal-notes.svg" alt="" aria-hidden="true" />
+                <img v-else-if="!composePreviewError" class="compose-preview-empty-image" :src="webAssetUrl('images/empty-personal-notes.svg')" alt="" aria-hidden="true" />
                 <md-icon v-else>error</md-icon>
                 <span>{{ composePreviewLoading ? '正在生成预览…' : (composePreviewError || '暂无可预览内容') }}</span>
               </div>
