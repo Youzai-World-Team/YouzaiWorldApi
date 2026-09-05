@@ -38,7 +38,6 @@ interface McsmConfig {
   apiKey: string
   apiKeyConfigured: boolean
   apiKeySource: SettingSource
-  backupDir: string
   configured: boolean
 }
 
@@ -70,7 +69,7 @@ const showInboundMailKey = ref(false)
 const inboundMailKeyLoading = ref(true)
 const savingInboundMailKey = ref(false)
 const inboundMailKeySource = ref<'database' | 'env' | 'none'>('none')
-const mcsmForm = reactive({ baseUrl: '', apiKey: '', backupDir: '/backups' })
+const mcsmForm = reactive({ baseUrl: '', apiKey: '' })
 const mcsmState = ref<McsmConfig | null>(null)
 const mcsmProbe = ref<McsmProbe | null>(null)
 const showMcsmApiKey = ref(false)
@@ -356,7 +355,6 @@ async function loadMcsm() {
     const config = await $fetch<McsmConfig>('/api/admin/mcsm-settings')
     mcsmState.value = config
     mcsmForm.baseUrl = config.baseUrl
-    mcsmForm.backupDir = config.backupDir
     mcsmForm.apiKey = config.apiKey
   } catch (e: any) {
     showToast(e?.data?.statusMessage || 'MCSM 面板配置加载失败', 'error')
@@ -383,13 +381,11 @@ async function saveMcsm() {
       body: {
         baseUrl: mcsmForm.baseUrl.trim(),
         apiKey: mcsmForm.apiKey,
-        backupDir: mcsmForm.backupDir.trim(),
       },
     })
     const { probe, ...config } = result
     mcsmState.value = config
     mcsmForm.baseUrl = config.baseUrl
-    mcsmForm.backupDir = config.backupDir
     mcsmForm.apiKey = config.apiKey
     mcsmProbe.value = probe
     showToast(probe.ok ? '已保存，面板连接正常' : '配置已保存，但连接面板失败', probe.ok ? 'info' : 'error')
@@ -529,12 +525,10 @@ function generateInboundMailKey() {
 </script>
 
 <template>
-  <div class="page settings-page">
+<div class="page settings-page api-redesign-page">
     <header class="settings-header">
       <div class="settings-title-block">
-        <span class="settings-eyebrow"><md-icon>tune</md-icon>系统配置</span>
         <h1 class="page-title">站点设置</h1>
-        <p>管理后台安全策略、外部服务连接和人机验证。</p>
       </div>
       <span class="settings-access-badge">
         <md-icon>{{ canEditPage ? 'edit' : 'visibility' }}</md-icon>
@@ -806,7 +800,7 @@ function generateInboundMailKey() {
           <md-outlined-text-field
             :type="showMcsmApiKey ? 'text' : 'password'"
             label="MCSM ApiKey"
-            :supporting-text="mcsmState?.apiKeyConfigured ? '已配置，可直接查看或修改' : '尚未配置，必须填写'"
+            :supporting-text="mcsmState?.apiKeyConfigured ? '已配置，可直接查看或修改；留空表示沿用' : '尚未配置，必须填写'"
             autocomplete="new-password"
             spellcheck="false"
             :disabled="mcsmLoading"
@@ -825,17 +819,6 @@ function generateInboundMailKey() {
               </md-icon-button>
           </div>
         </div>
-
-        <md-outlined-text-field
-          label="备份目录"
-          supporting-text="实例目录下的相对路径，默认 /backups；只能用字母、数字、点、下划线、短横线和斜杠"
-          autocomplete="off"
-          spellcheck="false"
-          :disabled="mcsmLoading"
-          :readonly="!canEditMcsm"
-          :value="mcsmForm.backupDir"
-          @input="mcsmForm.backupDir = ($event.target as HTMLInputElement).value"
-        ></md-outlined-text-field>
 
         <div v-if="canEditMcsm" class="form-actions">
           <md-filled-button :disabled="mcsmLoading || savingMcsm" @click="saveMcsm">
@@ -1039,7 +1022,7 @@ function generateInboundMailKey() {
 }
 
 .settings-title-block .page-title {
-  margin: 6px 0 4px;
+  margin: 0 0 4px;
 }
 
 .settings-title-block p {

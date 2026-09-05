@@ -1,4 +1,4 @@
-import { recordAudit, requireFeaturePermission, getSmtpTransportSettings } from '../../../utils/db'
+import { recordAudit, recordDomainMailSent, requireFeaturePermission, getSmtpTransportSettings } from '../../../utils/db'
 import { normalizeDomainMailAttachments } from '../../../utils/domain-mail-attachments'
 import { requireDomainMailSenderAddress } from '../../../utils/domain-mail-sender'
 import { requireEmailAddress } from '../../../utils/game-input'
@@ -54,7 +54,17 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 502, statusMessage: `邮件发送失败：${detail}` })
   }
 
+  const sentId = recordDomainMailSent({
+    userId: user.id,
+    senderAddress,
+    senderName,
+    recipient,
+    subject,
+    textBody: textBody || rendered.text,
+    htmlBody: html,
+    attachments,
+  })
   const attachmentSummary = attachments.length ? `，附件 ${attachments.length} 个` : ''
   recordAudit(event, user, `发送域名邮件：${subject}（发件人 ${senderAddress}，收件人 ${recipient}${attachmentSummary}）`)
-  return { ok: true, from: senderAddress, to: recipient, attachmentCount: attachments.length }
+  return { ok: true, id: sentId, from: senderAddress, to: recipient, attachmentCount: attachments.length }
 })

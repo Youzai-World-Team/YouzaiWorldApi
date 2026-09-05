@@ -38,6 +38,7 @@ const deleting = ref(false)
 // 弹窗元素引用（缩放式淡入淡出动画）
 const formDialog = ref<HTMLElement | null>(null)
 const deleteDialog = ref<HTMLElement | null>(null)
+const donorsTableWrap = ref<HTMLElement | null>(null)
 
 const { showToast } = useToast()
 const { apply: applyDialogAnimation } = useDialogAnimation()
@@ -205,12 +206,10 @@ async function confirmDelete() {
 </script>
 
 <template>
-  <div class="page page--wide catalog-page donors-page">
+<div class="page page--wide catalog-page donors-page api-redesign-page">
     <header class="catalog-header">
       <div class="catalog-title-block">
-        <span class="catalog-eyebrow"><md-icon>volunteer_activism</md-icon>社区支持</span>
         <h1 class="page-title">捐赠列表</h1>
-        <p>整理支持者展示信息，记录每一份对服务器的帮助。</p>
       </div>
       <div class="catalog-header-actions">
         <md-icon-button :href="endpoint" target="_blank" rel="noopener" aria-label="打开数据 API" title="打开数据 API"><md-icon>link</md-icon></md-icon-button>
@@ -230,7 +229,7 @@ async function confirmDelete() {
         <span class="card-caption">{{ donors.length }} 位支持者</span>
       </div>
 
-      <div class="table-wrap">
+      <div ref="donorsTableWrap" class="table-wrap">
         <table class="donor-table">
         <thead>
           <tr>
@@ -266,6 +265,7 @@ async function confirmDelete() {
         </tbody>
         </table>
       </div>
+      <AppScrollbar :target="donorsTableWrap" axis="horizontal" label="捐赠者表格横向滚动条" />
       <EmptyState v-if="loading" :illustrated="false">加载中…</EmptyState>
       <EmptyState v-else-if="donors.length === 0" image="/images/empty-thumbs-up.svg">暂无捐赠者</EmptyState>
     </section>
@@ -340,7 +340,7 @@ async function confirmDelete() {
 .catalog-title-block { min-width: 0; }
 .catalog-eyebrow, .section-overline { display: inline-flex; align-items: center; gap: 6px; color: var(--md-sys-color-primary); font-size: 11px; font-weight: 700; }
 .catalog-eyebrow md-icon { --md-icon-size: 16px; }
-.catalog-title-block .page-title { margin: 6px 0 5px; }
+.catalog-title-block .page-title { margin: 0 0 5px; }
 .catalog-title-block p { max-width: 620px; margin: 0; color: var(--md-sys-color-on-surface-variant); font-size: 13px; }
 .catalog-header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex: 0 0 auto; }
 .catalog-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
@@ -496,7 +496,7 @@ async function confirmDelete() {
   justify-content: center;
   font-size: 12px;
   background: var(--md-sys-color-scrim, rgba(0, 0, 0, 0.4));
-  color: #fff;
+  color: var(--md-sys-color-inverse-on-surface);
   border-radius: 50%;
 }
 

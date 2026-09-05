@@ -273,7 +273,11 @@ function installNativeBackdrop(el: HTMLElement) {
   style.dataset.patch = DIALOG_BACKDROP_STYLE
   style.textContent = `
     :host([open]) .scrim { display: none !important; }
-    dialog::backdrop { background: color-mix(in srgb, var(--md-sys-color-scrim) 32%, transparent); }
+    /* 使用原生 backdrop，避免 Material Web 的内部 scrim 影响 top-layer 层级。 */
+    dialog::backdrop {
+      background: var(--md-sys-color-scrim, #000000);
+      opacity: 0.32;
+    }
 
     /* md-dialog 的滚动容器位于 Shadow DOM 内，页面全局滚动条规则无法穿透。 */
     .scroller {
@@ -360,6 +364,14 @@ function openAnimation() {
         ],
         { duration: duration(200), easing: 'cubic-bezier(0.2, 0, 0, 1)' },
       ],
+      [
+        [{ opacity: 0 }, { opacity: 0.32 }],
+        {
+          duration: duration(200),
+          easing: 'linear',
+          pseudoElement: '::backdrop',
+        },
+      ],
     ],
     scrim: [
       [
@@ -379,6 +391,14 @@ function closeAnimation() {
           { transform: 'scale(0.9)', opacity: '0' },
         ],
         { duration: duration(150), easing: 'cubic-bezier(0.4, 0, 1, 1)' },
+      ],
+      [
+        [{ opacity: 0.32 }, { opacity: 0 }],
+        {
+          duration: duration(150),
+          easing: 'linear',
+          pseudoElement: '::backdrop',
+        },
       ],
     ],
     scrim: [

@@ -21,7 +21,7 @@ const { showToast } = useToast()
 const { policy: passwordPolicy, load: loadPasswordPolicy, validate: validatePasswordPolicy } = usePasswordPolicy()
 const reservedEntries = new Set([
   'login', 'account', 'activity', 'donors', 'bans', 'updates', 'game-accounts', 'game-cosmetics',
-  'game-account-email-templates', 'admin-users', 'audit-logs', 'chat', 'mail', 'settings', 'permissions',
+  'game-stats', 'game-account-email-templates', 'admin-users', 'audit-logs', 'chat', 'mail', 'settings', 'permissions',
   'api', '_nuxt', '_ipx', 'favicon', '__nuxt_error',
 ])
 

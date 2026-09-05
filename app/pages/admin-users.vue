@@ -242,12 +242,10 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="page admin-users-page">
+<div class="page admin-users-page api-redesign-page">
     <header class="admin-users-header">
       <div class="admin-users-title-block">
-        <span class="admin-users-eyebrow"><md-icon>manage_accounts</md-icon>账户中心</span>
         <h1 class="page-title">后台用户</h1>
-        <p>集中管理后台账户、访问状态和安全操作。</p>
       </div>
       <div class="admin-users-header-actions">
         <md-filled-button v-if="canEdit" @click="openCreateDialog">
@@ -311,9 +309,10 @@ onBeforeUnmount(() => {
           请先创建一个后台账户。
         </EmptyState>
         <template v-else>
-          <md-icon>person_search</md-icon>
-          <strong>没有匹配的账户</strong>
-          <span>尝试调整搜索关键词或状态筛选。</span>
+          <EmptyState image="/images/empty-looking-for-answers.svg">
+            <template #title>没有匹配的账户</template>
+            尝试调整搜索关键词或状态筛选。
+          </EmptyState>
           <md-text-button v-if="hasUserFilters" @click="clearUserFilters">清除筛选</md-text-button>
         </template>
       </div>
@@ -473,7 +472,7 @@ onBeforeUnmount(() => {
 }
 
 .admin-users-title-block .page-title {
-  margin: 6px 0 4px;
+  margin: 0 0 4px;
 }
 
 .admin-users-title-block p {

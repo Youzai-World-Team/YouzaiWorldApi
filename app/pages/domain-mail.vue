@@ -67,8 +67,40 @@ interface MailDetail extends MailSummary {
   readers: MailReader[]
 }
 
+interface SentAttachment {
+  filename: string
+  mimeType: string
+  size: number
+  sha256: string
+}
+
+interface SentSummary {
+  id: string
+  senderAddress: string
+  senderName: string
+  recipient: string
+  subject: string
+  sentTime: number
+  hasText: boolean
+  hasHtml: boolean
+  attachmentCount: number
+  attachmentBytes: number
+  textPreview: string
+}
+
+interface SentDetail extends SentSummary {
+  textBody: string
+  htmlBody: string
+  attachments: SentAttachment[]
+  htmlSafe: string
+  htmlSafeCss: string
+  htmlBlockedImages: number
+  htmlSafeTruncated: boolean
+}
+
 type BodyView = 'html' | 'text' | 'source'
 type ReadFilter = 'all' | 'unread'
+type MailFolder = 'inbox' | 'sent'
 
 interface ComposePreviewResponse {
   document: string
@@ -179,16 +211,29 @@ const FRAME_SCRIPT = `
 `.trim()
 
 const mails = ref<MailSummary[]>([])
+const sentMails = ref<SentSummary[]>([])
 const loading = ref(true)
+const sentLoading = ref(true)
+const activeFolder = ref<MailFolder>('inbox')
 const keyword = ref('')
 const mailboxFilter = ref('')
 const readFilter = ref<ReadFilter>('all')
+const sentKeyword = ref('')
 
 const detailOpen = ref(false)
 const detail = ref<MailDetail | null>(null)
 const detailLoading = ref(false)
 const detailDialog = ref<HTMLElement | null>(null)
+const detailDialogContent = ref<HTMLElement | null>(null)
+const detailSidebar = ref<HTMLElement | null>(null)
+const detailMain = ref<HTMLElement | null>(null)
 const bodyView = ref<BodyView>('html')
+
+const sentDetailOpen = ref(false)
+const sentDetail = ref<SentDetail | null>(null)
+const sentDetailContent = ref<HTMLElement | null>(null)
+const sentDetailLoading = ref(false)
+const sentBodyView = ref<'html' | 'text'>('html')
 
 const deleteTarget = ref<MailSummary | null>(null)
 const deleting = ref(false)
@@ -296,6 +341,16 @@ const filtered = computed(() => {
   })
 })
 
+const filteredSent = computed(() => {
+  const text = sentKeyword.value.trim().toLowerCase()
+  if (!text) return sentMails.value
+  return sentMails.value.filter((mail) => mail.subject.toLowerCase().includes(text)
+    || mail.recipient.toLowerCase().includes(text)
+    || mail.senderAddress.toLowerCase().includes(text)
+    || mail.senderName.toLowerCase().includes(text)
+    || mail.textPreview.toLowerCase().includes(text))
+})
+
 const htmlPreview = computed(() => {
   const html = detail.value?.htmlBody || ''
   return html.length > HTML_PREVIEW_MAX ? html.slice(0, HTML_PREVIEW_MAX) : html
@@ -315,7 +370,7 @@ const htmlTruncated = computed(() => (detail.value?.htmlBody.length || 0) > HTML
  *    没有 nonce，执行不了。
  * </p>
  */
-function buildFrameDocument(item: MailDetail): string {
+function buildSafeFrameDocument(item: { htmlSafe: string; htmlSafeCss: string }): string {
   if (!item.htmlSafe) return ''
   // 每次打开都换一个 nonce，邮件正文里即便猜到上一次的值也没用。
   const nonce = crypto.randomUUID().replace(/-/g, '')
@@ -337,7 +392,12 @@ function buildFrameDocument(item: MailDetail): string {
     + '</body></html>'
 }
 
+function buildFrameDocument(item: MailDetail): string {
+  return buildSafeFrameDocument(item)
+}
+
 const frameDocument = computed(() => (detail.value ? buildFrameDocument(detail.value) : ''))
+const sentFrameDocument = computed(() => (sentDetail.value ? buildSafeFrameDocument(sentDetail.value) : ''))
 
 /**
  * 接收沙箱里的链接点击。
@@ -419,7 +479,7 @@ function onComposeEditorKeydown(event: KeyboardEvent) {
 }
 
 onMounted(() => {
-  load()
+  refreshMailData()
   applyDialogAnimation(detailDialog.value)
   applyDialogAnimation(linkDialog.value)
   applyDialogAnimation(composeDialog.value)
@@ -667,6 +727,7 @@ async function sendCompose() {
     showToast('邮件已发送')
     setComposeSourceFullscreen(false)
     composeOpen.value = false
+    await loadSent()
   } catch (error: any) {
     showToast(error?.data?.statusMessage || error?.message || '邮件发送失败', 'error')
   } finally {
@@ -684,6 +745,21 @@ async function load() {
   } finally {
     loading.value = false
   }
+}
+
+async function loadSent() {
+  sentLoading.value = true
+  try {
+    sentMails.value = await $fetch<SentSummary[]>('/api/admin/domain-mails/sent')
+  } catch (error: any) {
+    showToast(error?.data?.statusMessage || '已发送邮件加载失败', 'error')
+  } finally {
+    sentLoading.value = false
+  }
+}
+
+async function refreshMailData() {
+  await Promise.all([load(), loadSent()])
 }
 
 async function openDetail(mail: MailSummary) {
@@ -704,6 +780,22 @@ async function openDetail(mail: MailSummary) {
   }
 }
 
+async function openSentDetail(mail: SentSummary) {
+  sentDetail.value = null
+  sentBodyView.value = mail.hasHtml ? 'html' : 'text'
+  sentDetailOpen.value = true
+  sentDetailLoading.value = true
+  try {
+    sentDetail.value = await $fetch<SentDetail>(`/api/admin/domain-mails/sent/${mail.id}`)
+    if (!sentDetail.value.hasHtml) sentBodyView.value = 'text'
+  } catch (error: any) {
+    showToast(error?.data?.statusMessage || '已发送邮件详情加载失败', 'error')
+    sentDetailOpen.value = false
+  } finally {
+    sentDetailLoading.value = false
+  }
+}
+
 function closeDetail() {
   detailOpen.value = false
 }
@@ -712,6 +804,12 @@ function onDetailClosed() {
   detailOpen.value = false
   detail.value = null
   bodyView.value = 'html'
+}
+
+function onSentDetailClosed() {
+  sentDetailOpen.value = false
+  sentDetail.value = null
+  sentBodyView.value = 'html'
 }
 
 /** 详情里点删除：先收起详情弹窗，避免两个 md-dialog 叠在一起抢焦点。 */
@@ -840,7 +938,7 @@ function readerInitial(reader: MailReader) {
 </script>
 
 <template>
-  <div class="page domain-mail-page">
+  <div class="page domain-mail-page api-redesign-page">
     <div class="page-heading">
       <div class="page-heading-copy">
         <div class="page-title-row">
@@ -853,12 +951,38 @@ function readerInitial(reader: MailReader) {
           <md-icon slot="icon">send</md-icon>
           写信
         </md-filled-button>
-        <md-icon-button aria-label="刷新" title="刷新" :disabled="loading" @click="load">
+        <md-icon-button aria-label="刷新" title="刷新" :disabled="loading || sentLoading" @click="refreshMailData">
           <md-icon>refresh</md-icon>
         </md-icon-button>
       </div>
     </div>
 
+    <nav class="mail-folder-tabs" role="tablist" aria-label="邮件文件夹">
+      <button
+        type="button"
+        role="tab"
+        :aria-selected="activeFolder === 'inbox'"
+        :class="{ 'mail-folder-tab--active': activeFolder === 'inbox' }"
+        @click="activeFolder = 'inbox'"
+      >
+        <md-icon>inbox</md-icon>
+        <span>收件箱</span>
+        <b>{{ mails.length }}</b>
+      </button>
+      <button
+        type="button"
+        role="tab"
+        :aria-selected="activeFolder === 'sent'"
+        :class="{ 'mail-folder-tab--active': activeFolder === 'sent' }"
+        @click="activeFolder = 'sent'"
+      >
+        <md-icon>send</md-icon>
+        <span>已发送</span>
+        <b>{{ sentMails.length }}</b>
+      </button>
+    </nav>
+
+    <template v-if="activeFolder === 'inbox'">
     <section class="mail-overview" aria-label="邮件概览">
       <div class="overview-item">
         <span class="overview-icon overview-icon--total"><md-icon>alternate_email</md-icon></span>
@@ -879,7 +1003,10 @@ function readerInitial(reader: MailReader) {
     </section>
 
     <section class="mail-workspace">
-      <div class="mail-toolbar">
+      <div
+        class="mail-toolbar"
+        :class="mailboxes.length ? 'mail-toolbar--with-mailbox' : 'mail-toolbar--without-mailbox'"
+      >
         <md-outlined-text-field
           class="search"
           label="搜索邮件"
@@ -964,9 +1091,60 @@ function readerInitial(reader: MailReader) {
       <EmptyState v-else-if="mails.length === 0" class="mail-state" image="/images/empty-personal-notes.svg">
         暂无域名邮件
       </EmptyState>
-      <div v-else class="mail-state">
-        <md-icon>manage_search</md-icon><strong>没有匹配的邮件</strong>
+      <div v-else class="mail-state mail-filter-empty">
+        <EmptyState image="/images/empty-looking-for-answers.svg">
+          <template #title>没有匹配的邮件</template>
+          请尝试调整筛选条件
+        </EmptyState>
         <md-text-button @click="keyword = ''; mailboxFilter = ''; readFilter = 'all'">清除筛选</md-text-button>
+      </div>
+    </section>
+    </template>
+
+    <section v-else class="mail-workspace sent-mail-workspace">
+      <div class="sent-mail-toolbar">
+        <md-outlined-text-field
+          class="search"
+          label="搜索已发送邮件"
+          :value="sentKeyword"
+          @input="sentKeyword = ($event.target as HTMLInputElement).value"
+        >
+          <md-icon slot="leading-icon">search</md-icon>
+        </md-outlined-text-field>
+        <span class="result-count">{{ filteredSent.length }} 封</span>
+      </div>
+      <div v-if="sentLoading" class="mail-state"><md-circular-progress indeterminate></md-circular-progress></div>
+      <div v-else-if="filteredSent.length" class="sent-mail-list">
+        <article
+          v-for="mail in filteredSent"
+          :key="mail.id"
+          class="sent-mail-row"
+          tabindex="0"
+          :aria-label="`查看已发送邮件：${mail.subject || '无主题'}`"
+          @click="openSentDetail(mail)"
+          @keydown.enter.self="openSentDetail(mail)"
+        >
+          <span class="sent-mail-icon"><md-icon>send</md-icon></span>
+          <div class="sent-mail-copy">
+            <div class="sent-mail-subject-line">
+              <strong>{{ mail.subject || '(无主题)' }}</strong>
+              <span v-if="mail.attachmentCount"><md-icon>attachment</md-icon>{{ mail.attachmentCount }}</span>
+            </div>
+            <div class="sent-mail-recipient">收件人：{{ mail.recipient }}</div>
+            <p v-if="mail.textPreview">{{ mail.textPreview }}</p>
+          </div>
+          <time :datetime="new Date(mail.sentTime).toISOString()" :title="formatDate(mail.sentTime)">{{ formatListDate(mail.sentTime) }}</time>
+        </article>
+      </div>
+      <EmptyState v-else-if="sentMails.length === 0" class="mail-state" image="/images/empty-personal-notes.svg">
+        暂无已发送邮件
+      </EmptyState>
+      <div v-else class="mail-state mail-filter-empty">
+        <EmptyState image="/images/empty-looking-for-answers.svg">
+          <template #title>没有匹配的已发送邮件</template>
+          请尝试调整搜索条件
+        </EmptyState>
+        <md-text-button @click="sentKeyword = ''">清除筛选</md-text-button>
       </div>
     </section>
 
@@ -1127,7 +1305,8 @@ function readerInitial(reader: MailReader) {
               ></iframe>
               <div v-else class="compose-preview-empty" :class="{ 'compose-preview-empty--error': composePreviewError }">
                 <md-circular-progress v-if="composePreviewLoading" indeterminate></md-circular-progress>
-                <md-icon v-else>{{ composePreviewError ? 'error' : 'draft' }}</md-icon>
+                <img v-else-if="!composePreviewError" class="compose-preview-empty-image" src="/images/empty-personal-notes.svg" alt="" aria-hidden="true" />
+                <md-icon v-else>error</md-icon>
                 <span>{{ composePreviewLoading ? '正在生成预览…' : (composePreviewError || '暂无可预览内容') }}</span>
               </div>
             </div>
@@ -1152,7 +1331,7 @@ function readerInitial(reader: MailReader) {
         <span>邮件阅读器</span>
         <strong>{{ detail?.subject || '邮件详情' }}</strong>
       </div>
-      <div slot="content" class="detail-dialog-content">
+      <div ref="detailDialogContent" slot="content" class="detail-dialog-content">
         <div v-if="detailLoading" class="detail-loading"><md-circular-progress indeterminate></md-circular-progress></div>
         <div v-else-if="detail" class="detail-reader">
           <header class="detail-message-header">
@@ -1169,7 +1348,7 @@ function readerInitial(reader: MailReader) {
           </header>
 
           <div class="detail-workspace">
-            <aside class="detail-sidebar">
+            <aside ref="detailSidebar" class="detail-sidebar">
               <section class="detail-sidebar-section">
                 <h3><md-icon>info</md-icon>邮件信息</h3>
                 <dl class="detail-meta-list">
@@ -1209,7 +1388,7 @@ function readerInitial(reader: MailReader) {
               </section>
             </aside>
 
-            <main class="detail-main">
+            <main ref="detailMain" class="detail-main">
               <div class="reader-toolbar">
                 <div class="view-switch" role="tablist" aria-label="正文视图">
                   <button v-if="detail.hasHtml" id="mail-html-tab" type="button" role="tab" aria-controls="mail-html-panel" :aria-selected="bodyView === 'html'" :tabindex="bodyView === 'html' ? 0 : -1" :class="{ 'view-tab--active': bodyView === 'html' }" @click="bodyView = 'html'" @keydown="onBodyTabKeydown">
@@ -1275,9 +1454,15 @@ function readerInitial(reader: MailReader) {
                 <p v-else class="attachment-empty">无附件</p>
               </section>
             </main>
+            <AppScrollbar :target="detailSidebar" label="域名邮件侧栏滚动条" />
+            <AppScrollbar :target="detailSidebar" axis="horizontal" label="域名邮件侧栏横向滚动条" />
+            <AppScrollbar :target="detailMain" label="域名邮件正文滚动条" />
+            <AppScrollbar :target="detailMain" axis="horizontal" label="域名邮件正文横向滚动条" />
           </div>
         </div>
       </div>
+      <AppScrollbar :target="detailDialogContent" label="域名邮件详情滚动条" />
+      <AppScrollbar :target="detailDialogContent" axis="horizontal" label="域名邮件详情横向滚动条" />
       <div slot="actions">
         <md-text-button
           v-if="canDeleteMail && detail"
@@ -1285,6 +1470,61 @@ function readerInitial(reader: MailReader) {
           @click="requestDeleteFromDetail"
         >删除</md-text-button>
         <md-text-button @click="closeDetail">关闭</md-text-button>
+      </div>
+    </md-dialog>
+
+    <md-dialog class="sent-detail-dialog" :open="sentDetailOpen" @closed="onSentDetailClosed">
+      <div slot="headline" class="detail-dialog-title">
+        <span>已发送邮件</span>
+        <strong>{{ sentDetail?.subject || '邮件详情' }}</strong>
+      </div>
+      <div ref="sentDetailContent" slot="content" class="sent-detail-content">
+        <div v-if="sentDetailLoading" class="detail-loading"><md-circular-progress indeterminate></md-circular-progress></div>
+        <div v-else-if="sentDetail" class="sent-detail-reader">
+          <header class="sent-detail-header">
+            <span class="sent-mail-icon"><md-icon>send</md-icon></span>
+            <div class="detail-message-copy">
+              <div><strong>{{ sentDetail.senderName || sentDetail.senderAddress }}</strong><span>{{ sentDetail.senderAddress }}</span></div>
+              <p>发送至 {{ sentDetail.recipient }} · {{ formatDate(sentDetail.sentTime) }}</p>
+            </div>
+          </header>
+          <div class="sent-detail-meta">
+            <span v-if="sentDetail.attachmentCount"><md-icon>attachment</md-icon>{{ sentDetail.attachmentCount }} 个附件（{{ formatBytes(sentDetail.attachmentBytes) }}）</span>
+            <span v-if="sentDetail.htmlBlockedImages"><md-icon>image_not_supported</md-icon>{{ sentDetail.htmlBlockedImages }} 张图片已拦截</span>
+            <span v-if="sentDetail.htmlSafeTruncated"><md-icon>content_cut</md-icon>预览已截断</span>
+          </div>
+          <div class="reader-toolbar">
+            <div class="view-switch" role="tablist" aria-label="已发送邮件正文视图">
+              <button v-if="sentDetail.hasHtml" type="button" role="tab" :aria-selected="sentBodyView === 'html'" :class="{ 'view-tab--active': sentBodyView === 'html' }" @click="sentBodyView = 'html'"><md-icon>visibility</md-icon>预览</button>
+              <button type="button" role="tab" :aria-selected="sentBodyView === 'text'" :class="{ 'view-tab--active': sentBodyView === 'text' }" @click="sentBodyView = 'text'"><md-icon>notes</md-icon>纯文本</button>
+            </div>
+          </div>
+          <div class="mail-body-viewer">
+            <iframe
+              v-if="sentBodyView === 'html' && sentDetail.hasHtml"
+              class="html-frame"
+              sandbox="allow-scripts"
+              referrerpolicy="no-referrer"
+              title="已发送邮件正文预览"
+              :srcdoc="sentFrameDocument"
+            ></iframe>
+            <p v-else class="body-text">{{ sentDetail.textBody || '（无正文）' }}</p>
+          </div>
+          <section v-if="sentDetail.attachments.length" class="attachment-section">
+            <div class="attachment-heading"><h3><md-icon>attachment</md-icon>附件</h3><span>{{ sentDetail.attachments.length }}</span></div>
+            <div class="attachment-list">
+              <div v-for="attachment in sentDetail.attachments" :key="attachment.sha256 + attachment.filename" class="attachment-item">
+                <span class="attachment-icon"><md-icon>draft</md-icon></span>
+                <div><strong>{{ attachment.filename || '(未命名)' }}</strong><span>{{ attachment.mimeType || '未知类型' }} · {{ formatBytes(attachment.size) }}</span></div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+      <AppScrollbar :target="sentDetailContent" label="已发送邮件详情滚动条" />
+      <AppScrollbar :target="sentDetailContent" axis="horizontal" label="已发送邮件详情横向滚动条" />
+      <div slot="actions">
+        <md-text-button @click="sentDetailOpen = false">关闭</md-text-button>
       </div>
     </md-dialog>
 
@@ -1344,6 +1584,14 @@ function readerInitial(reader: MailReader) {
 .unread-count-badge { padding: 3px 7px; border-radius: 4px; color: var(--md-sys-color-on-error); background: var(--md-sys-color-error); font-size: 10px; font-weight: 700; }
 .heading-actions { display: flex; align-items: center; gap: 7px; flex-shrink: 0; }
 
+.mail-folder-tabs { min-width: 0; display: flex; gap: 3px; margin: 16px 0 14px; padding: 3px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 7px; background: var(--md-sys-color-surface-container); }
+.mail-folder-tabs button { min-height: 36px; display: inline-flex; align-items: center; gap: 7px; border: 0; border-radius: 5px; padding: 0 14px; color: var(--md-sys-color-on-surface-variant); background: transparent; font: inherit; font-size: 11px; font-weight: 600; cursor: pointer; }
+.mail-folder-tabs button:hover { color: var(--md-sys-color-on-surface); background: color-mix(in srgb, var(--md-sys-color-on-surface) var(--md-sys-state-hover-state-layer-opacity), transparent); }
+.mail-folder-tabs button.mail-folder-tab--active { color: var(--md-sys-color-on-primary-container); background: var(--md-sys-color-primary-container); }
+.mail-folder-tabs button md-icon { --md-icon-size: 17px; }
+.mail-folder-tabs button b { min-width: 18px; padding: 2px 5px; border-radius: 4px; color: var(--md-sys-color-on-surface-variant); background: var(--md-sys-color-surface-container-high); font-size: 10px; text-align: center; }
+.mail-folder-tabs button.mail-folder-tab--active b { color: var(--md-sys-color-on-primary-container); background: color-mix(in srgb, var(--md-sys-color-on-primary-container) 12%, transparent); }
+
 .mail-overview { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 16px 0 14px; }
 .overview-item { min-width: 0; min-height: 72px; display: flex; align-items: center; gap: 12px; padding: 13px 15px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 8px; background: var(--md-sys-color-surface-container); }
 .overview-icon { width: 36px; height: 36px; display: grid; place-items: center; flex: 0 0 36px; border-radius: 7px; }
@@ -1357,8 +1605,33 @@ function readerInitial(reader: MailReader) {
 .overview-item span:last-child { color: var(--md-sys-color-on-surface-variant); font-size: 10px; }
 
 .mail-workspace { min-width: 0; overflow: hidden; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 8px; background: var(--md-sys-color-surface-container); }
-.mail-toolbar { min-width: 0; display: grid; grid-template-columns: minmax(220px, 1fr) 180px max-content max-content; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--md-sys-color-outline-variant); }
+.mail-toolbar { min-width: 0; display: grid; grid-template-columns: minmax(220px, 1fr) max-content max-content; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--md-sys-color-outline-variant); }
+.mail-toolbar--with-mailbox { grid-template-columns: minmax(220px, 1fr) 180px max-content max-content; }
 .search, .mailbox-select { width: 100%; min-width: 0; }
+.sent-mail-toolbar { min-width: 0; display: grid; grid-template-columns: minmax(220px, 1fr) max-content; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--md-sys-color-outline-variant); }
+.sent-mail-list { min-width: 0; }
+.sent-mail-row { min-width: 0; min-height: 76px; display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: center; gap: 11px; padding: 10px 16px; border-bottom: 1px solid color-mix(in srgb, var(--md-sys-color-outline-variant) 78%, transparent); outline: none; cursor: pointer; transition: background-color 140ms ease, box-shadow 140ms ease; }
+.sent-mail-row:last-child { border-bottom: 0; }
+.sent-mail-row:hover, .sent-mail-row:focus-visible { background: color-mix(in srgb, var(--md-sys-color-primary) 7%, transparent); }
+.sent-mail-row:focus-visible { box-shadow: inset 3px 0 var(--md-sys-color-primary); }
+.sent-mail-icon { width: 38px; height: 38px; display: grid; place-items: center; flex: 0 0 38px; border-radius: 50%; color: var(--md-sys-color-on-primary-container); background: var(--md-sys-color-primary-container); }
+.sent-mail-icon md-icon { --md-icon-size: 18px; }
+.sent-mail-copy { min-width: 0; display: grid; gap: 4px; }
+.sent-mail-subject-line { min-width: 0; display: flex; align-items: center; gap: 8px; }
+.sent-mail-subject-line strong, .sent-mail-recipient, .sent-mail-copy p { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sent-mail-subject-line strong { color: var(--md-sys-color-on-surface); font-size: 12px; }
+.sent-mail-subject-line > span { display: inline-flex; align-items: center; gap: 3px; flex: 0 0 auto; color: var(--md-sys-color-on-surface-variant); font-size: 10px; }
+.sent-mail-subject-line > span md-icon { --md-icon-size: 14px; }
+.sent-mail-recipient { color: var(--md-sys-color-on-surface-variant); font-size: 10px; }
+.sent-mail-copy p { margin: 0; color: var(--md-sys-color-on-surface-variant); font-size: 10px; }
+.sent-mail-row > time { color: var(--md-sys-color-on-surface-variant); font-size: 10px; white-space: nowrap; }
+.sent-detail-dialog { --md-dialog-container-width: min(900px, calc(100vw - 32px)); --md-dialog-container-max-width: min(900px, calc(100vw - 32px)); }
+.sent-detail-content { width: min(820px, calc(100vw - 88px)); min-height: 0; max-height: min(72vh, 720px); overflow: auto; }
+.sent-detail-reader { min-width: 0; overflow: hidden; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 8px; background: var(--md-sys-color-surface); }
+.sent-detail-header { min-width: 0; display: grid; grid-template-columns: 38px minmax(0, 1fr); align-items: center; gap: 11px; padding: 14px 16px; border-bottom: 1px solid var(--md-sys-color-outline-variant); background: var(--md-sys-color-surface-container); }
+.sent-detail-meta { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 12px 0; }
+.sent-detail-meta span { min-height: 26px; display: inline-flex; align-items: center; gap: 4px; padding: 0 7px; border-radius: 5px; color: var(--md-sys-color-on-surface-variant); background: var(--md-sys-color-surface-container-high); font-size: 10px; }
+.sent-detail-meta md-icon { --md-icon-size: 14px; }
 .read-filter { height: var(--app-control-height); width: max-content; justify-self: start; display: inline-grid; grid-auto-flow: column; grid-auto-columns: max-content; align-items: center; padding: 3px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 7px; background: var(--md-sys-color-surface); }
 .read-filter button { height: 32px; display: inline-flex; align-items: center; gap: 6px; padding: 0 11px; border: 0; border-radius: 5px; color: var(--md-sys-color-on-surface-variant); background: transparent; font-family: inherit; font-size: 11px; font-weight: 500; cursor: pointer; }
 .read-filter button:hover { color: var(--md-sys-color-on-surface); background: color-mix(in srgb, var(--md-sys-color-on-surface) var(--md-sys-state-hover-state-layer-opacity), transparent); }
@@ -1423,7 +1696,7 @@ function readerInitial(reader: MailReader) {
 .auth-status .badge-fail { border-color: color-mix(in srgb, var(--act-error) 38%, transparent); color: var(--act-error); background: color-mix(in srgb, var(--act-error) 7%, transparent); }
 .auth-status .badge-warn { border-color: color-mix(in srgb, var(--act-warning) 38%, transparent); color: var(--act-warning); background: color-mix(in srgb, var(--act-warning) 7%, transparent); }
 .detail-workspace { min-height: 0; display: grid; grid-template-columns: 280px minmax(0, 1fr); }
-.detail-sidebar { min-height: 0; overflow: auto; border-right: 1px solid var(--md-sys-color-outline-variant); background: color-mix(in srgb, var(--md-sys-color-surface-container) 72%, var(--md-sys-color-surface)); scrollbar-width: thin; }
+.detail-sidebar { min-height: 0; overflow: auto; border-right: 1px solid var(--md-sys-color-outline-variant); background: color-mix(in srgb, var(--md-sys-color-surface-container) 72%, var(--md-sys-color-surface)); }
 .detail-sidebar-section { padding: 15px; border-bottom: 1px solid var(--md-sys-color-outline-variant); }
 .detail-sidebar-section:last-child { border-bottom: 0; }
 .detail-sidebar-section h3, .attachment-heading h3 { margin: 0; display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700; }
@@ -1445,7 +1718,7 @@ function readerInitial(reader: MailReader) {
 .reader-identity strong { font-size: 11px; }
 .reader-identity span, .reader-item time { color: var(--md-sys-color-on-surface-variant); font-size: 10px; }
 .reader-item time { white-space: nowrap; }
-.detail-main { min-width: 0; min-height: 0; overflow: auto; background: var(--md-sys-color-surface); scrollbar-width: thin; }
+.detail-main { min-width: 0; min-height: 0; overflow: auto; background: var(--md-sys-color-surface); }
 .reader-toolbar { position: sticky; top: 0; z-index: 2; min-height: 50px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 12px; border-bottom: 1px solid var(--md-sys-color-outline-variant); background: color-mix(in srgb, var(--md-sys-color-surface) 92%, transparent); backdrop-filter: blur(8px); }
 .view-switch { display: inline-grid; grid-auto-flow: column; grid-auto-columns: max-content; padding: 3px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 7px; background: var(--md-sys-color-surface-container); }
 .view-switch button, .compose-mode .view-tab { min-height: 32px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 0 10px; border: 0; border-radius: 5px; color: var(--md-sys-color-on-surface-variant); background: transparent; font-family: inherit; font-size: 10px; font-weight: 500; cursor: pointer; }
@@ -1541,6 +1814,7 @@ function readerInitial(reader: MailReader) {
 .compose-preview-frame { display: block; width: 100%; height: 100%; min-height: 500px; border: 0; background: #ffffff; }
 .compose-preview-empty { min-height: 500px; display: grid; place-items: center; align-content: center; gap: 9px; padding: 24px; color: var(--md-sys-color-on-surface-variant); text-align: center; }
 .compose-preview-empty > md-icon { --md-icon-size: 28px; }
+.compose-preview-empty-image { width: min(190px, 58%); height: 150px; object-fit: contain; }
 .compose-preview-empty span { max-width: 360px; overflow-wrap: anywhere; font-size: 10px; line-height: 1.5; }
 .compose-preview-empty--error { color: var(--act-error); }
 .compose-preview-status { min-height: 34px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 5px 8px; border-top: 1px solid var(--md-sys-color-outline-variant); background: var(--md-sys-color-surface-container); }
@@ -1563,7 +1837,12 @@ function readerInitial(reader: MailReader) {
 }
 @media (max-width: 820px) {
   .mail-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .mail-toolbar { grid-template-columns: minmax(0, 1fr) 170px; }
+  .sent-mail-row { grid-template-columns: 34px minmax(0, 1fr); }
+  .sent-mail-icon { width: 34px; height: 34px; flex-basis: 34px; }
+  .sent-mail-row > time { grid-column: 2; }
+  .mail-toolbar { grid-template-columns: minmax(0, 1fr) max-content; }
+  .mail-toolbar--with-mailbox { grid-template-columns: minmax(0, 1fr) 170px; }
+  .mail-toolbar--without-mailbox .result-count { grid-column: 2; }
   .read-filter { justify-self: start; }
   .result-count { justify-self: end; }
   .mail-list-heading { display: none; }
@@ -1580,6 +1859,10 @@ function readerInitial(reader: MailReader) {
   .page-heading { align-items: stretch; flex-direction: column; }
   .heading-actions { width: 100%; }
   .heading-actions md-filled-button { flex: 1; }
+  .mail-folder-tabs { margin-top: 12px; }
+  .mail-folder-tabs button { flex: 1; justify-content: center; }
+  .sent-mail-toolbar { grid-template-columns: minmax(0, 1fr); }
+  .sent-mail-toolbar .result-count { justify-self: end; }
   .mail-toolbar { grid-template-columns: minmax(0, 1fr); }
   .read-filter, .result-count { justify-self: stretch; }
   .read-filter { width: auto; grid-auto-columns: 1fr; }

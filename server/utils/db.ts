@@ -14,7 +14,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { getCookie, getHeader, createError, type H3Event } from 'h3'
 import { dataDir, ensureDataDirs } from './data-dir'
-import { offlinePlayerUuid, requireEmailAddress, requireGameUsername } from './game-input'
+import { offlinePlayerUuid, requireEmailAddress, requireGameUsername, requirePlayerUuid } from './game-input'
 import type { MailAction, MailAttachment, MailTargetSpec, MailType } from './game-input'
 import type { InboundMailPayload } from './inbound-mail'
 import {
@@ -206,6 +206,18 @@ db.exec(`
     in_place_respawn_count INTEGER NOT NULL DEFAULT 0,
     updated_at INTEGER NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS game_player_stats (
+    player_uuid TEXT PRIMARY KEY,
+    username TEXT NOT NULL,
+    last_updated INTEGER NOT NULL DEFAULT 0,
+    stats_json TEXT NOT NULL DEFAULT '{}',
+    stats_updated_json TEXT NOT NULL DEFAULT '{}',
+    stats_source_json TEXT NOT NULL DEFAULT '{}',
+    last_reset_id TEXT NOT NULL DEFAULT '',
+    uploaded_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS game_player_stats_uploaded_idx
+    ON game_player_stats (uploaded_at DESC);
   CREATE TABLE IF NOT EXISTS game_titles (
     id TEXT PRIMARY KEY,
     display_name TEXT NOT NULL,
@@ -452,7 +464,50 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS domain_mail_prefix_permissions_user_idx
     ON domain_mail_prefix_permissions (user_id, prefix);
+  CREATE TABLE IF NOT EXISTS domain_mail_access_settings (
+    user_id INTEGER PRIMARY KEY,
+    all_mailboxes INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS domain_mail_sent (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    sender_address TEXT NOT NULL DEFAULT '',
+    sender_name TEXT NOT NULL DEFAULT '',
+    recipient TEXT NOT NULL DEFAULT '',
+    subject TEXT NOT NULL DEFAULT '',
+    text_body TEXT NOT NULL DEFAULT '',
+    html_body TEXT NOT NULL DEFAULT '',
+    attachments_json TEXT NOT NULL DEFAULT '[]',
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS domain_mail_sent_user_idx
+    ON domain_mail_sent (user_id, created_at DESC, id);
+  CREATE INDEX IF NOT EXISTS domain_mail_sent_created_idx
+    ON domain_mail_sent (created_at DESC, id);
 `)
+
+const gamePlayerStatsColumns = db.prepare('PRAGMA table_info(game_player_stats)').all() as { name?: string }[]
+if (!gamePlayerStatsColumns.some((column) => column.name === 'stats_updated_json')) {
+  try {
+    db.exec("ALTER TABLE game_player_stats ADD COLUMN stats_updated_json TEXT NOT NULL DEFAULT '{}'")
+  } catch (error) {
+    const migratedColumns = db.prepare('PRAGMA table_info(game_player_stats)').all() as { name?: string }[]
+    if (!migratedColumns.some((column) => column.name === 'stats_updated_json')) throw error
+  }
+}
+for (const [column, definition] of [
+  ['stats_source_json', "TEXT NOT NULL DEFAULT '{}'"],
+  ['last_reset_id', "TEXT NOT NULL DEFAULT ''"],
+] as const) {
+  if (gamePlayerStatsColumns.some((item) => item.name === column)) continue
+  try {
+    db.exec(`ALTER TABLE game_player_stats ADD COLUMN ${column} ${definition}`)
+  } catch (error) {
+    const migratedColumns = db.prepare('PRAGMA table_info(game_player_stats)').all() as { name?: string }[]
+    if (!migratedColumns.some((item) => item.name === column)) throw error
+  }
+}
 
 const defaultGameTitles = [
   ['newbie_plea', '萌新求饶', 'texture', '萌新求饶', '#55FF55', 'new', '\uE100', 10, 1],
@@ -733,7 +788,7 @@ const PASSWORD_EXPIRY_DAYS_SETTING = 'password_expiry.days'
 const STATUS_HISTORY_CLEARED_AT_SETTING = 'status_history.cleared_at'
 const RESERVED_ADMIN_ENTRIES = new Set([
   'login', 'account', 'activity', 'donors', 'bans', 'updates', 'game-accounts',
-  'game-cosmetics', 'game-account-email-templates', 'server-manage', 'server-files',
+  'game-cosmetics', 'game-stats', 'game-account-email-templates', 'server-manage', 'server-files',
   'admin-users', 'audit-logs', 'chat', 'mail', 'domain-mail', 'settings', 'permissions', 'api', '_nuxt', '_ipx', 'favicon', '__nuxt_error',
 ])
 
@@ -744,6 +799,7 @@ const INBOUND_MAIL_KEY_ENV = 'YZWC_INBOUND_MAIL_KEY'
 const INBOUND_MAIL_KEY_SETTING = 'inbound_mail.key'
 // 收件保留上限：邮件带附件二进制，无上限会把磁盘吃满。超出后按接收时间淘汰最旧的。
 const DOMAIN_MAIL_RETENTION_ROWS = 2000
+const DOMAIN_MAIL_SENT_RETENTION_ROWS = 2000
 
 // ===== MCSManager 面板（「服务器管理」页） =====
 // ApiKey 等价于面板账户的全部权限（发命令、改文件、停服），因此写进 settings 后
@@ -751,11 +807,8 @@ const DOMAIN_MAIL_RETENTION_ROWS = 2000
 // 与 turnstile.secret / inbound_mail.key 同一套存法，全部外呼只在服务端发起。
 const MCSM_BASE_URL_SETTING = 'mcsm.base_url'
 const MCSM_API_KEY_SETTING = 'mcsm.api_key'
-const MCSM_BACKUP_DIR_SETTING = 'mcsm.backup_dir'
 const MCSM_BASE_URL_ENV = 'YZWC_MCSM_BASE_URL'
 const MCSM_API_KEY_ENV = 'YZWC_MCSM_API_KEY'
-// 备份统一放在实例目录下的这个子目录里，页面只列这里的压缩包。
-const MCSM_DEFAULT_BACKUP_DIR = '/backups'
 
 export const ADMIN_COOKIE_NAME = '__Host-yzwc_admin'
 const ADMIN_USER_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{2,31}$/
@@ -1376,6 +1429,7 @@ export function updateAdminPermissions(
   pageInput: Record<string, unknown>,
   featureInput: Record<string, unknown>,
   domainMailPrefixes?: unknown,
+  domainMailAllMailboxes?: unknown,
 ): AdminUser {
   const current = getAdminUserById(userId)
   if (!current) throw createError({ statusCode: 404, statusMessage: '后台用户不存在' })
@@ -1389,6 +1443,9 @@ export function updateAdminPermissions(
   const normalizedDomainMailPrefixes = domainMailPrefixes === undefined
     ? undefined
     : requireDomainMailPrefixes(domainMailPrefixes)
+  const normalizedDomainMailAllMailboxes = domainMailAllMailboxes === undefined
+    ? undefined
+    : requireDomainMailAllMailboxes(domainMailAllMailboxes)
 
   db.exec('BEGIN IMMEDIATE')
   try {
@@ -1400,6 +1457,15 @@ export function updateAdminPermissions(
         run(`INSERT INTO domain_mail_prefix_permissions (user_id, prefix, created_at, updated_at)
              VALUES (?, ?, ?, ?)`, userId, prefix, now, now)
       }
+    }
+    if (normalizedDomainMailAllMailboxes !== undefined) {
+      run(`INSERT INTO domain_mail_access_settings (user_id, all_mailboxes, updated_at)
+           VALUES (?, ?, ?)
+           ON CONFLICT(user_id) DO UPDATE SET all_mailboxes = excluded.all_mailboxes, updated_at = excluded.updated_at`,
+      userId,
+      normalizedDomainMailAllMailboxes ? 1 : 0,
+      now,
+      )
     }
     db.exec('COMMIT')
   } catch (error) {
@@ -1691,6 +1757,8 @@ export function deleteAdminUser(userId: number): void {
   run('DELETE FROM admin_password_history WHERE user_id = ?', userId)
   clearAdminPresence(userId)
   run('DELETE FROM domain_mail_prefix_permissions WHERE user_id = ?', userId)
+  run('DELETE FROM domain_mail_access_settings WHERE user_id = ?', userId)
+  run('DELETE FROM domain_mail_sent WHERE user_id = ?', userId)
   run('DELETE FROM domain_mail_reads WHERE user_id = ?', userId)
   run('DELETE FROM admin_users WHERE id = ?', userId)
 }
@@ -2836,17 +2904,16 @@ export type SettingSource = 'database' | 'env' | 'none'
 export interface McsmConfig {
   baseUrl: string
   apiKey: string
-  backupDir: string
 }
 
 /** 回给具备 MCSM 设置查看权限的后台页面。 */
 export interface McsmAdminConfig {
   baseUrl: string
   baseUrlSource: SettingSource
+  /** 按设置页权限回传当前生效的明文 ApiKey，供管理员核对或复制。 */
   apiKey: string
   apiKeyConfigured: boolean
   apiKeySource: SettingSource
-  backupDir: string
   configured: boolean
 }
 
@@ -2894,32 +2961,6 @@ function requireMcsmApiKey(value: unknown): string {
   return key
 }
 
-/**
- * 规范化备份目录：实例目录内的相对路径，统一成 {@code /a/b} 形式。
- * <p>
- * 拒掉 {@code ..}、盘符和控制字符——面板的文件接口本身限定在实例目录内，
- * 这里再挡一层，避免把越权路径原样透给面板。
- * </p>
- */
-function requireMcsmBackupDir(value: unknown): string {
-  const raw = String(value ?? '').trim().replace(/\\/g, '/')
-  if (!raw) return MCSM_DEFAULT_BACKUP_DIR
-  const segments = raw.split('/').filter(Boolean)
-  if (segments.includes('..') || segments.includes('.')) {
-    throw createError({ statusCode: 400, statusMessage: '备份目录不能包含 . 或 .. 路径段' })
-  }
-  // 只剩斜杠时会退化成实例根目录，那样「删除备份」能删到服务器本体，直接回落默认值。
-  if (segments.length === 0) return MCSM_DEFAULT_BACKUP_DIR
-  const normalized = `/${segments.join('/')}`
-  if (normalized.length > 200 || /[^A-Za-z0-9._/-]/.test(normalized)) {
-    throw createError({
-      statusCode: 400,
-      statusMessage: '备份目录只能包含字母、数字、点、下划线、短横线和斜杠，且不超过 200 个字符',
-    })
-  }
-  return normalized
-}
-
 function settingSource(settingKey: string, envName: string): SettingSource {
   if (getSetting(settingKey)?.trim()) return 'database'
   if (process.env[envName]?.trim()) return 'env'
@@ -2931,7 +2972,6 @@ export function getMcsmConfig(): McsmConfig {
   return {
     baseUrl: getSetting(MCSM_BASE_URL_SETTING)?.trim() || process.env[MCSM_BASE_URL_ENV]?.trim() || '',
     apiKey: getSetting(MCSM_API_KEY_SETTING)?.trim() || process.env[MCSM_API_KEY_ENV]?.trim() || '',
-    backupDir: getSetting(MCSM_BACKUP_DIR_SETTING)?.trim() || MCSM_DEFAULT_BACKUP_DIR,
   }
 }
 
@@ -2948,7 +2988,6 @@ export function getAdminMcsmConfig(): McsmAdminConfig {
     apiKey: config.apiKey,
     apiKeyConfigured: Boolean(config.apiKey),
     apiKeySource: settingSource(MCSM_API_KEY_SETTING, MCSM_API_KEY_ENV),
-    backupDir: config.backupDir,
     configured: Boolean(config.baseUrl && config.apiKey),
   }
 }
@@ -2959,7 +2998,7 @@ export function getAdminMcsmConfig(): McsmAdminConfig {
  * ApiKey 留空仍表示沿用已有值，兼容旧版页面和只修改地址的调用方。
  * </p>
  */
-export function setMcsmConfig(input: { baseUrl?: unknown; apiKey?: unknown; backupDir?: unknown }): McsmAdminConfig {
+export function setMcsmConfig(input: { baseUrl?: unknown; apiKey?: unknown }): McsmAdminConfig {
   const current = getMcsmConfig()
   const baseUrl = requireMcsmBaseUrl(input.baseUrl)
   const provided = String(input.apiKey ?? '').trim()
@@ -2967,11 +3006,8 @@ export function setMcsmConfig(input: { baseUrl?: unknown; apiKey?: unknown; back
   if (!apiKey) {
     throw createError({ statusCode: 400, statusMessage: '首次配置 MCSM 面板时必须填写 ApiKey' })
   }
-  const backupDir = requireMcsmBackupDir(input.backupDir === undefined ? current.backupDir : input.backupDir)
-
   setSetting(MCSM_BASE_URL_SETTING, baseUrl)
   setSetting(MCSM_API_KEY_SETTING, apiKey)
-  setSetting(MCSM_BACKUP_DIR_SETTING, backupDir)
   return getAdminMcsmConfig()
 }
 
@@ -3115,9 +3151,240 @@ export function upsertGameAccount(account: GameAccount) {
   }
 }
 
+export interface GameStatsRecord {
+  uuid: string
+  username: string
+  lastUpdated: number
+  uploadedAt: number
+  stats: Record<string, number>
+}
+
+const GAME_STATS_MAX_BATCH = 500
+const GAME_STATS_MAX_KEYS = 96
+const GAME_STATS_MAX_JSON_BYTES = 32 * 1024
+const GAME_STATS_KEY_RE = /^[A-Za-z0-9_.:-]{1,64}$/
+
+function normalizeGameStats(value: unknown): Record<string, number> {
+  if (value == null || typeof value !== 'object' || Array.isArray(value)) {
+    throw createError({ statusCode: 400, statusMessage: '统计数据格式不正确' })
+  }
+  const result: Record<string, number> = {}
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (!GAME_STATS_KEY_RE.test(key)) {
+      throw createError({ statusCode: 400, statusMessage: '统计项目名称不正确' })
+    }
+    const number = typeof raw === 'number' ? raw : Number(raw)
+    if (!Number.isSafeInteger(number) || number < 0) {
+      throw createError({ statusCode: 400, statusMessage: '统计项目数值不正确' })
+    }
+    result[key] = number
+    if (Object.keys(result).length > GAME_STATS_MAX_KEYS) {
+      throw createError({ statusCode: 400, statusMessage: `统计项目最多 ${GAME_STATS_MAX_KEYS} 项` })
+    }
+  }
+  if (Buffer.byteLength(JSON.stringify(result), 'utf8') > GAME_STATS_MAX_JSON_BYTES) {
+    throw createError({ statusCode: 400, statusMessage: '统计数据过大' })
+  }
+  return result
+}
+
+function normalizeGameStatsTimestamps(value: unknown): Record<string, number> {
+  if (value == null || typeof value !== 'object' || Array.isArray(value)) return {}
+  const result: Record<string, number> = {}
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (!GAME_STATS_KEY_RE.test(key)) continue
+    const number = typeof raw === 'number' ? raw : Number(raw)
+    if (!Number.isSafeInteger(number) || number < 0) continue
+    result[key] = number
+    if (Object.keys(result).length >= GAME_STATS_MAX_KEYS) break
+  }
+  return result
+}
+
+function storedGameStats(row: Record<string, unknown> | undefined): Record<string, number> {
+  if (!row) return {}
+  try {
+    return normalizeGameStats(JSON.parse(String(row.stats_json ?? '{}')))
+  } catch {
+    return {}
+  }
+}
+
+function storedGameStatsTimestamps(row: Record<string, unknown> | undefined): Record<string, number> {
+  if (!row) return {}
+  try {
+    return normalizeGameStatsTimestamps(JSON.parse(String(row.stats_updated_json ?? '{}')))
+  } catch {
+    return {}
+  }
+}
+
+function storedGameStatsSource(row: Record<string, unknown> | undefined): Record<string, number> {
+  if (!row) return {}
+  try {
+    return normalizeGameStats(JSON.parse(String(row.stats_source_json ?? '{}')))
+  } catch {
+    return {}
+  }
+}
+
+function mapGameStats(row: Record<string, unknown>): GameStatsRecord {
+  let stats: Record<string, number> = {}
+  try {
+    stats = storedGameStats(row)
+  } catch {
+    stats = {}
+  }
+  return {
+    uuid: String(row.player_uuid ?? '').toLowerCase(),
+    username: String(row.username ?? ''),
+    lastUpdated: Number(row.last_updated ?? 0),
+    uploadedAt: Number(row.uploaded_at ?? 0),
+    stats,
+  }
+}
+
+export function upsertGameStats(records: Array<{
+  uuid: unknown
+  username: unknown
+  lastUpdated: unknown
+  stats: unknown
+}>, mode: 'delta' | 'reset' | 'replace' = 'replace', resetId?: unknown): number {
+  if (!Array.isArray(records) || records.length > GAME_STATS_MAX_BATCH) {
+    throw createError({ statusCode: 400, statusMessage: `一次最多上传 ${GAME_STATS_MAX_BATCH} 位玩家` })
+  }
+  const normalizedResetId = resetId == null ? '' : String(resetId).trim()
+  if (mode === 'reset' && !/^[A-Za-z0-9_.:-]{1,128}$/.test(normalizedResetId)) {
+    throw createError({ statusCode: 400, statusMessage: '统计重置批次编号不正确' })
+  }
+  const normalized = records.map((record) => {
+    const uuid = requirePlayerUuid(record?.uuid)
+    const username = requireGameUsername(record?.username)
+    const lastUpdated = Number(record?.lastUpdated ?? 0)
+    if (!Number.isSafeInteger(lastUpdated) || lastUpdated < 0) {
+      throw createError({ statusCode: 400, statusMessage: '统计更新时间不正确' })
+    }
+    const stats = normalizeGameStats(record?.stats)
+    return { uuid, username, lastUpdated, stats }
+  })
+  const uploadedAt = Date.now()
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    for (const record of normalized) {
+      const existing = get(`SELECT last_updated, stats_json, stats_updated_json,
+          stats_source_json, last_reset_id
+        FROM game_player_stats WHERE player_uuid = ?`, record.uuid)
+      const existingStats = storedGameStats(existing)
+      const existingTimestamps = storedGameStatsTimestamps(existing)
+      const existingSource = storedGameStatsSource(existing)
+      let mergedStats: Record<string, number>
+      let mergedTimestamps: Record<string, number>
+      let mergedSource: Record<string, number>
+      let mergedResetId = String(existing?.last_reset_id ?? '')
+
+      if (mode === 'delta') {
+        mergedStats = { ...existingStats }
+        mergedTimestamps = { ...existingTimestamps }
+        mergedSource = { ...existingSource }
+        for (const [key, value] of Object.entries(record.stats)) {
+          const previousUpdated = mergedTimestamps[key]
+          if (previousUpdated != null && record.lastUpdated < previousUpdated) continue
+          const previousSource = mergedSource[key] ?? existingStats[key] ?? 0
+          const increment = value >= previousSource ? value - previousSource : value
+          mergedStats[key] = (mergedStats[key] ?? 0) + increment
+          mergedSource[key] = value
+          mergedTimestamps[key] = record.lastUpdated
+        }
+      } else if (mode === 'reset') {
+        if (existing != null && mergedResetId === normalizedResetId) continue
+        const previousRecordUpdated = existing == null ? 0 : Number(existing.last_updated ?? 0)
+        if (existing != null && record.lastUpdated < previousRecordUpdated) continue
+        mergedStats = { ...existingStats }
+        mergedTimestamps = {}
+        mergedSource = {}
+        const sourceKeys = new Set([
+          ...Object.keys(existingStats),
+          ...Object.keys(existingSource),
+          ...Object.keys(record.stats),
+        ])
+        for (const key of Object.keys(record.stats)) {
+          const previousSource = existingSource[key] ?? existingStats[key] ?? 0
+          const value = record.stats[key]
+          const increment = value >= previousSource ? value - previousSource : value
+          mergedStats[key] = (mergedStats[key] ?? 0) + increment
+        }
+        for (const key of sourceKeys) {
+          mergedSource[key] = 0
+          mergedTimestamps[key] = record.lastUpdated
+        }
+        mergedResetId = normalizedResetId
+      } else {
+        const previousUpdated = existing == null ? 0 : Number(existing.last_updated ?? 0)
+        if (existing != null && record.lastUpdated < previousUpdated) {
+          mergedStats = existingStats
+          mergedTimestamps = existingTimestamps
+          mergedSource = existingSource
+        } else {
+          mergedStats = { ...record.stats }
+          mergedTimestamps = Object.fromEntries(
+            Object.keys(record.stats).map((key) => [key, record.lastUpdated]),
+          )
+          mergedSource = { ...record.stats }
+        }
+      }
+      const normalizedMergedStats = normalizeGameStats(mergedStats)
+      const normalizedMergedSource = normalizeGameStats(mergedSource)
+      run(`INSERT INTO game_player_stats
+        (player_uuid, username, last_updated, stats_json, stats_updated_json,
+         stats_source_json, last_reset_id, uploaded_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(player_uuid) DO UPDATE SET
+          username = excluded.username,
+          last_updated = MAX(game_player_stats.last_updated, excluded.last_updated),
+          stats_json = excluded.stats_json,
+          stats_updated_json = excluded.stats_updated_json,
+          stats_source_json = excluded.stats_source_json,
+          last_reset_id = excluded.last_reset_id,
+          uploaded_at = excluded.uploaded_at`,
+      record.uuid, record.username, record.lastUpdated, JSON.stringify(normalizedMergedStats),
+      JSON.stringify(mergedTimestamps), JSON.stringify(normalizedMergedSource), mergedResetId, uploadedAt)
+    }
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+  return normalized.length
+}
+
+export function listGameStats(): GameStatsRecord[] {
+  return all('SELECT * FROM game_player_stats ORDER BY username COLLATE NOCASE, player_uuid').map(mapGameStats)
+}
+
+export function listGameStatsOverview(): GameStatsRecord[] {
+  return listGameStats()
+}
+
+export function getGameStatsByUuid(uuidValue: unknown): GameStatsRecord | undefined {
+  const uuid = requirePlayerUuid(uuidValue)
+  const row = get('SELECT * FROM game_player_stats WHERE player_uuid = ?', uuid)
+  return row ? mapGameStats(row) : undefined
+}
+
+export function deleteGameStats(uuidValue: unknown): boolean {
+  const uuid = requirePlayerUuid(uuidValue)
+  const result = run('DELETE FROM game_player_stats WHERE player_uuid = ?', uuid)
+  return Number(result.changes ?? 0) > 0
+}
+
 export function deleteGameAccount(username: string): boolean {
   const key = username.trim().toLocaleLowerCase('en-US')
+  const existing = get('SELECT username, uuid FROM game_accounts WHERE username_lower = ?', key)
   const result = run('DELETE FROM game_accounts WHERE username_lower = ?', key)
+  const uuid = existing?.uuid == null || String(existing.uuid).trim() === ''
+    ? offlinePlayerUuid(String(existing?.username ?? username))
+    : String(existing.uuid).trim().toLowerCase()
+  run('DELETE FROM game_player_stats WHERE player_uuid = ?', uuid)
   run('DELETE FROM game_player_title_grants WHERE username_lower = ?', key)
   run('DELETE FROM game_player_title_selection WHERE username_lower = ?', key)
   run('DELETE FROM game_sessions WHERE username_lower = ?', key)
@@ -4453,6 +4720,8 @@ export function initializeAdmin(
     run('DELETE FROM admin_presence')
     run('DELETE FROM admin_password_history')
     run('DELETE FROM domain_mail_prefix_permissions')
+    run('DELETE FROM domain_mail_access_settings')
+    run('DELETE FROM domain_mail_sent')
     run('DELETE FROM admin_users')
     const passwordHash = hashAdminPassword(rawPassword)
     const now = Date.now()
@@ -5334,15 +5603,28 @@ function requireDomainMailPrefixes(value: unknown): string[] {
   return [...new Set(value.map(normalizeDomainMailPrefix))]
 }
 
+function requireDomainMailAllMailboxes(value: unknown): boolean {
+  if (typeof value !== 'boolean') {
+    throw createError({ statusCode: 400, statusMessage: '查看全部域名邮件开关参数无效' })
+  }
+  return value
+}
+
 function configuredDomainMailPrefixes(userId: number): string[] {
   return all('SELECT prefix FROM domain_mail_prefix_permissions WHERE user_id = ? ORDER BY prefix', userId)
     .map((row) => String(row.prefix ?? ''))
     .filter(Boolean)
 }
 
+function configuredDomainMailAllMailboxes(userId: number): boolean {
+  const row = get('SELECT all_mailboxes FROM domain_mail_access_settings WHERE user_id = ?', userId)
+  return Number(row?.all_mailboxes ?? 0) === 1
+}
+
 function mapDomainMailAccessUser(
   row: Record<string, unknown>,
   configuredPrefixes: string[],
+  configuredAllMailboxes = false,
 ): DomainMailAccessUser {
   const username = String(row.username ?? '')
   const isOwner = Number(row.is_owner ?? 0) === 1
@@ -5360,7 +5642,7 @@ function mapDomainMailAccessUser(
     defaultPrefix,
     prefixes: configuredPrefixes,
     effectivePrefixes,
-    allMailboxes: isOwner,
+    allMailboxes: isOwner || configuredAllMailboxes,
   }
 }
 
@@ -5372,15 +5654,25 @@ export function listDomainMailAccessUsers(): DomainMailAccessUser[] {
     prefixes.push(String(row.prefix ?? ''))
     prefixesByUser.set(userId, prefixes)
   }
+  const allMailboxesByUser = new Map<number, boolean>()
+  for (const row of all('SELECT user_id, all_mailboxes FROM domain_mail_access_settings')) {
+    allMailboxesByUser.set(Number(row.user_id), Number(row.all_mailboxes ?? 0) === 1)
+  }
   return all(`SELECT id, username, avatar, full_name, is_owner, is_active
               FROM admin_users ORDER BY is_owner DESC, username COLLATE NOCASE`)
-    .map((row) => mapDomainMailAccessUser(row, prefixesByUser.get(Number(row.id)) || []))
+    .map((row) => mapDomainMailAccessUser(
+      row,
+      prefixesByUser.get(Number(row.id)) || [],
+      allMailboxesByUser.get(Number(row.id)) || false,
+    ))
 }
 
 export function getDomainMailAccessUser(userId: number): DomainMailAccessUser | undefined {
   const row = get(`SELECT id, username, avatar, full_name, is_owner, is_active
                    FROM admin_users WHERE id = ?`, userId)
-  return row ? mapDomainMailAccessUser(row, configuredDomainMailPrefixes(userId)) : undefined
+  return row
+    ? mapDomainMailAccessUser(row, configuredDomainMailPrefixes(userId), configuredDomainMailAllMailboxes(userId))
+    : undefined
 }
 
 export function updateDomainMailAccessPrefixes(userId: number, value: unknown): DomainMailAccessUser {
@@ -5405,7 +5697,161 @@ export function updateDomainMailAccessPrefixes(userId: number, value: unknown): 
     db.exec('ROLLBACK')
     throw error
   }
-  return mapDomainMailAccessUser(row, prefixes)
+  return mapDomainMailAccessUser(row, prefixes, configuredDomainMailAllMailboxes(userId))
+}
+
+export interface DomainMailSentAttachmentMeta {
+  filename: string
+  mimeType: string
+  size: number
+  sha256: string
+}
+
+export interface DomainMailSentSummary {
+  id: string
+  senderAddress: string
+  senderName: string
+  recipient: string
+  subject: string
+  sentTime: number
+  hasText: boolean
+  hasHtml: boolean
+  attachmentCount: number
+  attachmentBytes: number
+  textPreview: string
+}
+
+export interface DomainMailSentDetail extends DomainMailSentSummary {
+  textBody: string
+  htmlBody: string
+  attachments: DomainMailSentAttachmentMeta[]
+}
+
+function parseDomainMailSentAttachments(value: unknown): DomainMailSentAttachmentMeta[] {
+  if (typeof value !== 'string') return []
+  try {
+    const parsed = JSON.parse(value)
+    if (!Array.isArray(parsed)) return []
+    return parsed.flatMap((item) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return []
+      return [{
+        filename: String((item as any).filename ?? ''),
+        mimeType: String((item as any).mimeType ?? ''),
+        size: Number((item as any).size ?? 0),
+        sha256: String((item as any).sha256 ?? ''),
+      }]
+    })
+  } catch {
+    return []
+  }
+}
+
+function mapDomainMailSentSummary(row: Record<string, unknown>): DomainMailSentSummary {
+  const textBody = String(row.text_body ?? '')
+  const htmlBody = String(row.html_body ?? '')
+  const attachments = parseDomainMailSentAttachments(row.attachments_json)
+  const textLength = row.text_len == null ? textBody.length : Number(row.text_len ?? 0)
+  const htmlLength = row.html_len == null ? htmlBody.length : Number(row.html_len ?? 0)
+  return {
+    id: String(row.id ?? ''),
+    senderAddress: String(row.sender_address ?? ''),
+    senderName: String(row.sender_name ?? ''),
+    recipient: String(row.recipient ?? ''),
+    subject: String(row.subject ?? ''),
+    sentTime: Number(row.created_at ?? 0),
+    hasText: textLength > 0,
+    hasHtml: htmlLength > 0,
+    attachmentCount: attachments.length,
+    attachmentBytes: attachments.reduce((total, attachment) => total + attachment.size, 0),
+    textPreview: String(row.text_preview ?? textBody).replace(/\s+/g, ' ').trim().slice(0, 180),
+  }
+}
+
+function mapDomainMailSentDetail(row: Record<string, unknown>): DomainMailSentDetail {
+  const attachments = parseDomainMailSentAttachments(row.attachments_json)
+  return {
+    ...mapDomainMailSentSummary(row),
+    textBody: String(row.text_body ?? ''),
+    htmlBody: String(row.html_body ?? ''),
+    attachments,
+  }
+}
+
+function domainMailSentOwner(userId: number): boolean {
+  return Number(get('SELECT is_owner FROM admin_users WHERE id = ?', userId)?.is_owner ?? 0) === 1
+}
+
+export function listDomainMailSent(userId: number): DomainMailSentSummary[] {
+  if (!get('SELECT id FROM admin_users WHERE id = ?', userId)) return []
+  const owner = domainMailSentOwner(userId)
+  const sql = `SELECT id, sender_address, sender_name, recipient, subject,
+                      length(text_body) AS text_len, length(html_body) AS html_len,
+                      substr(text_body, 1, 180) AS text_preview,
+                      attachments_json, created_at
+               FROM domain_mail_sent
+               ${owner ? '' : 'WHERE user_id = ?'}
+               ORDER BY created_at DESC, id`
+  return all(sql, ...(owner ? [] : [userId])).map(mapDomainMailSentSummary)
+}
+
+export function getDomainMailSentDetail(id: string, userId: number): DomainMailSentDetail | undefined {
+  if (!get('SELECT id FROM admin_users WHERE id = ?', userId)) return undefined
+  const owner = domainMailSentOwner(userId)
+  const row = get(`SELECT id, sender_address, sender_name, recipient, subject, text_body, html_body,
+                         attachments_json, created_at
+                  FROM domain_mail_sent
+                  WHERE id = ? AND ${owner ? '1 = 1' : 'user_id = ?'}`,
+  id,
+  ...(owner ? [] : [userId]),
+  )
+  return row ? mapDomainMailSentDetail(row) : undefined
+}
+
+export function recordDomainMailSent(input: {
+  userId: number
+  senderAddress: string
+  senderName: string
+  recipient: string
+  subject: string
+  textBody: string
+  htmlBody: string
+  attachments: Array<{ filename: string; contentType: string; content: Buffer }>
+}): string {
+  const id = randomUUID()
+  const now = Date.now()
+  const attachmentMeta = input.attachments.map((attachment) => ({
+    filename: attachment.filename,
+    mimeType: attachment.contentType,
+    size: attachment.content.length,
+    sha256: createHash('sha256').update(attachment.content).digest('hex'),
+  }))
+  run(`INSERT INTO domain_mail_sent
+       (id, user_id, sender_address, sender_name, recipient, subject, text_body, html_body, attachments_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  id,
+  input.userId,
+  input.senderAddress,
+  input.senderName,
+  input.recipient,
+  input.subject,
+  input.textBody,
+  input.htmlBody,
+  JSON.stringify(attachmentMeta),
+  now,
+  )
+  pruneDomainMailSent()
+  return id
+}
+
+function pruneDomainMailSent(): void {
+  const total = Number(get('SELECT COUNT(*) AS c FROM domain_mail_sent')?.c ?? 0)
+  if (total <= DOMAIN_MAIL_SENT_RETENTION_ROWS) return
+  run(`DELETE FROM domain_mail_sent
+       WHERE id IN (
+         SELECT id FROM domain_mail_sent
+         ORDER BY created_at DESC, id
+         LIMIT -1 OFFSET ${DOMAIN_MAIL_SENT_RETENTION_ROWS}
+       )`)
 }
 
 interface DomainMailVisibilityFilter {
@@ -5416,7 +5862,9 @@ interface DomainMailVisibilityFilter {
 function domainMailVisibilityFilter(userId: number): DomainMailVisibilityFilter {
   const user = get('SELECT username, is_owner FROM admin_users WHERE id = ?', userId)
   if (!user) return { clause: '1 = 0', params: [] }
-  if (Number(user.is_owner ?? 0) === 1) return { clause: '1 = 1', params: [] }
+  if (Number(user.is_owner ?? 0) === 1 || configuredDomainMailAllMailboxes(userId)) {
+    return { clause: '1 = 1', params: [] }
+  }
 
   const configured = configuredDomainMailPrefixes(userId)
   const defaultPrefix = String(user.username ?? '').toLocaleLowerCase('en-US')

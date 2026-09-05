@@ -79,6 +79,7 @@ const keyword = ref('')
 const sourceFilter = ref<'all' | Source>('all')
 const detailUsername = ref<string | null>(null)
 const detailDialog = ref<HTMLElement | null>(null)
+const cosmeticsTableScroll = ref<HTMLElement | null>(null)
 
 function localTextureUrl(uuid: string, slot: string) {
   return `/api/admin/game-cosmetics/texture?uuid=${encodeURIComponent(uuid)}&slot=${encodeURIComponent(slot)}`
@@ -299,7 +300,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="page page--wide">
+  <div class="page page--wide api-redesign-page game-cosmetics-page">
     <div class="page-heading">
       <h1 class="page-title">账户装扮</h1>
       <div class="heading-actions">
@@ -348,7 +349,10 @@ onMounted(() => {
 
       <p v-if="loading" class="empty">加载中…</p>
       <EmptyState v-else-if="!rows.length" image="/images/empty-profile.svg">暂无游戏账户</EmptyState>
-      <p v-else-if="!filtered.length" class="empty">没有匹配的账户</p>
+      <EmptyState v-else-if="!filtered.length" image="/images/empty-looking-for-answers.svg">
+        <template #title>没有匹配的账户</template>
+        尝试调整搜索或筛选条件。
+      </EmptyState>
       <div v-else class="grid">
         <article
           v-for="row in filtered"
@@ -469,7 +473,9 @@ onMounted(() => {
                     :height="320"
                   />
                 </div>
-                <p v-else class="empty panel-empty">该账户没有可展示的皮肤或披风。</p>
+                <EmptyState v-else class="panel-empty-state" compact image="/images/empty-profile.svg">
+                  该账户没有可展示的皮肤或披风。
+                </EmptyState>
               </section>
 
               <section
@@ -536,7 +542,9 @@ onMounted(() => {
                     </dl>
                   </div>
                 </template>
-                <p v-else class="empty panel-empty">该账户没有上传过皮肤或披风。</p>
+                <EmptyState v-else class="panel-empty-state" compact image="/images/empty-profile.svg">
+                  该账户没有上传过皮肤或披风。
+                </EmptyState>
               </section>
 
               <section class="detail-panel source-panel">
@@ -582,7 +590,7 @@ onMounted(() => {
             <div class="panel-heading">
               <h3>服务器文件明细</h3>
             </div>
-            <div class="table-scroll">
+            <div ref="cosmeticsTableScroll" class="table-scroll">
               <table class="data-table inner-table">
                 <thead><tr><th>槽位</th><th>尺寸</th><th>文件大小</th><th>SHA-256</th><th>上传时间</th></tr></thead>
                 <tbody>
@@ -596,6 +604,7 @@ onMounted(() => {
                 </tbody>
               </table>
             </div>
+            <AppScrollbar :target="cosmeticsTableScroll" axis="horizontal" label="账户装扮文件表格横向滚动条" />
           </section>
 
           <p class="detail-hint">

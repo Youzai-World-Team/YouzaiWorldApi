@@ -1,4 +1,5 @@
 import { createError } from 'h3'
+import { listBackups } from './mcsm-backup'
 import { assertInstanceAllowed, callPanel } from './mcsm'
 
 /**
@@ -112,44 +113,57 @@ export async function setConfigFile(
 }
 
 // ===== 计划任务 =====
-//
-// 面板的计划任务接口官方文档没写，下面的字段是实测结论：
-//   name    任务名，同时也是删除时的 task_name
-//   count   执行次数，-1 表示无限
-//   type    1 = 循环（time 是间隔秒数，最小 3）
-//           2 = cron（time 是 5 段或 6 段 cron 表达式）
-//           3 = 指定时刻（time 是 "YYYY-MM-DD HH:mm:ss"）
-//   actions 动作数组，形如 [{ type, payload }]
-//
-// 要点：面板对 actions 的结构**不做校验**，原样落库；只有 {type,payload} 这种写法
-// 执行器才真的会执行（实测：定时 say 命令确实进了控制台）。写错格式不会报错，
-// 任务会到点静默不执行——所以这里把结构固定死，不让调用方自由传。
-// 动作名用 start / stop，注意和 HTTP 电源接口的 open 不同名。
+// ElementsPanel 的 type 2 与 type 3 最终都交给 node-schedule。面板前端分别生成：
+//   type 2: 秒 分 时 * * 星期
+//   type 3: 秒 分 时 日 月 *（年份不会进入表达式，执行下一次匹配后由 count=1 删除）
 
-export type ScheduleActionType = 'command' | 'start' | 'stop' | 'restart' | 'kill'
+export type ScheduleActionType = 'delay' | 'command' | 'stop' | 'start' | 'restart' | 'kill' | 'backup'
 
-const SCHEDULE_ACTION_TYPES = new Set<ScheduleActionType>(['command', 'start', 'stop', 'restart', 'kill'])
+const SCHEDULE_ACTION_TYPES = new Set<ScheduleActionType>([
+  'delay', 'command', 'stop', 'start', 'restart', 'kill', 'backup',
+])
 
 export const SCHEDULE_ACTION_LABELS: Record<ScheduleActionType, string> = {
+  delay: '延迟',
   command: '执行命令',
-  start: '启动实例',
   stop: '停止实例',
+  start: '启动实例',
   restart: '重启实例',
   kill: '强制结束进程',
+  backup: '创建整实例备份',
 }
 
 export type ScheduleType = 1 | 2 | 3
 
 export const SCHEDULE_TYPE_LABELS: Record<ScheduleType, string> = {
-  1: '按间隔循环',
-  2: 'cron 表达式',
-  3: '指定时刻执行',
+  1: '固定间隔',
+  2: '每周循环',
+  3: '指定月日',
 }
 
-const SCHEDULE_NAME_RE = /^[A-Za-z0-9一-龥][A-Za-z0-9一-龥._-]{0,40}$/
+const SCHEDULE_NAME_RE = /^[\p{L}\p{N}][\p{L}\p{N}._-]{0,40}$/u
 const SCHEDULE_INTERVAL_MIN_SECONDS = 3
 const SCHEDULE_INTERVAL_MAX_SECONDS = 30 * 24 * 60 * 60
+const SCHEDULE_ACTION_MAX = 10
+const SCHEDULE_COUNT_MAX = 9999
+const SCHEDULE_DELAY_MAX_MS = 24 * 60 * 60 * 1000
 const COMMAND_MAX_LENGTH = 512
+const WEEKDAY_LABELS: Record<number, string> = {
+  1: '周一', 2: '周二', 3: '周三', 4: '周四', 5: '周五', 6: '周六', 7: '周日',
+}
+
+interface PanelScheduleAction {
+  type: string
+  payload: string
+}
+
+interface PanelScheduleTask {
+  name: string
+  count: number
+  time: string
+  actions: PanelScheduleAction[]
+  type: number
+}
 
 export interface ScheduleEntry {
   name: string
@@ -161,30 +175,86 @@ export interface ScheduleEntry {
   actions: Array<{ type: string; typeLabel: string; payload: string }>
 }
 
+export interface ScheduleInput {
+  name: unknown
+  type: unknown
+  time: unknown
+  count: unknown
+  actions: unknown
+}
+
+function twoDigits(value: number): string {
+  return String(value).padStart(2, '0')
+}
+
+function weeklyTimeParts(time: string): { seconds: number; minutes: number; hours: number; weekdays: number[] } | null {
+  const match = time.match(/^(\d{1,2}) (\d{1,2}) (\d{1,2}) \* \* ([1-7](?:,[1-7])*)$/)
+  if (!match) return null
+  const seconds = Number(match[1])
+  const minutes = Number(match[2])
+  const hours = Number(match[3])
+  const weekdays = [...new Set(match[4]!.split(',').map(Number))].sort((a, b) => a - b)
+  if (seconds > 59 || minutes > 59 || hours > 23 || weekdays.length === 0) return null
+  return { seconds, minutes, hours, weekdays }
+}
+
+function specifiedTimeParts(time: string): { seconds: number; minutes: number; hours: number; day: number; month: number } | null {
+  const match = time.match(/^(\d{1,2}) (\d{1,2}) (\d{1,2}) (\d{1,2}) (\d{1,2}) \*$/)
+  if (!match) return null
+  const seconds = Number(match[1])
+  const minutes = Number(match[2])
+  const hours = Number(match[3])
+  const day = Number(match[4])
+  const month = Number(match[5])
+  if (seconds > 59 || minutes > 59 || hours > 23 || month < 1 || month > 12) return null
+  const probe = new Date(Date.UTC(2024, month - 1, day))
+  if (probe.getUTCMonth() !== month - 1 || probe.getUTCDate() !== day) return null
+  return { seconds, minutes, hours, day, month }
+}
+
 function scheduleTimeLabel(type: number, time: string): string {
   if (type === 1) {
     const seconds = Number(time)
     if (!Number.isFinite(seconds)) return time
-    if (seconds % 3600 === 0) return `每 ${seconds / 3600} 小时`
-    if (seconds % 60 === 0) return `每 ${seconds / 60} 分钟`
-    return `每 ${seconds} 秒`
+    const days = Math.floor(seconds / 86400)
+    const hours = Math.floor((seconds % 86400) / 3600)
+    const minutes = Math.floor((seconds % 3600) / 60)
+    const rest = seconds % 60
+    return `每 ${[
+      days ? `${days} 天` : '',
+      hours ? `${hours} 小时` : '',
+      minutes ? `${minutes} 分钟` : '',
+      rest ? `${rest} 秒` : '',
+    ].filter(Boolean).join(' ')}`
   }
-  if (type === 2) return `cron ${time}`
+  if (type === 2) {
+    const parsed = weeklyTimeParts(time)
+    if (!parsed) return `cron ${time}`
+    const at = `${twoDigits(parsed.hours)}:${twoDigits(parsed.minutes)}:${twoDigits(parsed.seconds)}`
+    return `${parsed.weekdays.map((day) => WEEKDAY_LABELS[day]).join('、')} ${at}`
+  }
+  if (type === 3) {
+    const parsed = specifiedTimeParts(time)
+    if (!parsed) return `cron ${time}`
+    const at = `${twoDigits(parsed.hours)}:${twoDigits(parsed.minutes)}:${twoDigits(parsed.seconds)}`
+    return `${parsed.month} 月 ${parsed.day} 日 ${at}（下一次）`
+  }
   return time
 }
 
 function mapSchedule(raw: any): ScheduleEntry {
   const type = Number(raw?.type) || 0
   const time = String(raw?.time ?? '')
+  const rawCount = raw?.count
+  const parsedCount = Number(rawCount)
   const actions = Array.isArray(raw?.actions) ? raw.actions : []
   return {
     name: String(raw?.name || ''),
-    count: Number(raw?.count ?? 0),
+    count: String(rawCount ?? '') === '' || !Number.isFinite(parsedCount) ? -1 : parsedCount,
     type,
     typeLabel: SCHEDULE_TYPE_LABELS[type as ScheduleType] || `未知（${type}）`,
     time,
     timeLabel: scheduleTimeLabel(type, time),
-    // 面板不校验 actions 结构，历史数据可能是别的形状，这里尽力展示、缺字段就留空。
     actions: actions.map((action: any) => {
       const actionType = String(action?.type ?? action?.action ?? (typeof action === 'string' ? 'command' : ''))
       return {
@@ -196,102 +266,145 @@ function mapSchedule(raw: any): ScheduleEntry {
   }
 }
 
-export async function listSchedules(uuid: string, daemonId: string): Promise<ScheduleEntry[]> {
+async function listPanelSchedules(uuid: string, daemonId: string): Promise<any[]> {
   const data = await callPanel<any>('/api/protected_schedule', { query: { uuid, daemonId } })
-  return (Array.isArray(data) ? data : []).map(mapSchedule)
+  return Array.isArray(data) ? data : []
 }
 
-export interface ScheduleInput {
-  name: unknown
-  type: unknown
-  time: unknown
-  count: unknown
-  actionType: unknown
-  command: unknown
+export async function listSchedules(uuid: string, daemonId: string): Promise<ScheduleEntry[]> {
+  return (await listPanelSchedules(uuid, daemonId)).map(mapSchedule)
 }
 
-/** 校验并归一化计划任务的时间字段，语义随 type 变。 */
 function requireScheduleTime(type: ScheduleType, value: unknown): string {
+  const text = String(value ?? '').trim().replace(/\s+/g, ' ')
   if (type === 1) {
-    const seconds = Math.trunc(Number(value))
+    const seconds = Math.trunc(Number(text))
     if (!Number.isFinite(seconds) || seconds < SCHEDULE_INTERVAL_MIN_SECONDS || seconds > SCHEDULE_INTERVAL_MAX_SECONDS) {
       throw createError({
         statusCode: 400,
-        statusMessage: `循环间隔需要在 ${SCHEDULE_INTERVAL_MIN_SECONDS} 至 ${SCHEDULE_INTERVAL_MAX_SECONDS} 秒之间`,
+        statusMessage: `固定间隔需要在 ${SCHEDULE_INTERVAL_MIN_SECONDS} 至 ${SCHEDULE_INTERVAL_MAX_SECONDS} 秒之间`,
       })
     }
     return String(seconds)
   }
   if (type === 2) {
-    const cron = String(value ?? '').trim().replace(/\s+/g, ' ')
-    const fields = cron.split(' ')
-    // 面板同时接受 5 段和 6 段（带秒）两种写法。
-    if (fields.length !== 5 && fields.length !== 6) {
-      throw createError({ statusCode: 400, statusMessage: 'cron 表达式需要是 5 段或 6 段' })
+    const parsed = weeklyTimeParts(text)
+    if (!parsed) {
+      throw createError({ statusCode: 400, statusMessage: '每周循环时间格式不正确' })
     }
-    if (!/^[0-9*,\-/ ?LW#]+$/.test(cron)) {
-      throw createError({ statusCode: 400, statusMessage: 'cron 表达式含有不支持的字符' })
-    }
-    return cron
+    return `${parsed.seconds} ${parsed.minutes} ${parsed.hours} * * ${parsed.weekdays.join(',')}`
   }
-  const text = String(value ?? '').trim()
-  if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(text)) {
-    throw createError({ statusCode: 400, statusMessage: '执行时刻需要形如 2026-01-01 04:00:00' })
+  const parsed = specifiedTimeParts(text)
+  if (!parsed) {
+    throw createError({ statusCode: 400, statusMessage: '指定月日的时间格式不正确' })
   }
-  if (Number.isNaN(Date.parse(text.replace(' ', 'T')))) {
-    throw createError({ statusCode: 400, statusMessage: '执行时刻不是有效时间' })
-  }
-  return text
+  return `${parsed.seconds} ${parsed.minutes} ${parsed.hours} ${parsed.day} ${parsed.month} *`
 }
 
-/**
- * 创建计划任务。
- * <p>
- * 面板对同一实例的任务数量有上限，超出时会直接报错（原文透给调用方）。
- * </p>
- */
-export async function createSchedule(uuid: string, daemonId: string, input: ScheduleInput): Promise<void> {
+function requireScheduleActions(value: unknown): PanelScheduleAction[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > SCHEDULE_ACTION_MAX) {
+    throw createError({ statusCode: 400, statusMessage: `计划任务需要包含 1 至 ${SCHEDULE_ACTION_MAX} 个动作` })
+  }
+  return value.map((raw, index) => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw createError({ statusCode: 400, statusMessage: `第 ${index + 1} 个动作格式不正确` })
+    }
+    const actionType = String((raw as any).type ?? '') as ScheduleActionType
+    if (!SCHEDULE_ACTION_TYPES.has(actionType)) {
+      throw createError({ statusCode: 400, statusMessage: `第 ${index + 1} 个计划任务动作无效` })
+    }
+    let payload = String((raw as any).payload ?? '').trim()
+    if (actionType === 'command') {
+      if (!payload || payload.length > COMMAND_MAX_LENGTH || /[\u0000-\u001f\u007f]/.test(payload)) {
+        throw createError({ statusCode: 400, statusMessage: `第 ${index + 1} 个动作的命令为空、过长或含有控制字符` })
+      }
+    } else if (actionType === 'delay') {
+      const delay = Math.trunc(Number(payload))
+      if (!Number.isFinite(delay) || delay < 1 || delay > SCHEDULE_DELAY_MAX_MS) {
+        throw createError({ statusCode: 400, statusMessage: `第 ${index + 1} 个延迟需要在 1 至 ${SCHEDULE_DELAY_MAX_MS} 毫秒之间` })
+      }
+      payload = String(delay)
+    } else {
+      payload = ''
+    }
+    return { type: actionType, payload }
+  })
+}
+
+function normalizeSchedule(input: ScheduleInput): PanelScheduleTask {
   const name = String(input.name ?? '').trim()
   if (!SCHEDULE_NAME_RE.test(name)) {
     throw createError({
       statusCode: 400,
-      statusMessage: '任务名只能包含中文、字母、数字、点、下划线和短横线，且不超过 41 个字符',
+      statusMessage: '任务名只能包含文字、数字、点、下划线和短横线，且不超过 41 个字符',
     })
   }
-
   const rawType = Number(input.type)
   if (rawType !== 1 && rawType !== 2 && rawType !== 3) {
     throw createError({ statusCode: 400, statusMessage: '计划任务类型无效' })
   }
   const type = rawType as ScheduleType
-  const time = requireScheduleTime(type, input.time)
-
   const rawCount = Math.trunc(Number(input.count))
-  // -1 表示无限次；指定时刻类型只可能执行一次。
-  const count = type === 3 ? 1 : (rawCount === -1 ? -1 : Math.min(9999, Math.max(1, rawCount || 1)))
-
-  const actionType = String(input.actionType ?? '')
-  if (!SCHEDULE_ACTION_TYPES.has(actionType as ScheduleActionType)) {
-    throw createError({ statusCode: 400, statusMessage: '计划任务动作无效' })
+  const count = type === 3 ? 1 : rawCount === -1 ? -1 : Math.min(SCHEDULE_COUNT_MAX, Math.max(1, rawCount || 1))
+  return {
+    name,
+    count,
+    type,
+    time: requireScheduleTime(type, input.time),
+    actions: requireScheduleActions(input.actions),
   }
+}
 
-  let payload = ''
-  if (actionType === 'command') {
-    payload = String(input.command ?? '').trim()
-    if (!payload) {
-      throw createError({ statusCode: 400, statusMessage: '执行命令的计划任务必须填写命令' })
-    }
-    if (payload.length > COMMAND_MAX_LENGTH || /[\u0000-\u001f\u007f]/.test(payload)) {
-      throw createError({ statusCode: 400, statusMessage: '命令过长或含有换行、控制字符' })
-    }
+async function assertBackupActionSupported(uuid: string, daemonId: string, task: PanelScheduleTask): Promise<void> {
+  if (task.actions.some((action) => action.type === 'backup')) {
+    await listBackups(uuid, daemonId)
   }
+}
 
+async function registerSchedule(uuid: string, daemonId: string, task: PanelScheduleTask): Promise<void> {
   await callPanel<any>('/api/protected_schedule', {
     method: 'POST',
     query: { uuid, daemonId },
-    // actions 必须是 [{type,payload}]：面板不校验结构，写错会到点静默不执行。
-    body: { name, count, type, time, actions: [{ type: actionType, payload }] },
+    body: task,
   })
+}
+
+export async function createSchedule(uuid: string, daemonId: string, input: ScheduleInput): Promise<ScheduleEntry> {
+  const task = normalizeSchedule(input)
+  await assertBackupActionSupported(uuid, daemonId, task)
+  await registerSchedule(uuid, daemonId, task)
+  return mapSchedule(task)
+}
+
+/** 面板没有更新接口；先校验新任务，再删除并重建，失败时尽力恢复旧配置。 */
+export async function replaceSchedule(uuid: string, daemonId: string, input: ScheduleInput): Promise<ScheduleEntry> {
+  const task = normalizeSchedule(input)
+  await assertBackupActionSupported(uuid, daemonId, task)
+  const current = (await listPanelSchedules(uuid, daemonId)).find((item) => String(item?.name || '') === task.name)
+  if (!current) {
+    throw createError({ statusCode: 404, statusMessage: '计划任务不存在或已被删除' })
+  }
+
+  await deleteSchedule(uuid, daemonId, task.name)
+  try {
+    await registerSchedule(uuid, daemonId, task)
+  } catch (error) {
+    try {
+      await registerSchedule(uuid, daemonId, {
+        name: String(current.name),
+        count: String(current.count ?? '') === '' || !Number.isFinite(Number(current.count))
+          ? -1
+          : Number(current.count),
+        type: Number(current.type),
+        time: String(current.time),
+        actions: Array.isArray(current.actions) ? current.actions : [],
+      })
+    } catch {
+      // 原错误对调用方更有价值；回滚失败会在操作记录与下一次刷新中暴露。
+    }
+    throw error
+  }
+  return mapSchedule(task)
 }
 
 export async function deleteSchedule(uuid: string, daemonId: string, nameValue: unknown): Promise<void> {

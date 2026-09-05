@@ -24,7 +24,6 @@ const LOG_SIZE_MAX_CHARS = 500_000
 const LOG_SIZE_DEFAULT_CHARS = 60_000
 // 备份文件名由后台生成，只允许这一类；恢复和删除也只认这个模式，
 // 避免把面板文件接口变成任意路径的删除工具。
-export const BACKUP_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}\.zip$/
 export const MCSM_UUID_RE = /^[0-9a-f]{32}$/i
 
 /** 面板实例状态码。-1 忙碌，0 停止，1 停止中，2 启动中，3 运行中。 */
@@ -80,12 +79,12 @@ export interface McsmInstanceDetail extends McsmInstanceSummary {
   pingConfig: { ip: string; port: number }
   autoStart: boolean
   autoRestart: boolean
-}
-
-export interface McsmBackupEntry {
-  name: string
-  size: number
-  time: string
+  enableRcon: boolean
+  rconIp: string
+  rconPort: number
+  terminalOption: { haveColor: boolean; pty: boolean; ptyWindowCol: number; ptyWindowRow: number }
+  fileCode: string
+  crlf: number
 }
 
 function requireConfig(): McsmConfig {
@@ -160,7 +159,13 @@ export async function callPanel<T>(
   }
 
   if (Number(payload?.status) !== 200) {
-    const detail = typeof payload?.data === 'string' ? payload.data : ''
+    const detail = typeof payload?.data === 'string'
+      ? payload.data
+      : typeof payload?.data?.message === 'string'
+        ? payload.data.message
+        : typeof payload?.data?.error === 'string'
+          ? payload.data.error
+          : ''
     throw createError({
       statusCode: 502,
       statusMessage: `MCSM 面板返回错误${detail ? `：${detail}` : `（status ${payload?.status}）`}`,
@@ -207,11 +212,12 @@ function mapSummary(raw: any): McsmInstanceSummary {
  * <p>
  * 用 {@code GET /api/auth}（当前账户信息）而不是 {@code /api/service/remote_service_instances}：
  * 后者要求面板管理员权限，普通账户的 ApiKey 会被 403；而账户信息里的 instances
- * 恰好就是「这把钥匙能碰的实例」，正好也是我们要暴露给后台的范围。
+ * 恰好就是「这把钥匙能碰的实例」，正好也是我们要暴露给后台的范围。请求 advanced
+ * 信息是为了拿到普通用户可见的实时状态、玩家数和版本；凭据字段仍会在映射时丢弃。
  * </p>
  */
 export async function getPanelSnapshot(): Promise<{ user: McsmPanelUser; instances: McsmInstanceSummary[] }> {
-  const data = await callPanel<any>('/api/auth', { query: { uuid: '', advanced: 'false' } })
+  const data = await callPanel<any>('/api/auth', { query: { uuid: '', advanced: 'true' } })
   const raw = Array.isArray(data?.instances) ? data.instances : []
   const permission = toNumber(data?.permission)
   return {
@@ -283,6 +289,17 @@ export async function getInstanceDetail(uuid: string, daemonId: string): Promise
     },
     autoStart: Boolean(config.eventTask?.autoStart),
     autoRestart: Boolean(config.eventTask?.autoRestart),
+    enableRcon: Boolean(config.enableRcon),
+    rconIp: String(config.rconIp || ''),
+    rconPort: toNumber(config.rconPort),
+    terminalOption: {
+      haveColor: Boolean(config.terminalOption?.haveColor),
+      pty: Boolean(config.terminalOption?.pty),
+      ptyWindowCol: toNumber(config.terminalOption?.ptyWindowCol, 120),
+      ptyWindowRow: toNumber(config.terminalOption?.ptyWindowRow, 30),
+    },
+    fileCode: String(config.fileCode || 'utf-8'),
+    crlf: toNumber(config.crlf),
   }
 }
 
@@ -348,7 +365,7 @@ export interface StreamTicket {
 /**
  * 换取实时控制台的流式票据。
  * <p>
- * 和备份下载一样，面板返回「守护进程地址 + 一次性密码」，真正的 stdout 推流走
+ * 面板返回「守护进程地址 + 一次性密码」，真正的 stdout 推流走
  * 守护进程的 socket.io，而不是面板本身。本服务端用这张票据在服务端侧连守护进程，
  * 再把 stdout 通过 SSE 转发给浏览器——ApiKey 和节点地址都不出服务端。
  * </p>
@@ -398,131 +415,4 @@ export function stripAnsi(text: string): string {
     .replace(/\r\n/g, '\n')
     .replace(/\r/g, '\n')
     .replace(CONTROL_CHAR_RE, '')
-}
-
-// ===== 备份：用面板的文件接口把实例目录压缩成 zip 放进备份目录 =====
-
-function joinPath(dir: string, name: string): string {
-  return `${dir.replace(/\/+$/, '')}/${name}`
-}
-
-/** 备份目录本身可能还不存在（新实例），面板对已存在的目录会报错，忽略即可。 */
-async function ensureBackupDir(uuid: string, daemonId: string, dir: string): Promise<void> {
-  try {
-    await callPanel<any>('/api/files/mkdir', { method: 'POST', query: { uuid, daemonId }, body: { target: dir } })
-  } catch {
-    // 目录已存在时面板会报错，这里不区分——真的不可写会在后续压缩时暴露出来。
-  }
-}
-
-export async function listBackups(uuid: string, daemonId: string, dir: string): Promise<McsmBackupEntry[]> {
-  let data: any
-  try {
-    data = await callPanel<any>('/api/files/list', {
-      query: { uuid, daemonId, target: dir, page: 0, page_size: 100, file_name: '' },
-    })
-  } catch {
-    // 目录不存在时面板直接报错，对页面来说等同于「还没有备份」。
-    return []
-  }
-  const items = Array.isArray(data?.items) ? data.items : []
-  return items
-    .filter((item: any) => Number(item?.type) === 1 && BACKUP_NAME_RE.test(String(item?.name || '')))
-    .map((item: any) => ({
-      name: String(item.name),
-      size: toNumber(item.size),
-      time: String(item.time || ''),
-    }))
-    .sort((a: McsmBackupEntry, b: McsmBackupEntry) => b.name.localeCompare(a.name, 'en'))
-}
-
-/**
- * 创建备份：把指定目录打包成备份目录下的一个 zip。
- * <p>
- * 只压缩世界存档等目标目录，不整机打包——实例根目录通常有几个 GB 的模组和依赖，
- * 而且把备份目录自己压进去会套娃。
- * </p>
- */
-export async function createBackup(
-  uuid: string,
-  daemonId: string,
-  dir: string,
-  name: string,
-  targets: string[],
-): Promise<string> {
-  if (!BACKUP_NAME_RE.test(name)) {
-    throw createError({ statusCode: 400, statusMessage: '备份文件名不合法' })
-  }
-  await ensureBackupDir(uuid, daemonId, dir)
-  await callPanel<any>('/api/files/compress', {
-    method: 'POST',
-    query: { uuid, daemonId },
-    body: { type: 1, code: 'utf-8', source: joinPath(dir, name), targets },
-  })
-  return name
-}
-
-/** 恢复备份：把 zip 解压回实例根目录，同名文件会被覆盖。 */
-export async function restoreBackup(uuid: string, daemonId: string, dir: string, name: string): Promise<void> {
-  if (!BACKUP_NAME_RE.test(name)) {
-    throw createError({ statusCode: 400, statusMessage: '备份文件名不合法' })
-  }
-  await callPanel<any>('/api/files/compress', {
-    method: 'POST',
-    query: { uuid, daemonId },
-    body: { type: 2, code: 'utf-8', source: joinPath(dir, name), targets: '/' },
-  })
-}
-
-export async function deleteBackup(uuid: string, daemonId: string, dir: string, name: string): Promise<void> {
-  if (!BACKUP_NAME_RE.test(name)) {
-    throw createError({ statusCode: 400, statusMessage: '备份文件名不合法' })
-  }
-  await callPanel<any>('/api/files', {
-    method: 'DELETE',
-    query: { uuid, daemonId },
-    body: { targets: [joinPath(dir, name)] },
-  })
-}
-
-/**
- * 换取备份的一次性下载地址。
- * <p>
- * 面板给的是「守护进程地址 + 一次性密码」，下载走的是节点而不是面板本身。
- * 节点地址可能是内网域名，因此把拼好的 URL 交给浏览器直接下载，本服务端不做中转
- * ——备份动辄几百 MB，代理一遍只是白白占用内存。
- * </p>
- */
-export async function backupDownloadUrl(
-  uuid: string,
-  daemonId: string,
-  dir: string,
-  name: string,
-): Promise<string> {
-  if (!BACKUP_NAME_RE.test(name)) {
-    throw createError({ statusCode: 400, statusMessage: '备份文件名不合法' })
-  }
-  const data = await callPanel<any>('/api/files/download', {
-    method: 'POST',
-    query: { uuid, daemonId, file_name: joinPath(dir, name) },
-  })
-  const password = String(data?.password || '')
-  const addr = String(data?.addr || '')
-  if (!password || !addr) {
-    throw createError({ statusCode: 502, statusMessage: 'MCSM 面板没有返回下载地址' })
-  }
-  const scheme = new URL(getMcsmConfig().baseUrl).protocol
-  return `${scheme}//${addr}/download/${encodeURIComponent(password)}/${encodeURIComponent(name)}`
-}
-
-/** 列出实例根目录下的一级目录，供「创建备份」时挑选要打包的内容。 */
-export async function listRootDirectories(uuid: string, daemonId: string): Promise<string[]> {
-  const data = await callPanel<any>('/api/files/list', {
-    query: { uuid, daemonId, target: '/', page: 0, page_size: 100, file_name: '' },
-  })
-  const items = Array.isArray(data?.items) ? data.items : []
-  return items
-    .filter((item: any) => Number(item?.type) === 0 && /^[A-Za-z0-9][A-Za-z0-9._-]{0,60}$/.test(String(item?.name || '')))
-    .map((item: any) => String(item.name))
-    .sort((a: string, b: string) => a.localeCompare(b, 'en'))
 }

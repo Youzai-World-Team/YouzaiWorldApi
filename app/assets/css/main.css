@@ -284,11 +284,22 @@
 
 html,
 body,
-#__nuxt {
+#__nuxt,
+#__nuxt > div {
   margin: 0;
   padding: 0;
+  background-color: var(--md-sys-color-surface);
   min-height: 100vh;
   min-height: 100dvh;
+}
+
+html,
+body,
+#__nuxt,
+#__nuxt > div {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
 }
 
 /* 保留真实页面滚动，只隐藏浏览器自带的视觉滚动条。 */
@@ -303,8 +314,8 @@ body::-webkit-scrollbar {
 }
 
 body {
-  background: var(--md-sys-color-surface);
   color: var(--md-sys-color-on-surface);
+  background-color: var(--md-sys-color-surface);
   overflow-x: hidden;
   font-family: var(--md-sys-typescale-body-medium-font);
   font-size: var(--md-sys-typescale-body-medium-size);
@@ -359,6 +370,19 @@ md-outlined-select {
   bottom: 8px;
 }
 
+.app-scrollbar--horizontal {
+  width: auto;
+  height: 12px;
+  padding: 3px 0;
+}
+
+.app-scrollbar--horizontal.app-scrollbar--page {
+  top: auto;
+  left: 4px;
+  right: 4px;
+  bottom: 4px;
+}
+
 .app-scrollbar--available {
   opacity: 0.45;
   pointer-events: auto;
@@ -375,11 +399,13 @@ md-outlined-select {
   z-index: 21;
 }
 
-.app-scrollbar-target {
-  scrollbar-width: none;
+.app-scrollbar-target--vertical,
+.app-scrollbar-target--horizontal {
+  scrollbar-width: none !important;
 }
 
-.app-scrollbar-target::-webkit-scrollbar {
+.app-scrollbar-target--vertical::-webkit-scrollbar,
+.app-scrollbar-target--horizontal::-webkit-scrollbar {
   width: 0;
   height: 0;
 }
@@ -400,6 +426,11 @@ md-outlined-select {
     box-shadow var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard);
 }
 
+.app-scrollbar--horizontal .app-scrollbar__thumb {
+  width: 100%;
+  height: 6px;
+}
+
 .app-scrollbar:hover .app-scrollbar__thumb,
 .app-scrollbar:focus-visible .app-scrollbar__thumb,
 .app-scrollbar--dragging .app-scrollbar__thumb {
@@ -407,6 +438,14 @@ md-outlined-select {
   margin-left: -1px;
   background: var(--app-scrollbar-thumb-active);
   box-shadow: var(--md-sys-elevation-level2);
+}
+
+.app-scrollbar--horizontal:hover .app-scrollbar__thumb,
+.app-scrollbar--horizontal:focus-visible .app-scrollbar__thumb,
+.app-scrollbar--horizontal.app-scrollbar--dragging .app-scrollbar__thumb {
+  width: 100%;
+  height: 8px;
+  margin-top: -1px;
 }
 
 .app-scrollbar--dragging .app-scrollbar__thumb {
@@ -743,4 +782,575 @@ md-dialog {
     transition-duration: 1ms !important;
     transition-delay: 0ms !important;
   }
+}
+
+/* 统一的后台页面视觉层：页面功能各自独立，信息层级和响应式骨架保持一致。 */
+.api-redesign-page {
+  --api-page-gap: 16px;
+  --api-border: var(--md-sys-color-outline-variant);
+  --api-surface: var(--md-sys-color-surface-container);
+  --api-surface-muted: var(--md-sys-color-surface-container-low);
+  --api-surface-raised: var(--md-sys-color-surface-container-high);
+  --api-text: var(--md-sys-color-on-surface);
+  --api-text-muted: var(--md-sys-color-on-surface-variant);
+  width: min(100%, 1320px);
+}
+
+body .api-redesign-page :is(.page-heading, .status-heading, .dashboard-header, .catalog-header, .account-header, .admin-users-header, .permissions-header, .settings-header) {
+  position: relative;
+  min-height: 76px;
+  margin-bottom: var(--api-page-gap);
+  padding: 18px 20px;
+  border: 1px solid var(--api-border);
+  border-radius: 14px;
+  background: var(--api-surface-muted);
+  box-shadow: 0 2px 12px color-mix(in srgb, var(--md-sys-color-shadow) 5%, transparent);
+}
+
+body .api-redesign-page :is(.page-heading, .status-heading, .dashboard-header, .catalog-header, .account-header, .admin-users-header, .permissions-header, .settings-header) .page-title {
+  margin: 5px 0 0;
+  color: var(--api-text);
+  font-size: 26px;
+  font-weight: 650;
+  line-height: 1.25;
+  letter-spacing: 0;
+}
+
+body .api-redesign-page :is(.page-heading, .status-heading, .dashboard-header) .page-title::before {
+  display: block;
+  color: var(--md-sys-color-primary);
+  font-size: 11px;
+  font-weight: 750;
+  line-height: 1.2;
+  letter-spacing: 0;
+}
+
+.dashboard-page .page-title::before { content: '管理中枢'; }
+.status-page .page-title::before { content: '运行监控'; }
+.chat-page .page-title::before { content: '社区内容'; }
+.mail-page .page-title::before { content: '游戏服务'; }
+.domain-mail-page .page-title::before { content: '收件与投递'; }
+.game-accounts-page .page-title::before { content: '账户中心'; }
+.game-cosmetics-page .page-title::before { content: '账户中心'; }
+.game-titles-page .page-title::before { content: '账户中心'; }
+.email-template-page .page-title::before { content: '消息模板'; }
+.server-manage-page .page-title::before { content: '基础设施'; }
+.server-files-page .page-title::before { content: '基础设施'; }
+.server-file-preview-page .page-title::before { content: '文件查看'; }
+
+body .api-redesign-page .card,
+body .api-redesign-page .details-card,
+body .api-redesign-page .history-card,
+body .api-redesign-page .card-head + .table-wrap,
+body .api-redesign-page .dashboard-panel,
+body .api-redesign-page .settings-card,
+body .api-redesign-page .account-card,
+body .api-redesign-page .catalog-card,
+body .api-redesign-page .permission-panel,
+body .api-redesign-page .user-directory {
+  border: 1px solid var(--api-border);
+  border-radius: 8px;
+  background: var(--api-surface);
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--md-sys-color-shadow) 4%, transparent);
+}
+
+body .api-redesign-page .card-title,
+body .api-redesign-page h2 {
+  color: var(--api-text);
+  letter-spacing: 0;
+}
+
+body .api-redesign-page :is(.catalog-eyebrow, .account-eyebrow, .admin-users-eyebrow, .permissions-eyebrow, .settings-eyebrow, .audit-eyebrow, .section-overline) {
+  color: var(--md-sys-color-primary);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0;
+}
+
+body .api-redesign-page :is(.catalog-title-block p, .account-title-block p, .admin-users-title-block p, .permissions-title-block p, .settings-title-block p, .sync-time) {
+  color: var(--api-text-muted);
+}
+
+body .api-redesign-page :is(.catalog-summary .summary-item, .user-overview .overview-item, .permission-stat, .summary-item) {
+  border-color: var(--api-border);
+  background: var(--api-surface-muted);
+}
+
+body .api-redesign-page .card-head,
+body .api-redesign-page .section-heading,
+body .api-redesign-page .panel-heading {
+  min-height: 48px;
+  align-items: center;
+  padding-bottom: 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--api-border) 72%, transparent);
+}
+
+body .api-redesign-page .table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--api-border);
+  border-radius: 8px;
+  background: var(--api-surface);
+}
+
+body .api-redesign-page table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+body .api-redesign-page thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--api-surface-raised);
+  color: var(--api-text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
+body .api-redesign-page tbody tr {
+  transition: background-color 140ms ease;
+}
+
+body .api-redesign-page tbody tr:hover {
+  background: color-mix(in srgb, var(--md-sys-color-primary) 6%, transparent);
+}
+
+body .api-redesign-page tbody td {
+  border-bottom-color: color-mix(in srgb, var(--api-border) 74%, transparent);
+  vertical-align: middle;
+}
+
+body .api-redesign-page .head-actions,
+body .api-redesign-page .heading-actions,
+body .api-redesign-page .dashboard-header-actions,
+body .api-redesign-page .catalog-header-actions,
+body .api-redesign-page .admin-users-header-actions,
+body .api-redesign-page .permissions-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+body .api-redesign-page md-filled-button,
+body .api-redesign-page md-outlined-button,
+body .api-redesign-page md-text-button {
+  --md-filled-button-container-shape: 8px;
+  --md-outlined-button-container-shape: 8px;
+  --md-text-button-container-shape: 8px;
+}
+
+body .api-redesign-page .empty-state {
+  min-height: 260px;
+  padding: 30px 20px;
+}
+
+body .api-redesign-page .empty-state__image {
+  width: min(200px, 56vw);
+  height: 142px;
+}
+
+body .api-redesign-page .status-summary,
+body .api-redesign-page .stat-grid {
+  gap: 12px;
+}
+
+body .api-redesign-page .stat-card,
+body .api-redesign-page .info-tile,
+body .api-redesign-page .metric-block,
+body .api-redesign-page .figure-card,
+body .api-redesign-page .title-card {
+  border: 1px solid var(--api-border);
+  border-radius: 8px;
+  background: var(--api-surface);
+}
+
+body .api-redesign-page .stat-card:hover,
+body .api-redesign-page .figure-card:hover,
+body .api-redesign-page .title-card:hover {
+  border-color: color-mix(in srgb, var(--md-sys-color-primary) 52%, var(--api-border));
+}
+
+body .api-redesign-page .record-controls,
+body .api-redesign-page .toolbar,
+body .api-redesign-page .filter-bar,
+body .api-redesign-page .search-bar {
+  padding: 10px 12px;
+  border: 1px solid var(--api-border);
+  border-radius: 8px;
+  background: var(--md-sys-color-surface-container-low);
+}
+
+body .api-redesign-page .mono,
+body .api-redesign-page code {
+  overflow-wrap: anywhere;
+}
+
+body .api-redesign-page :is(.chat-page .card, .mail-page .card, .domain-mail-page .mail-list-card, .game-accounts-page .card, .game-cosmetics-page .card, .game-titles-page .card, .server-manage-page .card, .server-files-page .card, .email-template-page .editor-card, .email-template-page .preview-card) {
+  border: 1px solid var(--api-border);
+  border-radius: 8px;
+  background: var(--api-surface);
+}
+
+.server-manage-page .instance-grid,
+.server-manage-page .manage-grid,
+.server-files-page .file-layout,
+.game-cosmetics-page .cosmetics-grid,
+.game-titles-page .titles-layout {
+  gap: 14px;
+}
+
+.email-template-page .editor-card,
+.email-template-page .preview-card {
+  overflow: hidden;
+}
+
+.email-template-page textarea,
+.email-template-page .monaco-editor,
+.server-files-page textarea,
+.server-files-page .monaco-editor {
+  border-color: var(--api-border);
+  border-radius: 8px;
+}
+
+.server-file-preview-page .preview-shell,
+.server-file-preview-page pre {
+  border: 1px solid var(--api-border);
+  border-radius: 8px;
+  background: var(--api-surface);
+}
+
+/* 页面级构图 */
+.chat-page > .card {
+  padding: 0;
+  overflow: hidden;
+}
+
+.chat-page > .card .card-head {
+  margin: 0;
+  padding: 16px 20px;
+  background: var(--md-sys-color-surface-container-low);
+}
+
+.chat-page > .card .table-wrap {
+  border: 0;
+  border-radius: 0;
+}
+
+.chat-page .chat-table {
+  min-width: 780px;
+}
+
+.mail-page > .card,
+.game-accounts-page > .card,
+.game-cosmetics-page > .card,
+.game-titles-page > .card,
+.server-manage-page > .card,
+.server-files-page > .card {
+  padding: 20px;
+}
+
+.mail-page .toolbar,
+.game-cosmetics-page .toolbar,
+.server-files-page .toolbar {
+  margin-bottom: 16px;
+  padding: 10px;
+  border: 1px solid var(--api-border);
+  border-radius: 8px;
+  background: var(--md-sys-color-surface-container-low);
+}
+
+.mail-page .data-table,
+.game-accounts-page .data-table,
+.game-titles-page .data-table,
+.server-manage-page .data-table,
+.server-files-page .data-table {
+  min-width: 720px;
+}
+
+.game-accounts-page .settings-grid {
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.game-accounts-page .setting-card,
+.game-accounts-page .table-card {
+  overflow: hidden;
+}
+
+.game-accounts-page .setting-card {
+  padding: 18px;
+}
+
+.game-cosmetics-page .grid {
+  gap: 14px;
+}
+
+.game-cosmetics-page .figure-card {
+  min-height: 132px;
+  align-items: center;
+  padding: 16px;
+  background: var(--api-surface);
+}
+
+.game-titles-page .view-switch {
+  display: inline-flex;
+  padding: 4px;
+  border: 1px solid var(--api-border);
+  border-radius: 8px;
+  background: var(--md-sys-color-surface-container-low);
+}
+
+.game-titles-page .view-panel + .view-panel,
+.game-titles-page .table-card + .table-card {
+  margin-top: 14px;
+}
+
+.domain-mail-page .mail-overview,
+.domain-mail-page .mail-workspace {
+  border-color: var(--api-border);
+}
+
+.domain-mail-page .mail-toolbar {
+  border: 1px solid var(--api-border);
+  border-radius: 8px;
+  background: var(--md-sys-color-surface-container-low);
+}
+
+.server-manage-page .console {
+  border: 1px solid var(--api-border);
+  border-radius: 8px;
+  background: var(--md-sys-color-surface-container-lowest);
+}
+
+.server-manage-page .instance-bar,
+.server-manage-page .card-heading {
+  padding-bottom: 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--api-border) 72%, transparent);
+}
+
+.server-files-page .browser {
+  overflow: hidden;
+}
+
+.server-files-page .browser > .toolbar {
+  border-inline: 0;
+  border-top: 0;
+  border-radius: 0;
+}
+
+.email-template-page .email-template-tabs {
+  padding: 4px;
+  border: 1px solid var(--api-border);
+  border-radius: 8px;
+  background: var(--md-sys-color-surface-container-low);
+}
+
+.email-template-page .email-template-workspace {
+  gap: 14px;
+}
+
+.email-template-page .template-source-panel,
+.email-template-page .template-preview-panel {
+  border: 1px solid var(--api-border);
+  border-radius: 8px;
+  background: var(--api-surface);
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--md-sys-color-shadow) 4%, transparent);
+}
+
+.status-page .details-card,
+.status-page .history-card {
+  padding: 20px;
+}
+
+.status-page .stat-card {
+  min-height: 92px;
+}
+
+@media (max-width: 760px) {
+  .mail-page > .card,
+  .game-accounts-page > .card,
+  .game-cosmetics-page > .card,
+  .game-titles-page > .card,
+  .server-manage-page > .card,
+  .server-files-page > .card,
+  .status-page .details-card,
+  .status-page .history-card {
+    padding: 14px;
+  }
+
+  .chat-page > .card .card-head {
+    padding: 14px;
+  }
+
+  .chat-page .head-actions,
+  .mail-page .heading-actions,
+  .game-accounts-page .heading-actions,
+  .game-cosmetics-page .heading-actions,
+  .game-titles-page .heading-actions,
+  .server-manage-page .heading-actions {
+    justify-content: flex-start;
+  }
+
+  .game-cosmetics-page .figure-card {
+    min-height: 0;
+  }
+
+  .game-cosmetics-page .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .game-titles-page .view-switch {
+    width: 100%;
+  }
+
+  .email-template-page .email-template-workspace {
+    gap: 10px;
+  }
+
+  .server-manage-page .console {
+    height: 300px;
+  }
+}
+
+@media (max-width: 760px) {
+  .api-redesign-page {
+    padding: 12px;
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
+
+  .api-redesign-page .page-heading,
+  .api-redesign-page .status-heading,
+  .api-redesign-page .dashboard-header {
+    min-height: 68px;
+    margin-bottom: 12px;
+    padding: 14px 15px;
+    border-radius: 12px;
+  }
+
+  .api-redesign-page .page-heading .page-title,
+  .api-redesign-page .status-heading .page-title,
+  .api-redesign-page .dashboard-header .page-title {
+    font-size: 22px;
+  }
+
+  .api-redesign-page .page-heading,
+  .api-redesign-page .status-heading,
+  .api-redesign-page .dashboard-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .api-redesign-page .page-heading > :last-child,
+  .api-redesign-page .status-heading > :last-child,
+  .api-redesign-page .dashboard-header > :last-child {
+    align-self: flex-end;
+  }
+
+  .api-redesign-page .card,
+  .api-redesign-page > section.card,
+  .api-redesign-page .dashboard-panel {
+    border-radius: 8px;
+  }
+
+  .api-redesign-page .card-head,
+  .api-redesign-page .section-heading,
+  .api-redesign-page .panel-heading {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .api-redesign-page .head-actions,
+  .api-redesign-page .heading-actions,
+  .api-redesign-page .dashboard-header-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .api-redesign-page .table-wrap {
+    margin-inline: -2px;
+    border-radius: 8px;
+  }
+
+  .api-redesign-page .empty-state {
+    min-height: 220px;
+    padding-inline: 12px;
+  }
+
+  .api-redesign-page .empty-state__image {
+    width: min(176px, 58vw);
+    height: 124px;
+  }
+
+  .api-redesign-page .stat-grid,
+  .api-redesign-page .status-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .api-redesign-page .record-controls,
+  .api-redesign-page .toolbar,
+  .api-redesign-page .filter-bar,
+  .api-redesign-page .search-bar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .api-redesign-page .record-controls > *,
+  .api-redesign-page .toolbar > *,
+  .api-redesign-page .filter-bar > *,
+  .api-redesign-page .search-bar > * {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .game-cosmetics-page .cosmetics-grid,
+  .game-titles-page .titles-layout,
+  .server-manage-page .instance-grid,
+  .server-manage-page .manage-grid,
+  .server-files-page .file-layout {
+    grid-template-columns: 1fr;
+  }
+
+  body .api-redesign-page :is(.catalog-header, .account-header, .admin-users-header, .permissions-header, .settings-header) {
+    min-height: 68px;
+    margin-bottom: 12px;
+    padding: 14px 15px;
+    border-radius: 12px;
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  body .api-redesign-page :is(.catalog-header, .account-header, .admin-users-header, .permissions-header, .settings-header) > :last-child {
+    align-self: flex-end;
+  }
+
+  body .api-redesign-page :is(.catalog-header, .account-header, .admin-users-header, .permissions-header, .settings-header) .page-title {
+    font-size: 22px;
+  }
+
+  body .api-redesign-page :is(.catalog-header-actions, .admin-users-header-actions, .permissions-header-actions) {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  body .api-redesign-page .catalog-summary,
+  body .api-redesign-page .user-overview {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  body .api-redesign-page .settings-sections {
+    column-count: 1;
+  }
+
+  body .api-redesign-page .account-layout,
+  body .api-redesign-page .permission-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* 审计页已有可见的绿色眉题，避免通用页面标题再次生成一行眉题。 */
+body .api-redesign-page.audit-page .page-title::before {
+  content: none;
 }

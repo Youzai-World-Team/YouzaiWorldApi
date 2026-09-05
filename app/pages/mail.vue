@@ -69,6 +69,10 @@ const detailOpen = ref(false)
 const detail = ref<MailDetail | null>(null)
 const detailLoading = ref(false)
 const detailDialog = ref<HTMLElement | null>(null)
+const mailTableWrap = ref<HTMLElement | null>(null)
+const mailAttachmentWrap = ref<HTMLElement | null>(null)
+const mailRecipientWrap = ref<HTMLElement | null>(null)
+const mailPickerList = ref<HTMLElement | null>(null)
 
 // 发布公告 / 通知：后台只开放这两种无附件类型，奖励邮件仍需在游戏内发布。
 const EXPIRE_OPTIONS = [
@@ -320,7 +324,7 @@ function attachmentDetail(attachment: MailAttachment) {
 </script>
 
 <template>
-  <div class="page page--wide">
+  <div class="page page--wide api-redesign-page mail-page">
     <div class="page-heading">
       <h1 class="page-title">服内邮件</h1>
       <div class="heading-actions">
@@ -347,7 +351,7 @@ function attachmentDetail(attachment: MailAttachment) {
         <span class="count">共 {{ filtered.length }} 封</span>
       </div>
 
-      <div class="table-wrap">
+      <div ref="mailTableWrap" class="table-wrap">
         <table class="data-table">
           <thead>
             <tr>
@@ -389,8 +393,12 @@ function attachmentDetail(attachment: MailAttachment) {
         </table>
         <EmptyState v-if="loading" :illustrated="false">加载中…</EmptyState>
         <EmptyState v-else-if="mails.length === 0" image="/images/empty-personal-notes.svg">暂无邮件</EmptyState>
-        <p v-else-if="filtered.length === 0" class="empty">没有匹配的邮件</p>
+        <EmptyState v-else-if="filtered.length === 0" image="/images/empty-looking-for-answers.svg">
+          <template #title>没有匹配的邮件</template>
+          尝试调整搜索条件。
+        </EmptyState>
       </div>
+      <AppScrollbar :target="mailTableWrap" axis="horizontal" label="服内邮件表格横向滚动条" />
     </section>
 
     <md-dialog ref="detailDialog" class="mail-detail-dialog" :open="detailOpen" @closed="onDetailClosed">
@@ -420,22 +428,27 @@ function attachmentDetail(attachment: MailAttachment) {
           </ul>
 
           <h3 class="section-title">附件（{{ detail.attachments.length }}）</h3>
-          <div v-if="detail.attachments.length" class="inner-table-wrap">
-            <table class="data-table inner-table">
-              <thead><tr><th>类型</th><th>数量</th><th>内容</th></tr></thead>
-              <tbody>
-                <tr v-for="(attachment, index) in detail.attachments" :key="index">
-                  <td>{{ attachmentLabel(attachment.type) }}</td>
-                  <td>{{ attachment.amount }}</td>
-                  <td class="mono nbt-cell" :title="attachmentDetail(attachment)">{{ attachmentDetail(attachment) }}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <p v-else class="empty inner-empty">无附件</p>
+          <template v-if="detail.attachments.length">
+            <div ref="mailAttachmentWrap" class="inner-table-wrap">
+              <table class="data-table inner-table">
+                <thead><tr><th>类型</th><th>数量</th><th>内容</th></tr></thead>
+                <tbody>
+                  <tr v-for="(attachment, index) in detail.attachments" :key="index">
+                    <td>{{ attachmentLabel(attachment.type) }}</td>
+                    <td>{{ attachment.amount }}</td>
+                    <td class="mono nbt-cell" :title="attachmentDetail(attachment)">{{ attachmentDetail(attachment) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <AppScrollbar :target="mailAttachmentWrap" axis="horizontal" label="邮件附件表格横向滚动条" />
+          </template>
+          <EmptyState v-else class="inner-empty-state" compact image="/images/empty-personal-notes.svg">
+            无附件
+          </EmptyState>
 
           <h3 class="section-title">收件人（{{ detail.recipients.length }}）</h3>
-          <div class="recipient-wrap">
+          <div ref="mailRecipientWrap" class="recipient-wrap">
             <table class="data-table inner-table">
               <thead><tr><th>玩家</th><th>已读</th><th>收藏</th><th>已领取</th></tr></thead>
               <tbody>
@@ -450,8 +463,12 @@ function attachmentDetail(attachment: MailAttachment) {
                 </tr>
               </tbody>
             </table>
-            <p v-if="detail.recipients.length === 0" class="empty inner-empty">没有收件人</p>
+            <EmptyState v-if="detail.recipients.length === 0" class="inner-empty-state" compact image="/images/empty-team.svg">
+              没有收件人
+            </EmptyState>
           </div>
+          <AppScrollbar :target="mailRecipientWrap" label="邮件收件人列表滚动条" />
+          <AppScrollbar :target="mailRecipientWrap" axis="horizontal" label="邮件收件人列表横向滚动条" />
         </div>
       </div>
       <div slot="actions">
@@ -488,7 +505,9 @@ function attachmentDetail(attachment: MailAttachment) {
               </div>
             </md-select-option>
           </md-outlined-select>
-          <p v-else class="instance-state error-text">当前 ApiKey 名下没有可用实例。</p>
+          <EmptyState v-else class="instance-empty-state" compact image="/images/empty-monitoring-data.svg">
+            当前 ApiKey 名下没有可用实例。
+          </EmptyState>
 
           <md-outlined-select label="类型" @change="onComposeTypeChange">
             <md-select-option value="ANNOUNCEMENT" :selected="composeType === 'ANNOUNCEMENT'">
@@ -546,14 +565,17 @@ function attachmentDetail(attachment: MailAttachment) {
               <md-icon slot="leading-icon">search</md-icon>
             </md-outlined-text-field>
             <p class="picker-count">已选 {{ composePlayers.length }} 人</p>
-            <div class="picker-list">
+            <div ref="mailPickerList" class="picker-list">
               <p v-if="accountsLoading" class="empty inner-empty">加载中…</p>
-              <p v-else-if="filteredAccounts.length === 0" class="empty inner-empty">没有匹配的玩家</p>
+              <EmptyState v-else-if="filteredAccounts.length === 0" class="inner-empty-state" compact image="/images/empty-looking-for-answers.svg">
+                没有匹配的玩家
+              </EmptyState>
               <label v-for="name in filteredAccounts" :key="name" class="picker-row">
                 <md-checkbox :checked="composePlayers.includes(name)" @change="togglePlayer(name)"></md-checkbox>
                 <span>{{ name }}</span>
               </label>
             </div>
+            <AppScrollbar :target="mailPickerList" label="邮件玩家选择列表滚动条" />
           </div>
         </div>
       </div>

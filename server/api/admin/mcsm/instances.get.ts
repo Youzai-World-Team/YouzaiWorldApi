@@ -14,13 +14,12 @@ export default defineEventHandler(async (event) => {
   requireAnyPagePermission(event, ['server-manage', 'server-files'], 'view')
   const config = getAdminMcsmConfig()
   if (!config.configured) {
-    return { configured: false, backupDir: config.backupDir, user: null, instances: [] }
+    return { configured: false, user: null, instances: [] }
   }
 
   const snapshot = await getPanelSnapshot()
   return {
     configured: true,
-    backupDir: config.backupDir,
     baseUrl: config.baseUrl,
     user: snapshot.user,
     instances: snapshot.instances,

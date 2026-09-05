@@ -83,9 +83,37 @@ export interface FileEntry {
   previewable: boolean
 }
 
+export interface FileTaskStatus {
+  instanceFileTask: number
+  globalFileTask: number
+  downloadFileFromURLTask: number
+  downloadTasks: Array<{ path: string; total: number; current: number; status: number; error?: string }>
+  platform: string
+  isGlobalInstance: boolean
+  disks: string[]
+}
+
+export interface ArchiveEntry {
+  name: string
+  size: number
+  compressedSize: number
+  time: string
+  type: number
+}
+
 export function fileExtension(name: string): string {
   const index = name.lastIndexOf('.')
   return index > 0 ? name.slice(index + 1).toLowerCase() : ''
+}
+
+const ARCHIVE_FILE_SUFFIXES = [
+  '.tar.bz2', '.tar.xz', '.tar.gz', '.7z', '.zip', '.rar', '.iso', '.cab',
+  '.tar', '.gz', '.bz2',
+]
+
+function isArchiveFileName(name: string): boolean {
+  const lower = name.toLowerCase()
+  return ARCHIVE_FILE_SUFFIXES.some((suffix) => lower.endsWith(suffix))
 }
 
 export function classifyFile(name: string, directory: boolean): FileKind {
@@ -201,6 +229,117 @@ export async function listFiles(
         }
       }),
   }
+}
+
+export async function getFileStatus(uuid: string, daemonId: string): Promise<FileTaskStatus> {
+  const data = await callPanel<any>('/api/files/status', { query: { uuid, daemonId } })
+  return {
+    instanceFileTask: Math.max(0, Number(data?.instanceFileTask) || 0),
+    globalFileTask: Math.max(0, Number(data?.globalFileTask) || 0),
+    downloadFileFromURLTask: Math.max(0, Number(data?.downloadFileFromURLTask) || 0),
+    downloadTasks: Array.isArray(data?.downloadTasks) ? data.downloadTasks.map((item: any) => ({
+      path: String(item?.path || ''),
+      total: Math.max(0, Number(item?.total) || 0),
+      current: Math.max(0, Number(item?.current) || 0),
+      status: Number(item?.status) || 0,
+      error: item?.error ? String(item.error) : undefined,
+    })) : [],
+    platform: String(data?.platform || ''),
+    isGlobalInstance: Boolean(data?.isGlobalInstance),
+    disks: Array.isArray(data?.disks) ? data.disks.map((item: unknown) => String(item)) : [],
+  }
+}
+
+export async function previewArchive(
+  uuid: string,
+  daemonId: string,
+  pathValue: unknown,
+  codeValue: unknown,
+): Promise<{ items: ArchiveEntry[]; total: number }> {
+  const target = requireInstancePath(pathValue, { allowRoot: false })
+  const code = String(codeValue ?? 'utf-8').trim().slice(0, 40) || 'utf-8'
+  const data = await callPanel<any>('/api/files/preview', {
+    query: { uuid, daemonId, target, code },
+  })
+  const items = Array.isArray(data?.items) ? data.items.map((item: any) => ({
+    name: String(item?.name || ''),
+    size: Math.max(0, Number(item?.size) || 0),
+    compressedSize: Math.max(0, Number(item?.compressedSize) || 0),
+    time: String(item?.time || ''),
+    type: Number(item?.type) || 0,
+  })) : []
+  return { items, total: Number(data?.total) || items.length }
+}
+
+function requireChmod(value: unknown): number {
+  const mode = Math.trunc(Number(value))
+  if (!Number.isInteger(mode) || mode < 0 || mode > 0o7777) {
+    throw createError({ statusCode: 400, statusMessage: '权限模式需要是 0 至 7777 的数字' })
+  }
+  return mode
+}
+
+export async function chmodEntries(
+  uuid: string,
+  daemonId: string,
+  pathsValue: unknown,
+  modeValue: unknown,
+  deepValue: unknown,
+): Promise<unknown> {
+  const paths = requirePathList(pathsValue)
+  const chmod = requireChmod(modeValue)
+  const deep = Boolean(deepValue)
+  if (paths.length === 1) {
+    return callPanel('/api/files/chmod', {
+      method: 'PUT',
+      query: { uuid, daemonId },
+      body: { target: paths[0], chmod, deep },
+    })
+  }
+  return callPanel('/api/files/chmod_batch', {
+    method: 'PUT',
+    query: { uuid, daemonId },
+    body: { targets: paths, chmod, deep },
+  })
+}
+
+function requireRemoteDownloadUrl(value: unknown): string {
+  const raw = String(value ?? '').trim()
+  let url: URL
+  try {
+    url = new URL(raw)
+  } catch {
+    throw createError({ statusCode: 400, statusMessage: '下载地址格式不正确' })
+  }
+  if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.username || url.password
+    || ['localhost', '127.0.0.1', '::1'].includes(url.hostname)) {
+    throw createError({ statusCode: 400, statusMessage: '下载地址不允许包含账号密码或本机地址' })
+  }
+  return url.toString()
+}
+
+export async function downloadFromUrl(
+  uuid: string,
+  daemonId: string,
+  urlValue: unknown,
+  fileNameValue: unknown,
+): Promise<unknown> {
+  await assertInstanceAllowed(uuid, daemonId)
+  const fileName = requireInstancePath(fileNameValue, { allowRoot: false })
+  return callPanel('/api/files/download_from_url', {
+    method: 'POST',
+    query: { uuid, daemonId },
+    body: { uuid, daemonId, url: requireRemoteDownloadUrl(urlValue), file_name: fileName },
+  })
+}
+
+export async function stopDownload(uuid: string, daemonId: string, fileNameValue: unknown): Promise<unknown> {
+  await assertInstanceAllowed(uuid, daemonId)
+  const fileName = requireInstancePath(fileNameValue, { allowRoot: false })
+  return callPanel('/api/mod/stop_transfer', {
+    method: 'POST',
+    body: { uuid, daemonId, fileName, type: 'download' },
+  })
 }
 
 function requireTextFilePath(value: unknown): string {
@@ -430,15 +569,16 @@ export async function extractArchive(
   folderName?: string,
 ): Promise<void> {
   const path = requireInstancePath(pathValue, { allowRoot: false })
-  if (fileExtension(nameOf(path)) !== 'zip') {
-    throw createError({ statusCode: 400, statusMessage: '只支持解压 zip 压缩包' })
+  if (!isArchiveFileName(nameOf(path))) {
+    throw createError({ statusCode: 400, statusMessage: '不支持此压缩包格式' })
   }
   let toDir = requireInstancePath(toDirValue)
 
   // 如果需要创建文件夹，先拼接目标路径
   if (createFolder && folderName?.trim()) {
-    const cleanFolderName = folderName.trim().replace(/[\/\\]/g, '_') // 替换路径分隔符
-    toDir = toDir === '/' ? `/${cleanFolderName}` : `${toDir}/${cleanFolderName}`
+    // 目录名只能是单个实例内名称，拒绝 `.`、`..`、分隔符和控制字符，
+    // 避免把「创建文件夹后解压」变成可构造的路径穿越。
+    toDir = joinPath(toDir, requireFileName(folderName))
   }
 
   const result = await callPanel<any>('/api/files/compress', {
@@ -460,15 +600,32 @@ export async function extractArchive(
 
 // ===== 下载与上传：两步式票据 =====
 
-const ADDR_RE = /^[A-Za-z0-9._-]+(?::\d{1,5})?$/
-
 function daemonBase(addr: string, prefix: string): string {
-  if (!ADDR_RE.test(addr)) {
+  const scheme = new URL(getAdminMcsmConfig().baseUrl).protocol
+  const raw = addr.trim()
+  // filemananger_router 返回的是 fullAddr（host:port 可能已经带 prefix），
+  // 但旧版本或自定义面板也可能返回一个完整 URL。统一交给 URL 解析，
+  // 兼容路径前缀和 IPv6，同时拒绝把查询串/认证信息带进票据地址。
+  const candidate = /^[a-z][a-z\d+.-]*:\/\//i.test(raw) ? raw : `http://${raw}`
+  let parsed: URL
+  try {
+    parsed = new URL(candidate)
+  } catch {
     throw createError({ statusCode: 502, statusMessage: 'MCSM 面板返回的节点地址格式无法识别' })
   }
+  if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:')
+    || !parsed.hostname || parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw createError({ statusCode: 502, statusMessage: 'MCSM 面板返回的节点地址格式无法识别' })
+  }
+
+  const currentPath = parsed.pathname.replace(/\/+$/, '')
+  const returnedPrefix = String(prefix || '').trim().replace(/^\/*/, '').replace(/\/*$/, '')
+  const extraPath = returnedPrefix ? `/${returnedPrefix}` : ''
+  const pathname = currentPath && (currentPath === extraPath || currentPath.startsWith(`${extraPath}/`))
+    ? currentPath
+    : `${currentPath}${extraPath}`
   // 节点用面板同一个协议：面板是 https 时节点也按 https 走。
-  const scheme = new URL(getAdminMcsmConfig().baseUrl).protocol
-  return `${scheme}//${addr}${prefix || ''}`
+  return `${scheme}//${parsed.host}${pathname}`
 }
 
 /** 换取某个文件的一次性下载地址（直连守护进程）。 */

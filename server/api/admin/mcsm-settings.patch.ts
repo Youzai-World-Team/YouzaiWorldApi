@@ -11,12 +11,11 @@ import { getPanelSnapshot } from '../../utils/mcsm'
 export default defineEventHandler(async (event) => {
   setResponseHeader(event, 'Cache-Control', 'no-store')
   const user = requireFeaturePermission(event, 'settings-mcsm', 'edit')
-  const body = await readBody<{ baseUrl?: string; apiKey?: string; backupDir?: string }>(event)
+  const body = await readBody<{ baseUrl?: string; apiKey?: string }>(event)
 
   const config = setMcsmConfig({
     baseUrl: body?.baseUrl,
     apiKey: body?.apiKey,
-    backupDir: body?.backupDir,
   })
   recordAudit(event, user, `更新 MCSM 面板配置（${config.baseUrl}）`)
 

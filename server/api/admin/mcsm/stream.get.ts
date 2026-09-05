@@ -1,5 +1,5 @@
 import { createEventStream } from 'h3'
-import { requireAuth } from '../../../utils/db'
+import { requirePagePermission } from '../../../utils/db'
 import { assertInstanceAllowed, fetchOutputLog, stripAnsi } from '../../../utils/mcsm'
 import { openConsoleStream, requireConsoleStreamSupport } from '../../../utils/mcsm-console-stream'
 
@@ -27,7 +27,7 @@ const BUDGET_MAX_CHARS = 256 * 1024
 const HEARTBEAT_MS = 25_000
 
 export default defineEventHandler(async (event) => {
-  requireAuth(event)
+  requirePagePermission(event, 'server-manage', 'view')
   requireConsoleStreamSupport()
 
   const query = getQuery(event)

@@ -33,6 +33,7 @@ const formDescription = ref('')
 const { showToast } = useToast()
 const formDialog = ref<HTMLElement | null>(null)
 const deleteDialog = ref<HTMLElement | null>(null)
+const downloadsTableWrap = ref<HTMLElement | null>(null)
 const { apply: applyDialogAnimation } = useDialogAnimation()
 
 const packageCount = computed(() => list.value.filter((item) => item.type === '整合包').length)
@@ -117,12 +118,10 @@ async function confirmDelete() {
 </script>
 
 <template>
-  <div class="page page--wide catalog-page downloads-page">
+<div class="page page--wide catalog-page downloads-page api-redesign-page">
     <header class="catalog-header">
       <div class="catalog-title-block">
-        <span class="catalog-eyebrow"><md-icon>download</md-icon>资源分发</span>
         <h1 class="page-title">下载项目</h1>
-        <p>维护官网展示的整合包、模组和对应下载地址。</p>
       </div>
       <div class="catalog-header-actions">
         <md-icon-button :href="endpoint" target="_blank" rel="noopener" aria-label="打开数据 API" title="打开数据 API"><md-icon>link</md-icon></md-icon-button>
@@ -140,9 +139,10 @@ async function confirmDelete() {
         <div><span class="section-overline">公开下载目录</span><h2 class="card-title">下载项目</h2></div>
         <span class="card-caption">{{ list.length }} 个项目</span>
       </div>
-      <div class="table-wrap"><table class="download-table"><thead><tr><th>类型</th><th>名称</th><th>当前版本</th><th>下载地址</th><th>描述</th><th class="actions">操作</th></tr></thead>
+      <div ref="downloadsTableWrap" class="table-wrap"><table class="download-table"><thead><tr><th>类型</th><th>名称</th><th>当前版本</th><th>下载地址</th><th>描述</th><th class="actions">操作</th></tr></thead>
         <tbody><tr v-for="item in list" :key="item.id"><td data-label="类型"><span class="type-badge">{{ item.type }}</span></td><td class="name-cell" data-label="名称">{{ item.name }}</td><td data-label="当前版本">{{ item.version }}</td><td class="url-cell" data-label="下载地址"><a :href="item.url" target="_blank" rel="noopener">{{ item.url }}</a></td><td class="description-cell" data-label="描述">{{ item.description }}</td><td class="actions" data-label="操作"><md-text-button v-if="canEdit" @click="openEdit(item)"><md-icon slot="icon">edit</md-icon>编辑</md-text-button><md-text-button v-if="canEdit" class="delete-btn" @click="openDelete(item)"><md-icon slot="icon">delete</md-icon>删除</md-text-button></td></tr></tbody>
       </table></div>
+      <AppScrollbar :target="downloadsTableWrap" axis="horizontal" label="下载项目表格横向滚动条" />
       <EmptyState v-if="loading" :illustrated="false">加载中…</EmptyState>
       <EmptyState v-else-if="list.length === 0" image="/images/empty-order-delivered.svg">暂无下载项目</EmptyState>
     </section>
@@ -157,7 +157,7 @@ async function confirmDelete() {
 .catalog-title-block { min-width: 0; }
 .catalog-eyebrow, .section-overline { display: inline-flex; align-items: center; gap: 6px; color: var(--md-sys-color-primary); font-size: 11px; font-weight: 700; }
 .catalog-eyebrow md-icon { --md-icon-size: 16px; }
-.catalog-title-block .page-title { margin: 6px 0 5px; }
+.catalog-title-block .page-title { margin: 0 0 5px; }
 .catalog-title-block p { max-width: 620px; margin: 0; color: var(--md-sys-color-on-surface-variant); font-size: 13px; }
 .catalog-header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex: 0 0 auto; }
 .catalog-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }

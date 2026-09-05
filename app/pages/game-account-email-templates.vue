@@ -35,6 +35,7 @@ const isDesktop = ref(false)
 const wordWrapEnabled = ref(true)
 const editorFullscreen = ref(false)
 const editorHost = ref<HTMLElement | null>(null)
+const emailTemplateTabs = ref<HTMLElement | null>(null)
 let editorInstance: any = null
 let monacoLoadPromise: Promise<any> | null = null
 let editorMediaQuery: MediaQueryList | null = null
@@ -313,7 +314,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="page email-template-page">
+  <div class="page email-template-page api-redesign-page">
     <div class="page-heading">
       <div class="title-row">
         <md-icon-button aria-label="返回游戏账户" title="返回游戏账户" @click="navigateTo('/game-accounts')"><md-icon>arrow_back</md-icon></md-icon-button>
@@ -330,7 +331,7 @@ onBeforeUnmount(() => {
 
     <div v-if="loading" class="template-loading">加载邮件模板中…</div>
     <template v-else>
-      <div class="email-template-tabs" role="tablist" aria-label="验证码邮件类型">
+      <div ref="emailTemplateTabs" class="email-template-tabs" role="tablist" aria-label="验证码邮件类型">
         <md-text-button
           v-for="item in EMAIL_TEMPLATE_KINDS"
           :key="item.key"
@@ -338,6 +339,7 @@ onBeforeUnmount(() => {
           @click="selectTemplate(item.key)"
         >{{ item.label }}</md-text-button>
       </div>
+      <AppScrollbar :target="emailTemplateTabs" axis="horizontal" label="邮件模板类型横向滚动条" />
 
       <div class="template-meta">
         <label>

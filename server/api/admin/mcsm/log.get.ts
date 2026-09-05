@@ -1,4 +1,4 @@
-import { requireAuth } from '../../../utils/db'
+import { requirePagePermission } from '../../../utils/db'
 import { assertInstanceAllowed, fetchOutputLog, stripAnsi } from '../../../utils/mcsm'
 
 /**
@@ -10,7 +10,7 @@ import { assertInstanceAllowed, fetchOutputLog, stripAnsi } from '../../../utils
  * </p>
  */
 export default defineEventHandler(async (event) => {
-  requireAuth(event)
+  requirePagePermission(event, 'server-manage', 'view')
   const query = getQuery(event)
   const uuid = String(query.uuid || '')
   const daemonId = String(query.daemonId || '')

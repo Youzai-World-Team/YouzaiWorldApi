@@ -72,6 +72,7 @@ const deletingAccount = ref(false)
 const createDialog = ref<HTMLElement | null>(null)
 const resetDialog = ref<HTMLElement | null>(null)
 const smtpDialog = ref<HTMLElement | null>(null)
+const accountsTableWrap = ref<HTMLElement | null>(null)
 const { showToast } = useToast()
 const { apply: applyDialogAnimation } = useDialogAnimation()
 let uuidRequestId = 0
@@ -184,6 +185,10 @@ function deleteAccount(account: GameAccount) {
 /** 跳到「账户装扮」页并直接打开该账户的皮肤 / 披风详情。 */
 function openCosmetics(account: GameAccount) {
   navigateTo({ path: '/game-cosmetics', query: { username: account.username } })
+}
+
+function openStats(account: GameAccount) {
+  navigateTo({ path: '/game-stats', query: { username: account.username } })
 }
 
 async function confirmDeleteAccount() {
@@ -370,7 +375,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="page page--wide">
+  <div class="page page--wide api-redesign-page game-accounts-page">
     <div class="page-heading">
       <div>
         <h1 class="page-title">游戏账户</h1>
@@ -423,7 +428,7 @@ onUnmounted(() => {
     <div class="card table-card">
       <EmptyState v-if="loading" :illustrated="false">加载中…</EmptyState>
       <EmptyState v-else-if="!accounts.length" image="/images/empty-profile.svg">暂无游戏账户</EmptyState>
-      <div v-else class="table-wrap">
+      <div v-else ref="accountsTableWrap" class="table-wrap">
         <table>
           <thead>
             <tr><th>玩家代号</th><th class="uuid-column">UUID</th><th class="email-column">绑定邮箱</th><th>最后登录 IP</th><th>最后认证</th><th class="actions-column">操作</th></tr>
@@ -445,11 +450,12 @@ onUnmounted(() => {
               <td class="mono email-cell" :title="account.email || undefined">{{ account.email || '未绑定' }}</td>
               <td class="mono">{{ account.last_login_ip || '暂无记录' }}</td>
               <td>{{ formatAuthenticationDate(account.last_authenticated_date) }}</td>
-              <td class="actions"><md-icon-button v-if="canManageAccounts && isAccountLocked(account)" aria-label="解除登录锁定" title="解除登录锁定" @click="unlockAccount(account)"><md-icon>lock_open</md-icon></md-icon-button><md-icon-button aria-label="查看皮肤与披风" title="查看皮肤与披风" @click="openCosmetics(account)"><md-icon>checkroom</md-icon></md-icon-button><md-icon-button v-if="canManageAccounts" aria-label="重置密码" @click="openResetAccountDialog(account)"><md-icon>key</md-icon></md-icon-button><md-icon-button v-if="canManageAccounts" aria-label="注销账户" @click="deleteAccount(account)"><md-icon>delete</md-icon></md-icon-button></td>
+              <td class="actions"><md-icon-button v-if="canManageAccounts && isAccountLocked(account)" aria-label="解除登录锁定" title="解除登录锁定" @click="unlockAccount(account)"><md-icon>lock_open</md-icon></md-icon-button><md-icon-button aria-label="查看游戏统计" title="查看游戏统计" @click="openStats(account)"><md-icon>analytics</md-icon></md-icon-button><md-icon-button aria-label="查看皮肤与披风" title="查看皮肤与披风" @click="openCosmetics(account)"><md-icon>checkroom</md-icon></md-icon-button><md-icon-button v-if="canManageAccounts" aria-label="重置密码" @click="openResetAccountDialog(account)"><md-icon>key</md-icon></md-icon-button><md-icon-button v-if="canManageAccounts" aria-label="注销账户" title="注销账户" @click="deleteAccount(account)"><md-icon>delete</md-icon></md-icon-button></td>
             </tr>
           </tbody>
         </table>
       </div>
+      <AppScrollbar :target="accountsTableWrap" axis="horizontal" label="游戏账户表格横向滚动条" />
     </div>
 
     <md-dialog ref="createDialog" :open="showCreate" @closed="closeCreateAccountDialog">

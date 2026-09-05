@@ -1,9 +1,9 @@
-import { requireAuth } from '../../../utils/db'
+import { requireFeaturePermission } from '../../../utils/db'
 import { getConfigFile, listConfigFiles, requireInstance } from '../../../utils/mcsm-server-config'
 
 /** 读取实例的配置文件（目前只放行 server.properties），面板已解析成带类型的键值对。 */
 export default defineEventHandler(async (event) => {
-  requireAuth(event)
+  requireFeaturePermission(event, 'server-manage-properties', 'view')
   const query = getQuery(event)
   const uuid = String(query.uuid || '')
   const daemonId = String(query.daemonId || '')

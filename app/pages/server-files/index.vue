@@ -23,6 +23,12 @@ interface FileEntry {
   previewable: boolean
 }
 
+interface FileListResult {
+  path: string
+  items: FileEntry[]
+  total: number
+}
+
 const KIND_ICONS: Record<string, string> = {
   directory: 'folder',
   image: 'image',
@@ -34,11 +40,13 @@ const KIND_ICONS: Record<string, string> = {
   text: 'description',
   binary: 'draft',
 }
+const ARCHIVE_SUFFIXES = ['.tar.bz2', '.tar.xz', '.tar.gz', '.7z', '.zip', '.rar', '.iso', '.cab', '.tar', '.gz', '.bz2']
 
 type SortField = 'name' | 'size' | 'time'
 
 const { showToast } = useToast()
 const access = useAdminAccess()
+const route = useRoute()
 const canEditPage = computed(() => access.levelForKey('server-files') === 'edit')
 const canModifyFiles = computed(() => canEditPage.value && access.featureLevelForKey('server-files-edit') === 'edit')
 const canUploadFiles = computed(() => canEditPage.value && access.featureLevelForKey('server-files-upload') === 'edit')
@@ -105,6 +113,9 @@ const uploadPercent = ref(0)
 const dragOver = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 const mobileMenuEntry = ref<string | null>(null)
+const filesTableWrap = ref<HTMLElement | null>(null)
+const fullscreenBody = ref<HTMLElement | null>(null)
+const transferBrowserList = ref<HTMLElement | null>(null)
 let uploadRequest: XMLHttpRequest | null = null
 const UPLOAD_MAX_BYTES = 256 * 1024 * 1024
 
@@ -145,6 +156,11 @@ function fullPath(name: string) {
   return path.value === '/' ? `/${name}` : `${path.value}/${name}`
 }
 
+function isExtractable(entry: FileEntry) {
+  const lower = entry.name.toLowerCase()
+  return entry.kind === 'archive' && ARCHIVE_SUFFIXES.some((suffix) => lower.endsWith(suffix))
+}
+
 function formatBytes(value: number) {
   if (!value) return '—'
   if (value < 1024) return `${value} B`
@@ -178,7 +194,10 @@ async function loadInstances() {
     configured.value = result.configured
     instances.value = result.instances
     if (!result.instances.some((item) => instanceKey(item) === selectedKey.value)) {
-      selectedKey.value = result.instances.length ? instanceKey(result.instances[0]!) : ''
+      const requested = `${String(route.query.daemonId || '')}:${String(route.query.uuid || '')}`
+      selectedKey.value = result.instances.some((item) => instanceKey(item) === requested)
+        ? requested
+        : result.instances.length ? instanceKey(result.instances[0]!) : ''
     }
   } catch (error: any) {
     showToast(errorMessage(error, '实例列表加载失败'), 'error')
@@ -441,7 +460,7 @@ function downloadSelected() {
   // 单文件直接下载
   if (selectedEntries.value.length === 1) {
     const entry = selectedEntries.value[0]!
-    const downloadUrl = `/api/admin/mcsm/files/raw?uuid=${route.query.uuid}&daemonId=${route.query.daemonId}&path=${encodeURIComponent(fullPath(entry.name))}`
+    const downloadUrl = `/api/admin/mcsm/files/raw?uuid=${encodeURIComponent(requestBase().uuid)}&daemonId=${encodeURIComponent(requestBase().daemonId)}&path=${encodeURIComponent(fullPath(entry.name))}`
     const a = document.createElement('a')
     a.href = downloadUrl
     a.download = entry.name
@@ -534,7 +553,7 @@ function openExtract(entry: FileEntry) {
   extractTarget.value = entry
   extractMode.value = 'folder'
   // 默认文件夹名为去掉 .zip 扩展名
-  const baseName = entry.name.replace(/\.zip$/i, '')
+  const baseName = entry.name.replace(/\.(?:tar\.bz2|tar\.xz|tar\.gz|7z|zip|rar|iso|cab|tar|gz|bz2)$/i, '')
   extractFolderName.value = baseName
   applyDialogAnimation(extractDialog.value)
 }
@@ -703,7 +722,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="page page--wide">
+  <div class="page page--wide api-redesign-page server-files-page">
     <div class="page-heading">
       <h1 class="page-title">服务器文件</h1>
       <md-icon-button aria-label="刷新" title="刷新" :disabled="listLoading" @click="loadList()">
@@ -851,7 +870,7 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <div class="table-wrap">
+        <div ref="filesTableWrap" class="table-wrap">
           <table class="data-table">
             <thead>
               <tr>
@@ -909,7 +928,7 @@ onBeforeUnmount(() => {
                   <div class="cell-actions-content desktop-actions">
                     <div class="actions-left">
                       <md-icon-button
-                        v-if="canModifyFiles && entry.kind === 'archive' && entry.name.toLowerCase().endsWith('.zip')"
+                        v-if="canModifyFiles && isExtractable(entry)"
                         aria-label="解压"
                         title="解压"
                         @click="openExtract(entry)"
@@ -1013,11 +1032,23 @@ onBeforeUnmount(() => {
             </tbody>
           </table>
           <p v-if="listLoading" class="empty">加载中…</p>
-          <p v-else-if="!items.length" class="empty">这个目录是空的</p>
-          <p v-else-if="!visibleItems.length" class="empty">没有匹配「{{ keyword }}」的条目</p>
+          <EmptyState v-else-if="!items.length" compact image="/images/empty-monitoring-data.svg">
+            这个目录是空的
+          </EmptyState>
+          <EmptyState v-else-if="!visibleItems.length" compact image="/images/empty-looking-for-answers.svg">
+            没有匹配「{{ keyword }}」的条目
+          </EmptyState>
           <p v-else class="count-note">共 {{ total }} 项，显示 {{ visibleItems.length }} 项</p>
         </div>
+        <AppScrollbar :target="filesTableWrap" axis="horizontal" label="服务器文件表格横向滚动条" />
       </section>
+      <ServerFileAdvanced
+        v-if="instance"
+        :uuid="instance.instanceUuid"
+        :daemon-id="instance.daemonId"
+        :can-view="access.levelForKey('server-files') !== 'hidden'"
+        :can-edit="canModifyFiles"
+      />
     </template>
 
     <md-dialog ref="previewDialog" class="file-preview-dialog" :open="previewOpen" @closed="previewOpen = false">
@@ -1095,7 +1126,7 @@ onBeforeUnmount(() => {
           <md-icon>fullscreen_exit</md-icon>
         </md-icon-button>
       </header>
-      <div class="fullscreen-body">
+      <div ref="fullscreenBody" class="fullscreen-body">
         <FilePreview
           ref="previewRef"
           :uuid="requestBase().uuid"
@@ -1108,6 +1139,8 @@ onBeforeUnmount(() => {
           @saved="loadList()"
         />
       </div>
+      <AppScrollbar :target="fullscreenBody" label="全屏文件区域滚动条" />
+      <AppScrollbar :target="fullscreenBody" axis="horizontal" label="全屏文件区域横向滚动条" />
     </div>
 
     <md-dialog ref="createDialog" :open="createOpen" @closed="createOpen = false">
@@ -1183,7 +1216,7 @@ onBeforeUnmount(() => {
             <span>加载中…</span>
           </div>
 
-          <div v-else class="transfer-browser-list">
+          <div v-else ref="transferBrowserList" class="transfer-browser-list">
             <div
               v-if="transferBrowsePath !== '/'"
               class="transfer-item transfer-item--up"
@@ -1193,12 +1226,9 @@ onBeforeUnmount(() => {
               <span>返回上一级</span>
             </div>
 
-            <div
-              v-if="!transferBrowseList.length"
-              class="transfer-browser-empty"
-            >
+            <EmptyState v-if="!transferBrowseList.length" class="transfer-browser-empty" compact image="/images/empty-monitoring-data.svg">
               此目录下没有子目录
-            </div>
+            </EmptyState>
 
             <div
               v-for="dir in transferBrowseList"
@@ -1219,6 +1249,7 @@ onBeforeUnmount(() => {
               </md-icon-button>
             </div>
           </div>
+          <AppScrollbar :target="transferBrowserList" label="目标目录列表滚动条" />
         </div>
 
         <div class="quick-dirs">

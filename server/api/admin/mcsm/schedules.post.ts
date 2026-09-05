@@ -1,5 +1,5 @@
 import { recordAudit, requireFeaturePermission } from '../../../utils/db'
-import { createSchedule, requireInstance, SCHEDULE_ACTION_LABELS } from '../../../utils/mcsm-server-config'
+import { createSchedule, requireInstance } from '../../../utils/mcsm-server-config'
 
 /**
  * 创建计划任务。
@@ -17,23 +17,19 @@ export default defineEventHandler(async (event) => {
   const daemonId = String(body?.daemonId || '')
   const instance = await requireInstance(uuid, daemonId)
 
-  await createSchedule(uuid, daemonId, {
+  const schedule = await createSchedule(uuid, daemonId, {
     name: body?.name,
     type: body?.type,
     time: body?.time,
     count: body?.count,
-    actionType: body?.actionType,
-    command: body?.command,
+    actions: body?.actions,
   })
 
-  const actionLabel = SCHEDULE_ACTION_LABELS[String(body?.actionType) as keyof typeof SCHEDULE_ACTION_LABELS]
-    || String(body?.actionType)
-  const commandPart = body?.actionType === 'command' ? `：${String(body?.command || '')}` : ''
   recordAudit(
     event,
     user,
-    `为实例「${instance.nickname || uuid}」创建计划任务 ${String(body?.name || '')}`
-    + `（${actionLabel}${commandPart}，触发 ${String(body?.time || '')}）`,
+    `为实例「${instance.nickname || uuid}」创建计划任务 ${schedule.name}`
+    + `（${schedule.actions.map((action) => action.typeLabel).join('、')}，${schedule.timeLabel}）`,
   )
-  return { ok: true }
+  return { ok: true, schedule }
 })

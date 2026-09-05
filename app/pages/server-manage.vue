@@ -42,12 +42,6 @@ interface InstanceDetail extends InstanceSummary {
   autoRestart: boolean
 }
 
-interface BackupEntry {
-  name: string
-  size: number
-  time: string
-}
-
 type PowerAction = 'open' | 'stop' | 'restart' | 'kill'
 
 const POWER_LABELS: Record<PowerAction, string> = {
@@ -80,12 +74,18 @@ const access = useAdminAccess()
 const canEditPage = computed(() => access.levelForKey('server-manage') === 'edit')
 const canPower = computed(() => canEditPage.value && access.featureLevelForKey('server-manage-power') === 'edit')
 const canCommand = computed(() => canEditPage.value && access.featureLevelForKey('server-manage-command') === 'edit')
+const backupLevel = computed(() => access.featureLevelForKey('server-manage-backup'))
 const canBackup = computed(() => canEditPage.value && access.featureLevelForKey('server-manage-backup') === 'edit')
 // 这三块各自有独立区域权限：hidden 时整个卡片不渲染，view 时只读。
 const propertiesLevel = computed(() => access.featureLevelForKey('server-manage-properties'))
 const scheduleLevel = computed(() => access.featureLevelForKey('server-manage-schedule'))
 const canEditProperties = computed(() => canEditPage.value && propertiesLevel.value === 'edit')
 const canEditSchedule = computed(() => canEditPage.value && scheduleLevel.value === 'edit')
+const modsLevel = computed(() => access.featureLevelForKey('server-manage-mods'))
+const instanceConfigLevel = computed(() => access.featureLevelForKey('server-manage-instance-config'))
+const overviewLevel = computed(() => access.featureLevelForKey('server-manage-overview'))
+const javaLevel = computed(() => access.featureLevelForKey('server-manage-java'))
+const marketLevel = computed(() => access.featureLevelForKey('server-manage-market'))
 
 const loading = ref(true)
 const configured = ref(false)
@@ -117,29 +117,8 @@ const sending = ref(false)
 const commandHistory = ref<string[]>([])
 const historyCursor = ref(-1)
 
-const backupDir = ref('/backups')
-const backups = ref<BackupEntry[]>([])
-const directories = ref<string[]>([])
-const backupsLoading = ref(false)
-
-const createOpen = ref(false)
-const createLabel = ref('')
-const createTargets = ref<string[]>([])
-const creating = ref(false)
-const createDialog = ref<HTMLElement | null>(null)
-
 const powerConfirm = ref<PowerAction | null>(null)
 const powerPending = ref(false)
-const restoreTarget = ref<BackupEntry | null>(null)
-const restorePending = ref(false)
-const deleteTarget = ref<BackupEntry | null>(null)
-const deletePending = ref(false)
-
-const downloadUrl = ref('')
-const downloadName = ref('')
-const downloadDialog = ref<HTMLElement | null>(null)
-
-const { apply: applyDialogAnimation } = useDialogAnimation()
 
 let timer: ReturnType<typeof setInterval> | null = null
 // 刷新在飞时不再叠加下一轮：面板在慢节点上单次响应可能超过一个轮询周期。
@@ -149,9 +128,6 @@ const selected = computed(() => instances.value.find((item) => instanceKey(item)
 const current = computed<InstanceSummary | InstanceDetail | null>(() => detail.value || selected.value)
 const stopped = computed(() => current.value?.status === 0)
 const running = computed(() => current.value?.status === 3)
-// 备份目录本身不能当备份目标，否则历史备份会被一层层套进新备份。
-const backupDirRoot = computed(() => backupDir.value.split('/').filter(Boolean)[0] || '')
-const selectableDirectories = computed(() => directories.value.filter((name) => name !== backupDirRoot.value))
 
 function instanceKey(item: { daemonId: string; instanceUuid: string }) {
   return `${item.daemonId}:${item.instanceUuid}`
@@ -209,13 +185,11 @@ async function loadInstances() {
   try {
     const result = await $fetch<{
       configured: boolean
-      backupDir: string
       baseUrl?: string
       user: PanelUser | null
       instances: InstanceSummary[]
     }>('/api/admin/mcsm/instances')
     configured.value = result.configured
-    backupDir.value = result.backupDir
     panelBaseUrl.value = result.baseUrl || ''
     panelUser.value = result.user
     instances.value = result.instances
@@ -355,29 +329,6 @@ function toggleLive() {
   }
 }
 
-async function loadBackups(quiet = false) {
-  const target = selected.value
-  if (!target) {
-    backups.value = []
-    directories.value = []
-    return
-  }
-  if (!quiet) backupsLoading.value = true
-  try {
-    const result = await $fetch<{ backupDir: string; backups: BackupEntry[]; directories: string[] }>(
-      '/api/admin/mcsm/backups',
-      { query: { uuid: target.instanceUuid, daemonId: target.daemonId } },
-    )
-    backupDir.value = result.backupDir
-    backups.value = result.backups
-    directories.value = result.directories
-  } catch (error: any) {
-    if (!quiet) showToast(errorMessage(error, '备份列表加载失败'), 'error')
-  } finally {
-    backupsLoading.value = false
-  }
-}
-
 function scrollConsoleToBottom() {
   const box = consoleBox.value
   if (!box) return
@@ -493,111 +444,6 @@ function goToSettings() {
   void navigateTo('/settings')
 }
 
-function openCreateBackup() {
-  if (!canBackup.value) return
-  createLabel.value = ''
-  // 默认勾上世界存档目录（server.properties 的 level-name 通常就叫 world/World）。
-  createTargets.value = selectableDirectories.value.filter((name) => /^world$/i.test(name))
-  createOpen.value = true
-}
-
-function toggleCreateTarget(name: string) {
-  createTargets.value = createTargets.value.includes(name)
-    ? createTargets.value.filter((item) => item !== name)
-    : [...createTargets.value, name]
-}
-
-async function submitCreateBackup() {
-  const target = selected.value
-  if (!target || !canBackup.value || creating.value) return
-  if (!createTargets.value.length) {
-    showToast('请至少选择一个要备份的目录', 'error')
-    return
-  }
-  creating.value = true
-  try {
-    const result = await $fetch<{ name: string }>('/api/admin/mcsm/backups', {
-      method: 'POST',
-      body: {
-        uuid: target.instanceUuid,
-        daemonId: target.daemonId,
-        label: createLabel.value.trim(),
-        targets: createTargets.value,
-      },
-    })
-    showToast(`备份 ${result.name} 已创建`)
-    createOpen.value = false
-    await loadBackups(true)
-  } catch (error: any) {
-    showToast(errorMessage(error, '创建备份失败'), 'error')
-  } finally {
-    creating.value = false
-  }
-}
-
-async function confirmRestore() {
-  const target = selected.value
-  const backup = restoreTarget.value
-  if (!target || !backup || !canBackup.value || restorePending.value) return
-  restorePending.value = true
-  try {
-    await $fetch('/api/admin/mcsm/backups/restore', {
-      method: 'POST',
-      body: { uuid: target.instanceUuid, daemonId: target.daemonId, name: backup.name },
-    })
-    showToast(`已用 ${backup.name} 恢复，可以启动服务器了`)
-    restoreTarget.value = null
-  } catch (error: any) {
-    showToast(errorMessage(error, '恢复备份失败'), 'error')
-  } finally {
-    restorePending.value = false
-  }
-}
-
-async function confirmDelete() {
-  const target = selected.value
-  const backup = deleteTarget.value
-  if (!target || !backup || !canBackup.value || deletePending.value) return
-  deletePending.value = true
-  try {
-    await $fetch('/api/admin/mcsm/backups', {
-      method: 'DELETE',
-      body: { uuid: target.instanceUuid, daemonId: target.daemonId, name: backup.name },
-    })
-    showToast(`备份 ${backup.name} 已删除`)
-    deleteTarget.value = null
-    await loadBackups(true)
-  } catch (error: any) {
-    showToast(errorMessage(error, '删除备份失败'), 'error')
-  } finally {
-    deletePending.value = false
-  }
-}
-
-async function requestDownload(backup: BackupEntry) {
-  const target = selected.value
-  if (!target || !canBackup.value) return
-  try {
-    const result = await $fetch<{ url: string }>('/api/admin/mcsm/backups/download', {
-      method: 'POST',
-      body: { uuid: target.instanceUuid, daemonId: target.daemonId, name: backup.name },
-    })
-    downloadName.value = backup.name
-    downloadUrl.value = result.url
-  } catch (error: any) {
-    showToast(errorMessage(error, '获取下载地址失败'), 'error')
-  }
-}
-
-async function copyDownloadUrl() {
-  try {
-    await navigator.clipboard.writeText(downloadUrl.value)
-    showToast('下载地址已复制')
-  } catch {
-    showToast('复制失败，请手动选中地址复制', 'error')
-  }
-}
-
 watch(selectedKey, async (key) => {
   closeStream()
   logText.value = ''
@@ -605,13 +451,11 @@ watch(selectedKey, async (key) => {
   if (!key) return
   // 实时流自己会补历史；暂停模式下由 refreshAll 拉快照。
   if (liveMode.value) openStream()
-  await Promise.all([refreshAll(), loadBackups()])
+  await refreshAll()
 })
 
 onMounted(async () => {
-  applyDialogAnimation(createDialog.value)
-  applyDialogAnimation(downloadDialog.value)
-  // 首次的状态、输出、备份都由 selectedKey 的 watcher 触发，这里不再重复拉一遍。
+  // 首次状态与控制台由 selectedKey 的 watcher 触发，这里不再重复拉取。
   await loadInstances()
   // 状态（玩家数、CPU、内存）没有推流通道，仍然轮询；控制台已经走 SSE，
   // 所以这里的周期可以放宽到 10 秒。
@@ -629,7 +473,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="page page--wide">
+  <div class="page page--wide api-redesign-page server-manage-page">
     <div class="page-heading">
       <h1 class="page-title">服务器管理</h1>
       <div class="heading-actions">
@@ -642,8 +486,10 @@ onBeforeUnmount(() => {
     <p v-if="loading" class="empty">正在读取面板信息…</p>
 
     <section v-else-if="!configured" class="card">
-      <h2 class="card-title">尚未连接 MCSM 面板</h2>
-      <p class="card-note">请在「站点设置」填写面板地址与 ApiKey；ApiKey 权限等同面板账户，请妥善保管。</p>
+      <EmptyState image="/images/empty-looking-for-answers.svg">
+        <template #title>尚未连接 MCSM 面板</template>
+        请在「站点设置」填写面板地址与 ApiKey；ApiKey 权限等同面板账户，请妥善保管。
+      </EmptyState>
       <div class="form-actions">
         <md-filled-button @click="goToSettings">
           <md-icon slot="icon">settings</md-icon>
@@ -785,6 +631,8 @@ onBeforeUnmount(() => {
           </div>
 
           <pre ref="consoleBox" class="console">{{ logText || (logLoading ? '加载中…' : liveMode && liveState !== 'closed' ? '正在连接实时控制台…' : '（暂无输出）') }}</pre>
+          <AppScrollbar :target="consoleBox" label="服务器控制台滚动条" />
+          <AppScrollbar :target="consoleBox" axis="horizontal" label="服务器控制台横向滚动条" />
           <h3 class="section-title">发送命令</h3>
           <p v-if="!canCommand" class="card-note">当前账户没有「发送命令」权限，输入框已禁用。</p>
           <div class="command-row">
@@ -810,64 +658,15 @@ onBeforeUnmount(() => {
           </div>
         </section>
 
-        <section class="card">
-          <div class="card-heading">
-            <h2 class="card-title">备份</h2>
-            <div class="heading-actions">
-              <md-filled-button :disabled="!canBackup || backupsLoading" @click="openCreateBackup">
-                <md-icon slot="icon">backup</md-icon>
-                创建备份
-              </md-filled-button>
-              <md-icon-button aria-label="刷新备份" title="刷新备份" :disabled="backupsLoading" @click="loadBackups()">
-                <md-icon>refresh</md-icon>
-              </md-icon-button>
-            </div>
-          </div>
-
-          <p class="card-note">
-            大世界压缩可能先超时；任务仍会在面板侧继续。恢复会覆盖同名文件，只能在实例停止时执行。
-            运行中被占用的文件无法压缩，整机备份前请停服。
-          </p>
-          <p v-if="!canBackup" class="card-note">当前账户没有「备份管理」权限，只能查看列表。</p>
-
-          <div class="table-wrap">
-            <table class="data-table">
-              <thead>
-                <tr>
-                  <th>备份文件</th>
-                  <th>大小</th>
-                  <th>修改时间</th>
-                  <th class="cell-actions">操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="backup in backups" :key="backup.name">
-                  <td class="primary-cell">{{ backup.name }}</td>
-                  <td>{{ formatBytes(backup.size) }}</td>
-                  <td>{{ backup.time || '—' }}</td>
-                  <td class="cell-actions">
-                    <md-text-button :disabled="!canBackup" @click="requestDownload(backup)">下载</md-text-button>
-                    <md-text-button
-                      :disabled="!canBackup || !stopped"
-                      :title="stopped ? '解压覆盖实例目录' : '需要先停止实例'"
-                      @click="restoreTarget = backup"
-                    >恢复</md-text-button>
-                    <md-icon-button
-                      v-if="canBackup"
-                      aria-label="删除备份"
-                      title="删除备份"
-                      @click="deleteTarget = backup"
-                    >
-                      <md-icon>delete</md-icon>
-                    </md-icon-button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-            <p v-if="backupsLoading" class="empty">加载中…</p>
-            <p v-else-if="!backups.length" class="empty">{{ backupDir }} 下还没有备份压缩包</p>
-          </div>
-        </section>
+        <ServerBackups
+          v-if="backupLevel !== 'hidden'"
+          :uuid="current.instanceUuid"
+          :daemon-id="current.daemonId"
+          :status="current.status"
+          :status-label="current.statusLabel"
+          :can-edit="canBackup"
+          @refresh-instance="loadDetail(true)"
+        />
 
         <ServerProperties
           v-if="propertiesLevel !== 'hidden'"
@@ -883,56 +682,42 @@ onBeforeUnmount(() => {
           :can-edit="canEditSchedule"
         />
 
+        <ServerMods
+          v-if="modsLevel !== 'hidden'"
+          :uuid="current.instanceUuid"
+          :daemon-id="current.daemonId"
+          :can-view="modsLevel !== 'hidden'"
+          :can-edit="canEditPage && modsLevel === 'edit'"
+        />
+
+        <ServerInstanceTools
+          v-if="instanceConfigLevel !== 'hidden'"
+          :uuid="current.instanceUuid"
+          :daemon-id="current.daemonId"
+          :instance="detail || current"
+          :can-view="instanceConfigLevel !== 'hidden'"
+          :can-edit="canEditPage && instanceConfigLevel === 'edit'"
+        />
+
+        <ServerPanelOverview
+          v-if="overviewLevel !== 'hidden'"
+          :uuid="current.instanceUuid"
+          :daemon-id="current.daemonId"
+          :can-view="overviewLevel !== 'hidden'"
+          :can-java="javaLevel !== 'hidden'"
+          :can-edit-layout="canEditPage && overviewLevel === 'edit'"
+        />
+
+        <ServerMarket
+          v-if="marketLevel !== 'hidden'"
+          :uuid="current.instanceUuid"
+          :daemon-id="current.daemonId"
+          :can-view="marketLevel !== 'hidden'"
+          :can-edit="canEditPage && marketLevel === 'edit'"
+        />
+
       </template>
     </template>
-
-    <md-dialog ref="createDialog" :open="createOpen" @closed="createOpen = false">
-      <md-icon slot="icon">backup</md-icon>
-      <div slot="headline">创建备份</div>
-      <div slot="content" class="create-content">
-        <p v-if="!selectableDirectories.length" class="empty">没有可备份的目录</p>
-        <div v-else class="target-list">
-          <label v-for="name in selectableDirectories" :key="name" class="switch-row">
-            <md-checkbox
-              :checked="createTargets.includes(name)"
-              @change="toggleCreateTarget(name)"
-            ></md-checkbox>
-            <span class="mono">{{ name }}</span>
-          </label>
-        </div>
-        <md-outlined-text-field
-          class="label-input"
-          label="备份标签（可选）"
-          supporting-text="只能是字母、数字、点、下划线和短横线；最终文件名为 标签-时间戳.zip"
-          autocomplete="off"
-          spellcheck="false"
-          :value="createLabel"
-          @input="createLabel = ($event.target as HTMLInputElement).value"
-        ></md-outlined-text-field>
-      </div>
-      <div slot="actions">
-        <md-text-button :disabled="creating" @click="createOpen = false">取消</md-text-button>
-        <md-text-button :disabled="creating || !createTargets.length" @click="submitCreateBackup">
-          {{ creating ? '压缩中…' : '开始备份' }}
-        </md-text-button>
-      </div>
-    </md-dialog>
-
-    <md-dialog ref="downloadDialog" :open="!!downloadUrl" @closed="downloadUrl = ''">
-      <md-icon slot="icon">download</md-icon>
-      <div slot="headline">下载备份 {{ downloadName }}</div>
-      <div slot="content" class="download-content">
-        <p class="card-note">若节点地址为内网域名或浏览器拦截不安全下载，请改用面板文件管理。</p>
-        <p class="mono download-url">{{ downloadUrl }}</p>
-      </div>
-      <div slot="actions">
-        <md-text-button @click="copyDownloadUrl">复制地址</md-text-button>
-        <a class="download-link" :href="downloadUrl" target="_blank" rel="noopener noreferrer">
-          <md-text-button>打开下载</md-text-button>
-        </a>
-        <md-text-button @click="downloadUrl = ''">关闭</md-text-button>
-      </div>
-    </md-dialog>
 
     <ConfirmDialog
       :open="!!powerConfirm"
@@ -953,33 +738,6 @@ onBeforeUnmount(() => {
       </div>
     </ConfirmDialog>
 
-    <ConfirmDialog
-      :open="!!restoreTarget"
-      title="恢复备份"
-      :message="`确定要用「${restoreTarget?.name}」覆盖实例目录吗？压缩包里的文件会覆盖同名文件，此操作无法撤销。`"
-      icon="restore"
-      confirm-label="恢复"
-      pending-label="解压中…"
-      destructive
-      :pending="restorePending"
-      @confirm="confirmRestore"
-      @cancel="restoreTarget = null"
-      @closed="restoreTarget = null"
-    />
-
-    <ConfirmDialog
-      :open="!!deleteTarget"
-      title="删除备份"
-      :message="`确定要删除备份「${deleteTarget?.name}」吗？删除后无法恢复。`"
-      icon="delete"
-      confirm-label="删除"
-      pending-label="删除中…"
-      destructive
-      :pending="deletePending"
-      @confirm="confirmDelete"
-      @cancel="deleteTarget = null"
-      @closed="deleteTarget = null"
-    />
   </div>
 </template>
 
@@ -1028,18 +786,7 @@ onBeforeUnmount(() => {
 .command-input { flex: 1 1 360px; min-width: 0; }
 .quick-commands { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
 .quick-label { font-size: 12px; color: var(--md-sys-color-on-surface-variant); }
-.table-wrap { overflow-x: auto; margin-top: 16px; }
-.data-table { width: 100%; border-collapse: collapse; }
-.data-table th, .data-table td { padding: 12px 10px; border-bottom: 1px solid var(--md-sys-color-outline-variant); text-align: left; white-space: nowrap; }
-.data-table th { color: var(--md-sys-color-on-surface-variant); font-size: 12px; font-weight: 500; }
-.primary-cell { font-weight: 600; font-family: 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
-.cell-actions { text-align: right; white-space: nowrap; }
 .empty { padding: 16px 0; color: var(--md-sys-color-on-surface-variant); font-size: 14px; }
-.create-content, .download-content { min-width: min(460px, calc(100vw - 72px)); }
-.target-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 6px 16px; margin: 14px 0; }
-.label-input { width: 100%; margin-top: 8px; }
-.download-url { margin: 12px 0 0; padding: 10px 12px; border-radius: 8px; background: var(--md-sys-color-surface-variant); overflow-wrap: anywhere; }
-.download-link { text-decoration: none; }
 .confirm-preview { display: flex; align-items: center; gap: 8px; font-size: 14px; overflow-wrap: anywhere; }
 
 @media (max-width: 720px) {
@@ -1049,8 +796,6 @@ onBeforeUnmount(() => {
   .console { height: 320px; }
   .instance-select { min-width: 0; flex-basis: 100%; }
   .size-select { width: 100%; min-width: 0; }
-  .create-content,
-  .download-content { width: 100%; min-width: 0; }
   .command-row md-filled-button { width: 100%; }
 }
 </style>

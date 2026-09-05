@@ -365,7 +365,7 @@ onBeforeUnmount(() => {
 <template>
   <AdminSetup v-if="setupRequired" />
   <NuxtLayout v-else name="default">
-    <div class="page dashboard-page">
+    <div class="page dashboard-page api-redesign-page">
       <header class="dashboard-header">
         <div class="dashboard-title-group">
           <div class="dashboard-kicker"><span>{{ currentUserRole }}</span><span>{{ todayLoginCount }} 次今日登录</span></div>
@@ -427,7 +427,9 @@ onBeforeUnmount(() => {
             <time :title="formatTime(admin.lastSeenAt)">{{ formatRelativeTime(admin.lastSeenAt) }}</time>
           </article>
         </div>
-        <p v-else class="panel-empty">当前没有用户正在操作后台</p>
+        <EmptyState v-else class="panel-empty-state" compact image="/images/empty-team.svg">
+          当前没有用户正在操作后台
+        </EmptyState>
       </section>
 
       <div class="dashboard-primary-grid">
@@ -467,7 +469,9 @@ onBeforeUnmount(() => {
             <time :datetime="new Date(event.time).toISOString()" :title="formatTime(event.time)">{{ formatRelativeTime(event.time) }}</time>
           </article>
         </div>
-        <p v-else class="panel-empty">暂无最近事件</p>
+        <EmptyState v-else class="panel-empty-state" compact image="/images/empty-monitoring-data.svg">
+          暂无最近事件
+        </EmptyState>
       </section>
 
       <div class="dashboard-secondary-grid">
@@ -481,7 +485,9 @@ onBeforeUnmount(() => {
               <div class="session-meta"><code>{{ login.ip }}</code><small v-if="login.location"><md-icon>location_on</md-icon>{{ login.location }}</small><time :title="formatTime(login.time)">{{ formatRelativeTime(login.time) }}</time></div>
             </div>
           </div>
-          <p v-else class="panel-empty">暂无登录记录</p>
+          <EmptyState v-else class="panel-empty-state" compact image="/images/empty-monitoring-data.svg">
+            暂无登录记录
+          </EmptyState>
         </section>
 
         <section v-if="canView('updates') || canView('downloads')" class="dashboard-panel releases-panel">
@@ -494,7 +500,9 @@ onBeforeUnmount(() => {
               <div class="release-meta"><small>{{ item.tag }}</small><time v-if="item.time" :title="formatTime(item.time)">{{ formatRelativeTime(item.time) }}</time></div>
             </NuxtLink>
           </div>
-          <p v-else class="panel-empty">暂无发布资源</p>
+          <EmptyState v-else class="panel-empty-state" compact image="/images/empty-order-delivered.svg">
+            暂无发布资源
+          </EmptyState>
         </section>
       </div>
     </div>

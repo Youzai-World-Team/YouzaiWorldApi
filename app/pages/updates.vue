@@ -45,6 +45,7 @@ const formDialog = ref<HTMLElement | null>(null)
 const deleteDialog = ref<HTMLElement | null>(null)
 const apiDialog = ref<HTMLElement | null>(null)
 const apiOpen = ref(false)
+const updatesTableWrap = ref<HTMLElement | null>(null)
 
 const { showToast } = useToast()
 const { apply: applyDialogAnimation } = useDialogAnimation()
@@ -241,12 +242,10 @@ async function confirmDelete() {
 </script>
 
 <template>
-  <div class="page page--wide catalog-page updates-page">
+<div class="page page--wide catalog-page updates-page api-redesign-page">
     <header class="catalog-header">
       <div class="catalog-title-block">
-        <span class="catalog-eyebrow"><md-icon>system_update_alt</md-icon>版本分发</span>
         <h1 class="page-title">更新服务</h1>
-        <p>为客户端提供版本检查、更新类型和变更日志。</p>
       </div>
       <div class="catalog-header-actions">
         <md-icon-button aria-label="打开数据 API" title="打开数据 API" @click="onEndpointClick">
@@ -272,7 +271,7 @@ async function confirmDelete() {
         <span class="card-caption">{{ list.length }} 个程序</span>
       </div>
 
-      <div class="table-wrap">
+      <div ref="updatesTableWrap" class="table-wrap">
         <table class="update-table">
         <thead>
           <tr>
@@ -312,6 +311,7 @@ async function confirmDelete() {
         </tbody>
         </table>
       </div>
+      <AppScrollbar :target="updatesTableWrap" axis="horizontal" label="更新服务表格横向滚动条" />
       <EmptyState v-if="loading" :illustrated="false">加载中…</EmptyState>
       <EmptyState v-else-if="list.length === 0" image="/images/empty-ready-set-go.svg">暂无程序</EmptyState>
     </section>
@@ -420,7 +420,7 @@ async function confirmDelete() {
 .catalog-title-block { min-width: 0; }
 .catalog-eyebrow, .section-overline { display: inline-flex; align-items: center; gap: 6px; color: var(--md-sys-color-primary); font-size: 11px; font-weight: 700; }
 .catalog-eyebrow md-icon { --md-icon-size: 16px; }
-.catalog-title-block .page-title { margin: 6px 0 5px; }
+.catalog-title-block .page-title { margin: 0 0 5px; }
 .catalog-title-block p { max-width: 620px; margin: 0; color: var(--md-sys-color-on-surface-variant); font-size: 13px; }
 .catalog-header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex: 0 0 auto; }
 .catalog-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }

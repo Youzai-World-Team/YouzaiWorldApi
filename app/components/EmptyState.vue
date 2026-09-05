@@ -6,9 +6,11 @@ const DEFAULT_EMPTY_STATE_IMAGE = 'https://assets.mcyzw.top/images/empty-looking
 
 const props = withDefaults(defineProps<{
   illustrated?: boolean
+  compact?: boolean
   image?: string
 }>(), {
   illustrated: true,
+  compact: false,
   image: 'https://assets.mcyzw.top/images/empty-looking-for-answers.svg',
 })
 const resolvedImage = computed(() => webAssetUrl(props.image || DEFAULT_EMPTY_STATE_IMAGE))
@@ -17,7 +19,7 @@ const resolvedImage = computed(() => webAssetUrl(props.image || DEFAULT_EMPTY_ST
 <template>
   <div
     class="empty-state"
-    :class="{ 'empty-state--compact': !props.illustrated }"
+    :class="{ 'empty-state--compact': !props.illustrated || props.compact }"
     role="status"
   >
     <img
@@ -47,6 +49,8 @@ const resolvedImage = computed(() => webAssetUrl(props.image || DEFAULT_EMPTY_ST
 
 .empty-state--compact {
   min-height: 120px;
+  gap: 8px;
+  padding: 16px 16px 20px;
 }
 
 .empty-state__image {
@@ -55,6 +59,11 @@ const resolvedImage = computed(() => webAssetUrl(props.image || DEFAULT_EMPTY_ST
   display: block;
   box-sizing: border-box;
   object-fit: contain;
+}
+
+.empty-state--compact .empty-state__image {
+  width: min(148px, 48vw);
+  height: 92px;
 }
 
 .empty-state__title {
@@ -91,6 +100,11 @@ const resolvedImage = computed(() => webAssetUrl(props.image || DEFAULT_EMPTY_ST
   .empty-state__image {
     width: min(188px, 64vw);
     height: 140px;
+  }
+
+  .empty-state--compact .empty-state__image {
+    width: min(132px, 56vw);
+    height: 82px;
   }
 }
 </style>

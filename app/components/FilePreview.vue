@@ -55,6 +55,10 @@ const loading = ref(false)
 const saving = ref(false)
 const mediaError = ref(false)
 const editorRef = ref<{ layout: () => void } | null>(null)
+const mediaStage = ref<HTMLElement | null>(null)
+const markdownPreview = ref<HTMLElement | null>(null)
+const zipTableWrap = ref<HTMLElement | null>(null)
+const documentPreview = ref<HTMLElement | null>(null)
 
 // 文档预览状态
 const docHtml = ref('')
@@ -348,7 +352,8 @@ watch(() => [props.path, props.kind], () => {
           :readonly="!canEdit || truncated"
           :height="editorHeight"
         />
-        <div v-if="kind === 'markdown' && !canEdit" class="markdown-preview" v-html="marked.parse(text)"></div>
+        <div v-if="kind === 'markdown' && !canEdit" ref="markdownPreview" class="markdown-preview" v-html="marked.parse(text)"></div>
+        <AppScrollbar :target="markdownPreview" label="Markdown 预览滚动条" />
         <div class="text-bar">
           <span class="meta">
             {{ language }} · {{ text.length }} 个字符{{ dirty ? ' · 有未保存的修改' : '' }}
@@ -367,7 +372,7 @@ watch(() => [props.path, props.kind], () => {
       <p v-if="mediaError" class="notice">
         无法加载这个文件，可能是格式不受浏览器支持或文件已损坏。可以改用下载。
       </p>
-      <div v-else class="media-stage">
+      <div v-else ref="mediaStage" class="media-stage">
         <img
           v-if="kind === 'image'"
           class="media-image"
@@ -392,6 +397,8 @@ watch(() => [props.path, props.kind], () => {
           @error="mediaError = true"
         ></audio>
       </div>
+      <AppScrollbar :target="mediaStage" label="媒体预览纵向滚动条" />
+      <AppScrollbar :target="mediaStage" axis="horizontal" label="媒体预览横向滚动条" />
       <p v-if="kind !== 'image'" class="hint">
         音视频仅支持顺序播放，拖动进度条可能无效。
       </p>
@@ -420,7 +427,7 @@ watch(() => [props.path, props.kind], () => {
             </div>
             <span class="zip-meta">共 {{ zipFiles.length }} 个文件</span>
           </div>
-          <div class="zip-table-wrap">
+          <div ref="zipTableWrap" class="zip-table-wrap">
             <table class="zip-table">
               <tbody>
                 <tr v-if="zipCurrentPath !== '/'" class="zip-row-up">
@@ -452,11 +459,17 @@ watch(() => [props.path, props.kind], () => {
                 </tr>
               </tbody>
             </table>
-            <p v-if="!zipEntries.length" class="empty">这个目录是空的</p>
+            <EmptyState v-if="!zipEntries.length" compact image="/images/empty-monitoring-data.svg">
+              这个目录是空的
+            </EmptyState>
           </div>
+          <AppScrollbar :target="zipTableWrap" label="压缩包目录纵向滚动条" />
+          <AppScrollbar :target="zipTableWrap" axis="horizontal" label="压缩包目录横向滚动条" />
         </div>
       </template>
-      <div v-else class="document-preview" v-html="docHtml"></div>
+      <div v-else ref="documentPreview" class="document-preview" v-html="docHtml"></div>
+      <AppScrollbar :target="documentPreview" label="文档预览纵向滚动条" />
+      <AppScrollbar :target="documentPreview" axis="horizontal" label="文档预览横向滚动条" />
     </template>
 
     <div v-else class="fallback">
@@ -519,7 +532,7 @@ watch(() => [props.path, props.kind], () => {
 .markdown-preview h1:first-child, .markdown-preview h2:first-child, .markdown-preview h3:first-child { margin-top: 0; }
 .markdown-preview p { margin: 0.8em 0; }
 .markdown-preview code { padding: 2px 6px; border-radius: 4px; background: var(--md-sys-color-surface); font-family: 'Roboto Mono', monospace; font-size: 0.9em; }
-.markdown-preview pre { padding: 12px; border-radius: 8px; background: var(--md-sys-color-surface); overflow-x: auto; }
+.markdown-preview pre { max-width: 100%; padding: 12px; border-radius: 8px; background: var(--md-sys-color-surface); overflow: visible; white-space: pre-wrap; overflow-wrap: anywhere; }
 .markdown-preview pre code { padding: 0; background: none; }
 .markdown-preview a { color: var(--md-sys-color-primary); }
 .markdown-preview ul, .markdown-preview ol { padding-left: 24px; }

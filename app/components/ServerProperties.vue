@@ -260,7 +260,9 @@ watch(() => [props.uuid, props.daemonId], () => {
             ></md-outlined-text-field>
           </div>
         </div>
-        <p v-if="!otherKeys.length" class="empty">没有匹配的配置项</p>
+        <EmptyState v-if="!otherKeys.length" compact image="/images/empty-looking-for-answers.svg">
+          没有匹配的配置项
+        </EmptyState>
       </template>
 
       <div v-if="canEdit" class="form-actions">
@@ -273,7 +275,9 @@ watch(() => [props.uuid, props.daemonId], () => {
         待保存：{{ changedKeys.join('、') }}
       </p>
     </template>
-    <p v-else class="empty">没有读到配置项</p>
+    <EmptyState v-else compact image="/images/empty-monitoring-data.svg">
+      没有读到配置项
+    </EmptyState>
   </section>
 </template>
 

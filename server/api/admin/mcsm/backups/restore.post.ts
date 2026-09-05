@@ -1,10 +1,10 @@
-import { getMcsmConfig, recordAudit, requireFeaturePermission } from '../../../../utils/db'
+import { recordAudit, requireFeaturePermission } from '../../../../utils/db'
 import {
-  assertInstanceAllowed,
   BACKUP_NAME_RE,
   listBackups,
   restoreBackup,
-} from '../../../../utils/mcsm'
+} from '../../../../utils/mcsm-backup'
+import { assertInstanceAllowed } from '../../../../utils/mcsm'
 
 /**
  * 恢复备份：把压缩包解压回实例根目录，同名文件直接覆盖。
@@ -32,13 +32,12 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  const { backupDir } = getMcsmConfig()
-  const backups = await listBackups(uuid, daemonId, backupDir)
+  const backups = await listBackups(uuid, daemonId)
   if (!backups.some((backup) => backup.name === name)) {
     throw createError({ statusCode: 404, statusMessage: '备份不存在或已被删除' })
   }
 
-  await restoreBackup(uuid, daemonId, backupDir, name)
-  recordAudit(event, user, `用备份 ${name} 恢复实例「${instance.nickname || uuid}」`)
-  return { ok: true }
+  await restoreBackup(uuid, daemonId, name)
+  recordAudit(event, user, `为实例「${instance.nickname || uuid}」启动备份恢复 ${name}`)
+  return { ok: true, started: true }
 })

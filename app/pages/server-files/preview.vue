@@ -37,7 +37,7 @@ function backToFiles() {
 </script>
 
 <template>
-  <div class="page page--wide">
+  <div class="page page--wide api-redesign-page server-file-preview-page">
     <div class="page-heading">
       <div class="heading-main">
         <md-icon-button aria-label="返回文件列表" title="返回文件列表" @click="backToFiles">
@@ -57,9 +57,10 @@ function backToFiles() {
     </div>
 
     <section class="card">
-      <p v-if="!ready" class="empty">
+      <EmptyState v-if="!ready" compact image="/images/empty-looking-for-answers.svg">
+        <template #title>无法打开文件预览</template>
         缺少必要的参数（实例与文件路径），请从「服务器文件」页打开预览。
-      </p>
+      </EmptyState>
       <FilePreview
         v-else
         :uuid="uuid"
@@ -82,7 +83,6 @@ function backToFiles() {
 .page-subtitle { margin: 4px 0 0; color: var(--md-sys-color-on-surface-variant); font-size: 13px; overflow-wrap: anywhere; }
 .mono { font-family: 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 .plain-link { text-decoration: none; flex-shrink: 0; }
-.empty { padding: 24px 0; color: var(--md-sys-color-on-surface-variant); font-size: 14px; }
 @media (max-width: 640px) {
   .page-heading { align-items: stretch; flex-direction: column; }
   .heading-main { width: 100%; }

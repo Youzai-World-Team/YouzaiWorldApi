@@ -1,4 +1,4 @@
-import { requireAuth } from '../../../utils/db'
+import { requireFeaturePermission } from '../../../utils/db'
 import {
   listSchedules,
   requireInstance,
@@ -8,7 +8,7 @@ import {
 
 /** 实例的计划任务列表，附上给下拉框用的类型与动作枚举。 */
 export default defineEventHandler(async (event) => {
-  requireAuth(event)
+  requireFeaturePermission(event, 'server-manage-schedule', 'view')
   const query = getQuery(event)
   const uuid = String(query.uuid || '')
   const daemonId = String(query.daemonId || '')

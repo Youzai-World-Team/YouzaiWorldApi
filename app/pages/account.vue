@@ -339,12 +339,10 @@ async function logout() {
 </script>
 
 <template>
-  <div class="page account-page">
+<div class="page account-page api-redesign-page">
     <header class="account-header">
       <div class="account-title-block">
-        <span class="account-eyebrow"><md-icon>account_circle</md-icon>账户中心</span>
         <h1 class="page-title">此账户</h1>
-        <p>管理个人资料、侧边栏偏好和登录设备。</p>
       </div>
       <span v-if="currentUser" class="account-access-badge">
         <md-icon>{{ currentUser.isOwner ? 'verified_user' : 'person' }}</md-icon>
@@ -479,7 +477,9 @@ async function logout() {
           </time>
         </article>
       </div>
-      <div v-else class="devices-empty"><md-icon>devices</md-icon><span>暂无登录设备记录</span></div>
+      <EmptyState v-else class="devices-empty" compact image="/images/empty-monitoring-data.svg">
+        暂无登录设备记录
+      </EmptyState>
     </section>
 
     <section class="card account-card app-info-card">
@@ -584,10 +584,9 @@ async function logout() {
               </div>
             </article>
           </div>
-          <div v-else class="navigation-preference-empty">
-            <md-icon>visibility_off</md-icon>
-            <span>暂无可配置的侧边栏条目</span>
-          </div>
+          <EmptyState v-else class="navigation-preference-empty" compact image="/images/empty-looking-for-answers.svg">
+            暂无可配置的侧边栏条目
+          </EmptyState>
 
           <div class="navigation-preference-actions">
             <md-filled-button
@@ -644,7 +643,7 @@ async function logout() {
 }
 
 .account-title-block .page-title {
-  margin: 6px 0 4px;
+  margin: 0 0 4px;
 }
 
 .account-title-block p {
@@ -767,10 +766,10 @@ async function logout() {
   inset: 0;
   display: grid;
   place-items: center;
-  color: #fff;
+  color: var(--md-sys-color-inverse-on-surface);
   font-size: 12px;
   text-align: center;
-  background: rgb(0 0 0 / 55%);
+  background: color-mix(in srgb, var(--md-sys-color-scrim) 55%, transparent);
 }
 
 .profile-info {

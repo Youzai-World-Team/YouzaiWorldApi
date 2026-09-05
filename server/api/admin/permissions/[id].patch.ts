@@ -15,16 +15,19 @@ export default defineEventHandler(async (event) => {
     permissions?: Record<string, unknown>
     featurePermissions?: Record<string, unknown>
     domainMailPrefixes?: unknown
+    domainMailAllMailboxes?: unknown
   }>(event)
   const user = updateAdminPermissions(
     userId,
     body?.permissions || {},
     body?.featurePermissions || {},
     body?.domainMailPrefixes,
+    body?.domainMailAllMailboxes,
   )
   const domainMail = getDomainMailAccessUser(user.id)
-  recordAudit(event, actor, body?.domainMailPrefixes === undefined
-    ? `更新后台用户权限：${user.username}`
-    : `更新后台用户权限及域名邮件追加可见前缀：${user.username}`)
+  const domainMailChanged = body?.domainMailPrefixes !== undefined || body?.domainMailAllMailboxes !== undefined
+  recordAudit(event, actor, domainMailChanged
+    ? `更新后台用户权限及域名邮件可见范围：${user.username}`
+    : `更新后台用户权限：${user.username}`)
   return { ...user, domainMail: domainMail || null }
 })

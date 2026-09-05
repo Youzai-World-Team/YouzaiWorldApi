@@ -375,6 +375,7 @@ watch(() => route.path, () => {
 .shell {
   min-height: 100vh;
   min-height: 100dvh;
+  background: var(--md-sys-color-surface);
 }
 
 .app-bar {

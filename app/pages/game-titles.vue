@@ -61,6 +61,9 @@ const saving = ref(false)
 const pendingOperation = ref('')
 const editorDialog = ref<HTMLElement | null>(null)
 const playerDialog = ref<HTMLElement | null>(null)
+const titlesCatalogWrap = ref<HTMLElement | null>(null)
+const titlesPlayersWrap = ref<HTMLElement | null>(null)
+const titleGrantList = ref<HTMLElement | null>(null)
 const { apply: applyDialogAnimation } = useDialogAnimation()
 
 const form = ref({
@@ -246,7 +249,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="page">
+  <div class="page api-redesign-page game-titles-page">
     <div class="page-heading">
       <div>
         <h1 class="page-title">玩家称号</h1>
@@ -285,7 +288,7 @@ onMounted(async () => {
     >
       <EmptyState v-if="loading" :illustrated="false">加载中…</EmptyState>
       <EmptyState v-else-if="!overview.titles.length" image="/images/empty-winner.svg">暂无称号</EmptyState>
-      <div v-else class="table-wrap">
+      <div v-else ref="titlesCatalogWrap" class="table-wrap">
         <table>
           <thead><tr><th>预览</th><th>称号</th><th>ID</th><th>类型</th><th>状态</th><th class="actions-column">操作</th></tr></thead>
           <tbody>
@@ -303,6 +306,7 @@ onMounted(async () => {
           </tbody>
         </table>
       </div>
+      <AppScrollbar :target="titlesCatalogWrap" axis="horizontal" label="称号目录表格横向滚动条" />
     </div>
 
     <div
@@ -317,8 +321,11 @@ onMounted(async () => {
       </md-outlined-text-field>
       <div class="card table-card">
         <div v-if="loading" class="empty">加载中…</div>
-        <div v-else-if="!filteredPlayers.length" class="empty">没有匹配的玩家</div>
-        <div v-else class="table-wrap">
+        <EmptyState v-else-if="!filteredPlayers.length" image="/images/empty-looking-for-answers.svg">
+          <template #title>没有匹配的玩家</template>
+          尝试调整搜索条件。
+        </EmptyState>
+        <div v-else ref="titlesPlayersWrap" class="table-wrap">
           <table>
             <thead><tr><th>玩家</th><th>当前佩戴</th><th>已拥有</th><th class="actions-column">操作</th></tr></thead>
             <tbody>
@@ -331,6 +338,7 @@ onMounted(async () => {
             </tbody>
           </table>
         </div>
+        <AppScrollbar :target="titlesPlayersWrap" axis="horizontal" label="玩家称号表格横向滚动条" />
       </div>
     </div>
 
@@ -363,7 +371,7 @@ onMounted(async () => {
 
     <md-dialog ref="playerDialog" :open="!!playerTarget" :aria-busy="pendingOperation ? 'true' : 'false'" @closed="playerTarget = null">
       <div slot="headline">管理 {{ playerTarget?.username }} 的称号</div>
-      <div slot="content" class="grant-list">
+      <div slot="content" ref="titleGrantList" class="grant-list">
         <template v-if="playerTarget">
           <div class="unequip-row"><span>当前佩戴：{{ equippedName(playerTarget) }}</span><md-text-button v-if="canEditGrants && playerTarget.equipped_title_id" :disabled="!!pendingOperation" @click="equipForPlayer(playerTarget, null)">{{ operationPending('equip', playerTarget, null) ? '卸下中…' : '卸下' }}</md-text-button></div>
           <div v-for="title in overview.titles" :key="title.id" class="grant-row">
@@ -376,6 +384,8 @@ onMounted(async () => {
           </div>
         </template>
       </div>
+      <AppScrollbar :target="titleGrantList" label="称号授予记录滚动条" />
+      <AppScrollbar :target="titleGrantList" axis="horizontal" label="称号授予记录横向滚动条" />
       <div slot="actions"><md-text-button :disabled="!!pendingOperation" @click="playerTarget = null">关闭</md-text-button></div>
     </md-dialog>
   </div>

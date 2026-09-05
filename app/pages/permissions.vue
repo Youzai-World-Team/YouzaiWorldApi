@@ -45,12 +45,14 @@ const selectedUserIds = ref<number[]>([])
 const drafts = ref<Record<string, DraftPermissionLevel>>({})
 const featureDrafts = ref<Record<string, DraftPermissionLevel>>({})
 const domainMailPrefixDraft = ref('')
+const domainMailAllMailboxesDraft = ref(false)
 const expandedParents = ref<Set<string>>(new Set())
 const userKeyword = ref('')
 const loading = ref(true)
 const saving = ref(false)
 const selectionInteracted = ref(false)
 const bulkSelectionMode = ref(false)
+const userOptions = ref<HTMLElement | null>(null)
 
 const selectedUsers = computed(() => users.value.filter((user) => selectedUserIds.value.includes(user.id)))
 const manageableUsers = computed(() => users.value.filter((user) => !user.isOwner))
@@ -86,6 +88,7 @@ const hasDraftChanges = computed(() => {
   return pages.value.some((page) => drafts.value[page.key] !== user.permissions[page.key])
     || features.value.some((feature) => featureDrafts.value[feature.key] !== user.featurePermissions[feature.key])
     || (user.domainMail !== null && domainMailPrefixDraft.value !== user.domainMail.prefixes.join(', '))
+    || (user.domainMail !== null && domainMailAllMailboxesDraft.value !== user.domainMail.allMailboxes)
 })
 
 function resetDrafts() {
@@ -94,17 +97,20 @@ function resetDrafts() {
     drafts.value = { ...user.permissions }
     featureDrafts.value = { ...user.featurePermissions }
     domainMailPrefixDraft.value = user.domainMail?.prefixes.join(', ') || ''
+    domainMailAllMailboxesDraft.value = user.domainMail?.allMailboxes || false
     return
   }
   if (bulkMode.value) {
     drafts.value = Object.fromEntries(pages.value.map((page) => [page.key, 'unchanged']))
     featureDrafts.value = Object.fromEntries(features.value.map((feature) => [feature.key, 'unchanged']))
     domainMailPrefixDraft.value = ''
+    domainMailAllMailboxesDraft.value = false
     return
   }
   drafts.value = {}
   featureDrafts.value = {}
   domainMailPrefixDraft.value = ''
+  domainMailAllMailboxesDraft.value = false
 }
 
 function normalizedDomainMailPrefixes(value: string): string[] {
@@ -112,6 +118,10 @@ function normalizedDomainMailPrefixes(value: string): string[] {
     .split(/[\s,，]+/)
     .map((prefix) => prefix.trim().toLocaleLowerCase('en-US'))
     .filter(Boolean))]
+}
+
+function onDomainMailAllMailboxesToggle(event: Event) {
+  domainMailAllMailboxesDraft.value = Boolean((event.target as HTMLElement & { selected?: boolean }).selected)
 }
 
 function isSelected(user: PermissionUser) {
@@ -288,6 +298,7 @@ async function savePermissions() {
         permissions: drafts.value,
         featurePermissions: featureDrafts.value,
         domainMailPrefixes: normalizedDomainMailPrefixes(domainMailPrefixDraft.value),
+        domainMailAllMailboxes: domainMailAllMailboxesDraft.value,
       },
     })
     replaceUsers([updated])
@@ -304,12 +315,10 @@ onMounted(loadPermissions)
 </script>
 
 <template>
-  <div class="page page--wide permissions-page">
+<div class="page page--wide permissions-page api-redesign-page">
     <header class="permissions-header">
       <div class="permissions-title-block">
-        <span class="permissions-eyebrow"><md-icon>admin_panel_settings</md-icon>访问控制</span>
         <h1 class="page-title">权限管理</h1>
-        <p>按后台账户配置页面访问范围和细分操作权限。</p>
       </div>
       <div class="permissions-header-actions">
         <div class="permissions-stats" aria-label="权限概览">
@@ -368,7 +377,7 @@ onMounted(loadPermissions)
           >
             <md-icon slot="leading-icon">search</md-icon>
           </md-outlined-text-field>
-          <div class="user-options">
+          <div ref="userOptions" class="user-options">
             <button
               v-for="user in filteredUsers"
               :key="user.id"
@@ -394,9 +403,11 @@ onMounted(loadPermissions)
               </span>
             </button>
           </div>
+          <AppScrollbar :target="userOptions" label="后台账户列表滚动条" />
           <div v-if="!filteredUsers.length" class="user-filter-empty">
-            <md-icon>person_search</md-icon>
-            <span>没有匹配的账户</span>
+            <EmptyState compact image="/images/empty-looking-for-answers.svg">
+              没有匹配的账户
+            </EmptyState>
           </div>
         </aside>
 
@@ -547,20 +558,32 @@ onMounted(loadPermissions)
                 <span class="section-overline">域名邮件</span>
                 <h3 id="domain-mail-permission-title">收件可见范围</h3>
               </div>
-              <md-icon v-if="selectedUser.domainMail.allMailboxes" class="domain-mail-permission-owner" title="初始所有者可查看全部邮箱">all_inbox</md-icon>
+              <md-icon v-if="selectedUser.isOwner" class="domain-mail-permission-owner" title="初始所有者可查看全部邮箱">all_inbox</md-icon>
             </div>
-            <div v-if="selectedUser.domainMail.allMailboxes" class="domain-mail-permission-owner-note">
+            <div v-if="selectedUser.isOwner" class="domain-mail-permission-owner-note">
               <md-icon>verified_user</md-icon>
               初始所有者可以查看全部域名邮件，无需配置追加前缀。
             </div>
             <template v-else>
+              <div class="domain-mail-permission-all">
+                <div>
+                  <strong>查看所有前缀的邮件</strong>
+                  <small>开启后可查看所有 @mcyzw.top 邮箱的收件邮件；不会改变发信地址或发信权限。</small>
+                </div>
+                <md-switch
+                  :selected="domainMailAllMailboxesDraft"
+                  :disabled="!canEditSelection"
+                  aria-label="查看所有前缀的邮件"
+                  @change="onDomainMailAllMailboxesToggle"
+                ></md-switch>
+              </div>
               <div class="domain-mail-permission-fields">
                 <md-outlined-text-field
                   class="domain-mail-permission-input"
                   label="追加可见邮件前缀"
                   supporting-text="多个前缀用逗号或空格分隔，按开头匹配，例如 support、team"
                   :value="domainMailPrefixDraft"
-                  :disabled="!canEditSelection"
+                  :disabled="!canEditSelection || domainMailAllMailboxesDraft"
                   @input="domainMailPrefixDraft = ($event.target as HTMLInputElement).value"
                 ></md-outlined-text-field>
                 <div class="domain-mail-permission-default">
@@ -568,7 +591,7 @@ onMounted(loadPermissions)
                   <strong>{{ selectedUser.domainMail.defaultPrefix }}@mcyzw.top</strong>
                 </div>
               </div>
-              <p class="domain-mail-permission-note">追加范围只影响收件查看，不改变普通用户的发信地址或发信权限。修改后使用上方“保存权限”按钮保存。</p>
+              <p class="domain-mail-permission-note">{{ domainMailAllMailboxesDraft ? '当前已允许查看全部前缀，追加前缀仅在关闭此开关后生效。' : '追加范围只影响收件查看，不改变普通用户的发信地址或发信权限。' }} 修改后使用上方“保存权限”按钮保存。</p>
             </template>
           </section>
         </section>
@@ -704,6 +727,37 @@ onMounted(loadPermissions)
 
 .domain-mail-permission-owner-note md-icon {
   --md-icon-size: 17px;
+}
+
+.domain-mail-permission-all {
+  min-height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.domain-mail-permission-all > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.domain-mail-permission-all strong {
+  font-size: 13px;
+}
+
+.domain-mail-permission-all small {
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.domain-mail-permission-all md-switch {
+  flex: 0 0 auto;
 }
 
 .domain-mail-permission-fields {
@@ -998,7 +1052,7 @@ onMounted(loadPermissions)
 }
 
 .permissions-title-block .page-title {
-  margin: 6px 0 4px;
+  margin: 0 0 4px;
 }
 
 .permissions-title-block p {
@@ -1143,7 +1197,6 @@ onMounted(loadPermissions)
   gap: 4px;
   overflow-x: hidden;
   overflow-y: auto;
-  scrollbar-width: thin;
 }
 
 .user-option {

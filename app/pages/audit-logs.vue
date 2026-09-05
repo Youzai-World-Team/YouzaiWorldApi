@@ -74,6 +74,7 @@ const now = ref(Date.now())
 const { showToast } = useToast()
 let refreshTimer: ReturnType<typeof setInterval> | undefined
 let clockTimer: ReturnType<typeof setInterval> | undefined
+const memberList = ref<HTMLElement | null>(null)
 
 const members = computed(() => [...(overview.value?.members || [])].sort((left, right) =>
   Number(right.isCurrent) - Number(left.isCurrent)
@@ -290,7 +291,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="page audit-page">
+  <div class="page audit-page api-redesign-page">
     <header class="page-heading">
       <div class="audit-title-block">
         <span class="audit-eyebrow"><md-icon>history</md-icon>后台审计</span>
@@ -350,7 +351,7 @@ onBeforeUnmount(() => {
             <md-icon aria-hidden="true">groups</md-icon>
           </div>
         </div>
-        <div class="member-list">
+        <div ref="memberList" class="member-list">
           <button v-if="!memberSelectionMode" type="button" class="member-item member-item--all" :aria-pressed="isAllMembersSelected()" :class="{ 'member-item--selected': isAllMembersSelected() }" @click="selectAllMembers">
             <span class="member-avatar member-avatar--all"><md-icon>groups</md-icon></span>
             <span class="member-copy"><strong>全部成员</strong><small>{{ overview?.records.length || 0 }} 条记录</small></span>
@@ -376,6 +377,8 @@ onBeforeUnmount(() => {
             </span>
           </button>
         </div>
+        <AppScrollbar :target="memberList" label="成员列表滚动条" />
+        <AppScrollbar :target="memberList" axis="horizontal" label="成员列表横向滚动条" />
       </aside>
 
       <section class="records-panel">
@@ -423,7 +426,10 @@ onBeforeUnmount(() => {
           </EmptyState>
         </div>
         <div v-else class="empty-state">
-          <md-icon>manage_search</md-icon><strong>没有匹配的记录</strong>
+          <EmptyState image="/images/empty-looking-for-answers.svg">
+            <template #title>没有匹配的记录</template>
+            尝试调整搜索或筛选条件。
+          </EmptyState>
           <md-text-button v-if="search || mode !== 'all' || selectedMemberId !== null || selectedMemberIds.length" @click="clearFilters">清除筛选</md-text-button>
         </div>
       </section>
@@ -484,7 +490,7 @@ onBeforeUnmount(() => {
 .panel-heading h2 { margin: 0; font-size: 14px; font-weight: 650; }
 .panel-heading span { color: var(--md-sys-color-on-surface-variant); font-size: 10px; }
 .panel-heading > md-icon { color: var(--md-sys-color-on-surface-variant); }
-.member-list { max-height: min(650px, calc(100vh - var(--app-bar-height) - 150px)); max-height: min(650px, calc(100dvh - var(--app-bar-height) - 150px)); overflow: auto; padding: 6px; scrollbar-width: thin; }
+.member-list { max-height: min(650px, calc(100vh - var(--app-bar-height) - 150px)); max-height: min(650px, calc(100dvh - var(--app-bar-height) - 150px)); overflow: auto; padding: 6px; }
 .member-item { width: 100%; min-height: 58px; display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 7px 9px; border: 0; border-radius: 6px; color: var(--md-sys-color-on-surface); background: transparent; font: inherit; text-align: left; cursor: pointer; transition: background-color var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard), color var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-standard); }
 .member-item:hover { background: color-mix(in srgb, var(--md-sys-color-on-surface) var(--md-sys-state-hover-state-layer-opacity), transparent); }
 .member-item--selected { color: var(--md-sys-color-on-primary-container); background: var(--md-sys-color-primary-container); }

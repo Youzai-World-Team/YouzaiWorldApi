@@ -48,6 +48,7 @@ const clearing = ref(false)
 const composeDialog = ref<HTMLElement | null>(null)
 const deleteDialog = ref<HTMLElement | null>(null)
 const clearDialog = ref<HTMLElement | null>(null)
+const chatTableWrap = ref<HTMLElement | null>(null)
 
 const { showToast } = useToast()
 const { apply: applyDialogAnimation } = useDialogAnimation()
@@ -198,7 +199,7 @@ async function confirmClear() {
 </script>
 
 <template>
-  <div class="page">
+  <div class="page api-redesign-page chat-page">
     <div class="page-heading">
       <h1 class="page-title">聊天区</h1>
       <md-icon-button :href="publicEndpoint" target="_blank" rel="noopener" aria-label="打开数据 API" title="打开数据 API">
@@ -232,7 +233,7 @@ async function confirmClear() {
         </div>
       </div>
 
-      <div class="table-wrap">
+      <div ref="chatTableWrap" class="table-wrap">
         <table class="chat-table">
           <thead>
             <tr>
@@ -269,6 +270,7 @@ async function confirmClear() {
           </tbody>
         </table>
       </div>
+      <AppScrollbar :target="chatTableWrap" axis="horizontal" label="聊天记录表格横向滚动条" />
       <EmptyState v-if="loading" :illustrated="false">加载中…</EmptyState>
       <EmptyState v-else-if="messages.length === 0" image="/images/empty-live-support.svg">暂无留言记录</EmptyState>
     </div>
