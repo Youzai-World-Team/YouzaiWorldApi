@@ -5,6 +5,7 @@ import {
   adminPageKeyForPath,
   adminPagePermissionNotice,
 } from '#shared/admin-page-permissions'
+import { WEB_ASSET_BASE_URL } from '#shared/web-assets'
 import type { ThemeMode } from '../composables/useThemeTransition'
 
 const route = useRoute()
@@ -201,7 +202,7 @@ watch(() => route.path, () => {
       <md-icon-button class="menu-button" aria-label="菜单" @click="toggleDrawer">
         <md-icon>menu</md-icon>
       </md-icon-button>
-      <img class="app-logo" src="/images/uzw-tm.png" alt="悠哉世界" />
+      <img class="app-logo" :src="`${WEB_ASSET_BASE_URL}/images/uzw-tm.png`" alt="悠哉世界" />
       <div class="app-bar-actions">
         <md-icon-button :aria-label="themeButtonLabel" :title="themeModeLabel" @click="toggleTheme">
           <Transition name="icon-swap" mode="out-in">

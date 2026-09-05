@@ -9,7 +9,8 @@ import {
   type VerificationEmailTemplateKind,
 } from '../../utils/email-templates'
 import { addEmailPreviewScrollbar } from '../../utils/email-preview-scrollbar'
-import { getRequestURL } from 'h3'
+import { webAssetUrl } from '#shared/web-assets'
+
 export default defineEventHandler(async (event) => {
   const user = requirePagePermission(event, 'game-accounts', 'view')
   const body = await readBody<any>(event)
@@ -30,6 +31,6 @@ export default defineEventHandler(async (event) => {
     template,
     user.fullName || user.username,
     '123456',
-    `${getRequestURL(event).origin}/images/uzw-tm.png`,
+    webAssetUrl('/images/uzw-tm.png'),
   ))
 })

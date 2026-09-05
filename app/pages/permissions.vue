@@ -20,6 +20,14 @@ interface PermissionUser {
   isActive: boolean
   permissions: Record<string, AdminPagePermissionLevel>
   featurePermissions: Record<string, AdminFeaturePermissionLevel>
+  domainMail: DomainMailPermission | null
+}
+
+interface DomainMailPermission {
+  defaultPrefix: string
+  prefixes: string[]
+  effectivePrefixes: string[]
+  allMailboxes: boolean
 }
 
 interface PermissionResponse {
@@ -36,6 +44,7 @@ const users = ref<PermissionUser[]>([])
 const selectedUserIds = ref<number[]>([])
 const drafts = ref<Record<string, DraftPermissionLevel>>({})
 const featureDrafts = ref<Record<string, DraftPermissionLevel>>({})
+const domainMailPrefixDraft = ref('')
 const expandedParents = ref<Set<string>>(new Set())
 const userKeyword = ref('')
 const loading = ref(true)
@@ -76,6 +85,7 @@ const hasDraftChanges = computed(() => {
   if (!user) return false
   return pages.value.some((page) => drafts.value[page.key] !== user.permissions[page.key])
     || features.value.some((feature) => featureDrafts.value[feature.key] !== user.featurePermissions[feature.key])
+    || (user.domainMail !== null && domainMailPrefixDraft.value !== user.domainMail.prefixes.join(', '))
 })
 
 function resetDrafts() {
@@ -83,15 +93,25 @@ function resetDrafts() {
   if (user) {
     drafts.value = { ...user.permissions }
     featureDrafts.value = { ...user.featurePermissions }
+    domainMailPrefixDraft.value = user.domainMail?.prefixes.join(', ') || ''
     return
   }
   if (bulkMode.value) {
     drafts.value = Object.fromEntries(pages.value.map((page) => [page.key, 'unchanged']))
     featureDrafts.value = Object.fromEntries(features.value.map((feature) => [feature.key, 'unchanged']))
+    domainMailPrefixDraft.value = ''
     return
   }
   drafts.value = {}
   featureDrafts.value = {}
+  domainMailPrefixDraft.value = ''
+}
+
+function normalizedDomainMailPrefixes(value: string): string[] {
+  return [...new Set(value
+    .split(/[\s,，]+/)
+    .map((prefix) => prefix.trim().toLocaleLowerCase('en-US'))
+    .filter(Boolean))]
 }
 
 function isSelected(user: PermissionUser) {
@@ -264,7 +284,11 @@ async function savePermissions() {
     const user = selectedUser.value!
     const updated = await $fetch<PermissionUser>(`/api/admin/permissions/${user.id}`, {
       method: 'PATCH',
-      body: { permissions: drafts.value, featurePermissions: featureDrafts.value },
+      body: {
+        permissions: drafts.value,
+        featurePermissions: featureDrafts.value,
+        domainMailPrefixes: normalizedDomainMailPrefixes(domainMailPrefixDraft.value),
+      },
     })
     replaceUsers([updated])
     resetDrafts()
@@ -516,6 +540,37 @@ onMounted(loadPermissions)
               </Transition>
             </div>
           </div>
+
+          <section v-if="selectedUser?.domainMail" class="domain-mail-permission-section" aria-labelledby="domain-mail-permission-title">
+            <div class="permission-section-heading">
+              <div>
+                <span class="section-overline">域名邮件</span>
+                <h3 id="domain-mail-permission-title">收件可见范围</h3>
+              </div>
+              <md-icon v-if="selectedUser.domainMail.allMailboxes" class="domain-mail-permission-owner" title="初始所有者可查看全部邮箱">all_inbox</md-icon>
+            </div>
+            <div v-if="selectedUser.domainMail.allMailboxes" class="domain-mail-permission-owner-note">
+              <md-icon>verified_user</md-icon>
+              初始所有者可以查看全部域名邮件，无需配置追加前缀。
+            </div>
+            <template v-else>
+              <div class="domain-mail-permission-fields">
+                <md-outlined-text-field
+                  class="domain-mail-permission-input"
+                  label="追加可见邮件前缀"
+                  supporting-text="多个前缀用逗号或空格分隔，按开头匹配，例如 support、team"
+                  :value="domainMailPrefixDraft"
+                  :disabled="!canEditSelection"
+                  @input="domainMailPrefixDraft = ($event.target as HTMLInputElement).value"
+                ></md-outlined-text-field>
+                <div class="domain-mail-permission-default">
+                  <span>始终可见</span>
+                  <strong>{{ selectedUser.domainMail.defaultPrefix }}@mcyzw.top</strong>
+                </div>
+              </div>
+              <p class="domain-mail-permission-note">追加范围只影响收件查看，不改变普通用户的发信地址或发信权限。修改后使用上方“保存权限”按钮保存。</p>
+            </template>
+          </section>
         </section>
         <section v-else class="card permission-empty-state">
           <EmptyState image="/images/permission-private-data.svg">
@@ -626,6 +681,68 @@ onMounted(loadPermissions)
 .permission-list {
   display: grid;
   margin-top: 8px;
+}
+
+.domain-mail-permission-section {
+  margin-top: 24px;
+  padding-top: 18px;
+  border-top: 1px solid var(--permission-panel-border);
+}
+
+.domain-mail-permission-owner {
+  color: var(--md-sys-color-primary);
+}
+
+.domain-mail-permission-owner-note {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 12px;
+  color: var(--md-sys-color-primary);
+  font-size: 12px;
+}
+
+.domain-mail-permission-owner-note md-icon {
+  --md-icon-size: 17px;
+}
+
+.domain-mail-permission-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, .45fr);
+  align-items: center;
+  gap: 16px;
+  margin-top: 12px;
+}
+
+.domain-mail-permission-input {
+  width: 100%;
+  min-width: 0;
+}
+
+.domain-mail-permission-default {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: 7px;
+  background: var(--md-sys-color-surface-container);
+}
+
+.domain-mail-permission-default span,
+.domain-mail-permission-note {
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 11px;
+}
+
+.domain-mail-permission-default strong {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.domain-mail-permission-note {
+  margin: 9px 0 0;
+  line-height: 1.55;
 }
 
 .permission-section-title {
@@ -804,6 +921,11 @@ onMounted(loadPermissions)
 
   .permission-heading md-filled-button {
     width: 100%;
+  }
+
+  .domain-mail-permission-fields {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
   }
 }
 

@@ -12,7 +12,13 @@ export default defineNuxtConfig({
   },
   css: ['~/assets/css/main.css'],
   nitro: {
-    errorHandler: '~~/server/error-handler'
+    errorHandler: '~~/server/error-handler',
+    experimental: {
+      tasks: true
+    },
+    scheduledTasks: {
+      '*/5 * * * *': ['status:archive']
+    }
   },
   vue: {
     compilerOptions: {
@@ -33,7 +39,8 @@ export default defineNuxtConfig({
       ],
       link: [
         { rel: 'manifest', href: '/manifest.webmanifest' },
-        { rel: 'apple-touch-icon', sizes: '192x192', href: '/pwa/icon-192.png' },
+        { rel: 'icon', href: 'https://assets.mcyzw.top/favicon.ico' },
+        { rel: 'apple-touch-icon', sizes: '192x192', href: 'https://assets.mcyzw.top/pwa/icon-192.png' },
         {
           rel: 'stylesheet',
           href: 'https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200'

@@ -1,4 +1,5 @@
 import { EMAIL_PREVIEW_SCROLLBAR_CSS } from './email-preview-scrollbar'
+import { webAssetUrl } from '#shared/web-assets'
 
 interface SanitizedMailHtml {
   html: string
@@ -7,7 +8,7 @@ interface SanitizedMailHtml {
   truncated?: boolean
 }
 
-const DOMAIN_MAIL_TEMPLATE_LOGO_URL = 'https://assets.mcyzw.top/images/uzw-tm.png'
+const DOMAIN_MAIL_TEMPLATE_LOGO_URL = webAssetUrl('/images/uzw-tm.png')
 
 function normalizedOrigin(value: string): string {
   try {
@@ -22,7 +23,9 @@ function readerContent(content: SanitizedMailHtml, origin: string): SanitizedMai
   if (!origin) return content
   return {
     ...content,
-    html: content.html.replaceAll(DOMAIN_MAIL_TEMPLATE_LOGO_URL, `${origin}/api/domain-mail-logo`),
+    html: content.html
+      .replaceAll(DOMAIN_MAIL_TEMPLATE_LOGO_URL, `${origin}/api/domain-mail-logo`)
+      .replaceAll('/images/uzw-tm.png', `${origin}/api/domain-mail-logo`),
   }
 }
 

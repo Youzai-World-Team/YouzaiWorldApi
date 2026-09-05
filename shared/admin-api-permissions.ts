@@ -4,6 +4,9 @@ export function pageKeyForApi(path: string): string | undefined {
   if (path.startsWith('/api/admin/permissions')) return 'permissions'
   if (path.startsWith('/api/admin/users')) return 'admin-users'
   if (path.startsWith('/api/admin/audit-logs')) return 'audit-logs'
+  // Must be matched before the generic status endpoint: history retention is
+  // managed from Site Settings and uses that page's edit permission.
+  if (path.startsWith('/api/admin/status-history')) return 'settings'
   if (path.startsWith('/api/admin/status')) return 'status'
   if (path.startsWith('/api/admin/turnstile')
     || path.startsWith('/api/admin/password-policy')

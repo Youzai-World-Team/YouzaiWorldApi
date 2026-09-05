@@ -8,6 +8,9 @@ import {
   type AdminPagePermissionLevel,
 } from '#shared/admin-page-permissions'
 import type { PasswordExpiryStatus } from '#shared/password-policy'
+import { WEB_ASSET_BASE_URL } from '#shared/web-assets'
+
+const defaultOwnerAvatar = `${WEB_ASSET_BASE_URL}/favicon.ico`
 
 const passwordDialogOpen = ref(false)
 
@@ -313,7 +316,7 @@ async function restoreOwnerAvatar() {
   try {
     const result = await $fetch<{ user: CurrentUser }>('/api/auth/avatar', {
       method: 'POST',
-      body: { avatar: '/favicon.ico' },
+      body: { avatar: defaultOwnerAvatar },
     })
     currentUser.value = result.user
     window.dispatchEvent(new CustomEvent('admin-profile-updated', { detail: result.user }))
@@ -378,7 +381,7 @@ async function logout() {
               <md-icon slot="icon">upload</md-icon>
               设置头像
             </md-text-button>
-            <md-text-button v-if="canChangeAvatar && currentUser?.avatar && currentUser.isOwner && currentUser.avatar !== '/favicon.ico'" :disabled="uploadingAvatar" @click="restoreOwnerAvatar">
+            <md-text-button v-if="canChangeAvatar && currentUser?.avatar && currentUser.isOwner && currentUser.avatar !== defaultOwnerAvatar" :disabled="uploadingAvatar" @click="restoreOwnerAvatar">
               <md-icon slot="icon">restore</md-icon>
               恢复默认
             </md-text-button>

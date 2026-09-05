@@ -1,4 +1,9 @@
-import { recordAudit, requireOwner, updateAdminPermissions } from '../../../utils/db'
+import {
+  getDomainMailAccessUser,
+  recordAudit,
+  requireOwner,
+  updateAdminPermissions,
+} from '../../../utils/db'
 
 export default defineEventHandler(async (event) => {
   const actor = requireOwner(event)
@@ -9,12 +14,17 @@ export default defineEventHandler(async (event) => {
   const body = await readBody<{
     permissions?: Record<string, unknown>
     featurePermissions?: Record<string, unknown>
+    domainMailPrefixes?: unknown
   }>(event)
   const user = updateAdminPermissions(
     userId,
     body?.permissions || {},
     body?.featurePermissions || {},
+    body?.domainMailPrefixes,
   )
-  recordAudit(event, actor, `更新后台用户权限：${user.username}`)
-  return user
+  const domainMail = getDomainMailAccessUser(user.id)
+  recordAudit(event, actor, body?.domainMailPrefixes === undefined
+    ? `更新后台用户权限：${user.username}`
+    : `更新后台用户权限及域名邮件追加可见前缀：${user.username}`)
+  return { ...user, domainMail: domainMail || null }
 })

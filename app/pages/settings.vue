@@ -50,6 +50,12 @@ interface McsmProbe {
   message: string
 }
 
+interface StatusHistoryStats {
+  count: number
+  oldestAt: number | null
+  latestAt: number | null
+}
+
 const endpoint = '/api/admin/turnstile'
 
 const loading = ref(true)
@@ -70,6 +76,9 @@ const mcsmProbe = ref<McsmProbe | null>(null)
 const showMcsmApiKey = ref(false)
 const mcsmLoading = ref(true)
 const savingMcsm = ref(false)
+const statusHistoryLoading = ref(true)
+const statusHistoryClearing = ref(false)
+const statusHistoryStats = ref<StatusHistoryStats>({ count: 0, oldestAt: null, latestAt: null })
 const securityEntryInput = ref('')
 const currentSecurityEntry = ref('')
 const securityEntryLoading = ref(true)
@@ -133,7 +142,40 @@ onMounted(() => {
   void loadSecrets()
   void loadPasswordPolicySettings()
   void loadPasswordExpirySettings()
+  void loadStatusHistoryStats()
 })
+
+async function loadStatusHistoryStats() {
+  statusHistoryLoading.value = true
+  try {
+    statusHistoryStats.value = await $fetch<StatusHistoryStats>('/api/admin/status-history')
+  } catch (e: any) {
+    showToast(e?.data?.statusMessage || '状态历史统计加载失败', 'error')
+  } finally {
+    statusHistoryLoading.value = false
+  }
+}
+
+function formatStatusHistoryTime(timestamp: number | null): string {
+  if (!timestamp) return '暂无'
+  const value = new Date(timestamp)
+  return Number.isNaN(value.getTime()) ? '暂无' : value.toLocaleString('zh-CN')
+}
+
+async function clearStatusHistoryData() {
+  if (statusHistoryClearing.value || !canEditPage.value) return
+  if (!window.confirm('确定清除 API 服务端保存的全部服务器状态历史数据吗？此操作无法撤销，但不会删除 Worker 中最近 72 小时的数据。')) return
+  statusHistoryClearing.value = true
+  try {
+    await $fetch('/api/admin/status-history', { method: 'DELETE' })
+    showToast('服务器状态历史数据已清除')
+    await loadStatusHistoryStats()
+  } catch (e: any) {
+    showToast(e?.data?.statusMessage || '清除状态历史数据失败', 'error')
+  } finally {
+    statusHistoryClearing.value = false
+  }
+}
 
 // 三块密钥/凭据都要先拿到最新的功能权限才知道能不能读，所以共用一次 /api/auth/me。
 async function loadSecrets() {
@@ -929,6 +971,34 @@ function generateInboundMailKey() {
             {{ saving === 'chat' ? '保存中…' : '保存' }}
           </md-filled-button>
         </div>
+      </div>
+    </section>
+
+    <section class="card settings-card">
+      <h2 class="card-title">服务器状态历史</h2>
+      <p class="card-note">后台每次读取状态时会将 Worker 的监控样本保存到 API 服务端数据库，可长期保留。清除后不会重新导入清除时点之前的样本，新产生的状态仍会继续保存。</p>
+      <dl class="password-policy-details status-history-details">
+        <div>
+          <dt>记录数量</dt>
+          <dd>{{ statusHistoryLoading ? '加载中…' : statusHistoryStats.count }}</dd>
+        </div>
+        <div>
+          <dt>最早记录</dt>
+          <dd>{{ statusHistoryLoading ? '加载中…' : formatStatusHistoryTime(statusHistoryStats.oldestAt) }}</dd>
+        </div>
+        <div>
+          <dt>最近记录</dt>
+          <dd>{{ statusHistoryLoading ? '加载中…' : formatStatusHistoryTime(statusHistoryStats.latestAt) }}</dd>
+        </div>
+      </dl>
+      <div v-if="canEditPage" class="form-actions">
+        <md-filled-button
+          :disabled="statusHistoryLoading || statusHistoryClearing || !statusHistoryStats.count"
+          @click="clearStatusHistoryData"
+        >
+          <md-icon slot="icon">delete_sweep</md-icon>
+          {{ statusHistoryClearing ? '清除中…' : '清除历史状态数据' }}
+        </md-filled-button>
       </div>
     </section>
 

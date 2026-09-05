@@ -25,7 +25,7 @@ export default defineEventHandler((event) => {
       || event.path === '/api/deploy'
       ? 'no-store'
       : 'no-cache',
-    'Content-Security-Policy': "default-src 'self'; base-uri 'self'; connect-src 'self' https://mcyzw.top https://challenges.cloudflare.com; font-src 'self' https://fonts.gstatic.com data:; form-action 'self'; frame-ancestors 'none'; frame-src 'self' https://challenges.cloudflare.com; img-src 'self' data: blob: https://mcyzw.top https://assets.mcyzw.top https://*.mcyzw.top; object-src 'none'; script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    'Content-Security-Policy': "default-src 'self'; base-uri 'self'; connect-src 'self' https://mcyzw.top https://challenges.cloudflare.com; font-src 'self' https://fonts.gstatic.com https://assets.mcyzw.top data:; form-action 'self'; frame-ancestors 'none'; frame-src 'self' https://challenges.cloudflare.com; img-src 'self' data: blob: https://mcyzw.top https://assets.mcyzw.top https://*.mcyzw.top; media-src 'self' https://assets.mcyzw.top; object-src 'none'; script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     'Cross-Origin-Opener-Policy': 'same-origin',
     'Cross-Origin-Resource-Policy': event.path.startsWith('/api/update/') ? 'cross-origin' : 'same-site',
     'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=()',

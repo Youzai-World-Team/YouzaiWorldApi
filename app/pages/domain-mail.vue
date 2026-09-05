@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { webAssetUrl } from '#shared/web-assets'
 
 useHead({ title: '域名邮件' })
 
@@ -320,9 +321,9 @@ function buildFrameDocument(item: MailDetail): string {
   const nonce = crypto.randomUUID().replace(/-/g, '')
   const origin = window.location.origin
   const html = item.htmlSafe.replaceAll(
-    'https://assets.mcyzw.top/images/uzw-tm.png',
+    webAssetUrl('/images/uzw-tm.png'),
     `${origin}/api/domain-mail-logo`,
-  )
+  ).replaceAll('/images/uzw-tm.png', `${origin}/api/domain-mail-logo`)
   const csp = `default-src 'none'; img-src data: ${origin} https://mcyzw.top https://assets.mcyzw.top https://*.mcyzw.top; style-src 'unsafe-inline'; `
     + `font-src data:; script-src 'nonce-${nonce}'; form-action 'none'; base-uri 'none'`
   return '<!doctype html><html><head><meta charset="utf-8">'
@@ -960,9 +961,9 @@ function readerInitial(reader: MailReader) {
           </div>
         </article>
       </div>
-      <div v-else-if="mails.length === 0" class="mail-state">
-        <md-icon>inbox</md-icon><strong>暂无域名邮件</strong>
-      </div>
+      <EmptyState v-else-if="mails.length === 0" class="mail-state" image="/images/empty-personal-notes.svg">
+        暂无域名邮件
+      </EmptyState>
       <div v-else class="mail-state">
         <md-icon>manage_search</md-icon><strong>没有匹配的邮件</strong>
         <md-text-button @click="keyword = ''; mailboxFilter = ''; readFilter = 'all'">清除筛选</md-text-button>
@@ -1356,9 +1357,9 @@ function readerInitial(reader: MailReader) {
 .overview-item span:last-child { color: var(--md-sys-color-on-surface-variant); font-size: 10px; }
 
 .mail-workspace { min-width: 0; overflow: hidden; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 8px; background: var(--md-sys-color-surface-container); }
-.mail-toolbar { min-width: 0; display: grid; grid-template-columns: minmax(220px, 1fr) 180px auto auto; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--md-sys-color-outline-variant); }
+.mail-toolbar { min-width: 0; display: grid; grid-template-columns: minmax(220px, 1fr) 180px max-content max-content; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--md-sys-color-outline-variant); }
 .search, .mailbox-select { width: 100%; min-width: 0; }
-.read-filter { height: var(--app-control-height); display: inline-grid; grid-auto-flow: column; grid-auto-columns: max-content; align-items: center; padding: 3px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 7px; background: var(--md-sys-color-surface); }
+.read-filter { height: var(--app-control-height); width: max-content; justify-self: start; display: inline-grid; grid-auto-flow: column; grid-auto-columns: max-content; align-items: center; padding: 3px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 7px; background: var(--md-sys-color-surface); }
 .read-filter button { height: 32px; display: inline-flex; align-items: center; gap: 6px; padding: 0 11px; border: 0; border-radius: 5px; color: var(--md-sys-color-on-surface-variant); background: transparent; font-family: inherit; font-size: 11px; font-weight: 500; cursor: pointer; }
 .read-filter button:hover { color: var(--md-sys-color-on-surface); background: color-mix(in srgb, var(--md-sys-color-on-surface) var(--md-sys-state-hover-state-layer-opacity), transparent); }
 .read-filter button.read-filter--active { color: var(--md-sys-color-on-primary-container); background: var(--md-sys-color-primary-container); }
@@ -1581,7 +1582,7 @@ function readerInitial(reader: MailReader) {
   .heading-actions md-filled-button { flex: 1; }
   .mail-toolbar { grid-template-columns: minmax(0, 1fr); }
   .read-filter, .result-count { justify-self: stretch; }
-  .read-filter { grid-auto-columns: 1fr; }
+  .read-filter { width: auto; grid-auto-columns: 1fr; }
   .result-count { text-align: right; }
   .detail-dialog-content { width: 100%; min-height: 0; }
   .detail-sidebar { grid-template-columns: minmax(0, 1fr); }

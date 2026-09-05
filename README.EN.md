@@ -31,7 +31,7 @@
 | **Survival players** | Benefit indirectly through the mod's register / login / mail / title / cosmetic features; can speak in the website chat as players |
 | **Web developers** | Understand the full-stack architecture, extend the API, or contribute code |
 
-> **Technical note**: This project is a server-rendered application with APIs (not a static site); production runs `.output/server/index.mjs`. All runtime data (the SQLite database and uploaded files) lives under `server/data/` and is never touched by deployments.
+> **Technical note**: This project is a server-rendered application with APIs (not a static site); production runs `.output/server/index.mjs`. All runtime data (the SQLite database and uploaded files) lives under `server/data/` and is never touched by deployments. Dashboard images, icons, and PWA artwork are hosted centrally at `https://assets.mcyzw.top/`; the local `public/` directory only retains the same-origin manifest, Service Worker, and robots.txt.
 
 ---
 
@@ -82,6 +82,7 @@ A complete account system for offline-mode Minecraft servers, consumed by the Yo
 - **Inbound**: Cloudflare Email Routing delivers via an Email Worker that parses MIME and signs requests with an independent key to `/api/inbound-mail`; the server applies "never trust upstream" boundary checks (sizes, counts, encodings, attachment budgets) before persisting; the latest 2,000 messages are retained
 - **Outbound**: a visual HTML composer in the dashboard (templates + placeholders + attachments), pre-send preview, EML export, attachment downloads; sending goes through a **native SMTP client** (`server/utils/smtp.ts`, supporting none / STARTTLS / TLS)
 - **Read management**: per-admin read states with a live unread badge in the sidebar
+- **Visibility scopes**: each non-owner always retains the mailbox matching their username (for example, `zhangshan@mcyzw.top`); the initial owner can append one or more local-part prefixes per user from the **Permissions** page (prefixes are additive and an empty list adds nothing), and the same scope is enforced for details, attachments, EML/HTML exports, unread counts, and deletion. These additions affect inbound viewing only and never grant a non-owner permission to send as another address
 - **The inbound key is independent from the game API key**: a compromised Email Worker can only write incoming mail and can never touch `/api/game/*`
 
 ### 7. Server Management (MCSManager Gateway)
@@ -103,6 +104,15 @@ A complete account system for offline-mode Minecraft servers, consumed by the Yo
 | `/api/updates` + `/api/update/[key]` | Update service: query latest version, type, forced-update flag, release date and changelog by key — **consumed by the mod / modpack update checker** |
 | `/api/downloads` | Download projects (modpacks / mods: name / URL / version / description), managed from the dashboard |
 | `/api/chat*` | Website chat: guests post behind Turnstile (nickname 2–16 chars, content 2–200 chars, 5 messages / minute, latest 500 retained); game players speak with account login (role badge + avatar); admins moderate / delete / clear; IP geolocation cached 7 days by hash |
+
+### Server Status Worker
+
+The website status page and this dashboard use the Cloudflare Worker at `https://status.mcyzw.top`:
+
+- `GET /api/status`: current website, API, assets, mail service, EQAD-003 node, and Minecraft status;
+- `GET /api/status/history?hours=72`: up to 72 hours of five-minute samples retained in the Worker's D1 database;
+- the API server synchronizes every five minutes, while `GET /api/admin/status` also performs a catch-up sync into the local SQLite `status_history` table; the complete history can be cleared from Site Settings, and a clear-time watermark prevents older samples from being imported again;
+- `YZWC_STATUS_WORKER_URL` overrides the Worker URL in a deployment environment (see `.env.example`).
 
 ### 9. Automated Deployment
 
@@ -176,6 +186,7 @@ Full annotated reference in [`.env.example`](./.env.example); key items:
 | `YZWC_IP_GEO_DISABLED` / `YZWC_MOJANG_DISABLED` | Disable IP geolocation / Mojang outbound calls | unset = enabled |
 | `YZWC_ADMIN_USERNAME` / `YZWC_ADMIN_PASSWORD` / `YZWC_ADMIN_ENTRY` | Unattended OOBE initialization | none (page-guided) |
 | `YZWC_GAME_SESSION_TTL_SECONDS` | Game session duration | 43200 (12 hours, 24-hour maximum) |
+| `YZWC_STATUS_WORKER_URL` | Status Worker current/history endpoint | `https://status.mcyzw.top/api/status` |
 
 > The production runtime does not read `.env` (development-only convenience); secret-type settings should be saved on the dashboard's Site Settings page (persisted to the database `settings` table, which takes priority over environment variables).
 
@@ -199,7 +210,7 @@ YouzaiWorldApi/
 │   ├── utils/              # db.ts (core) + MCSM / SMTP / mail / Mojang / deploy modules
 │   └── data/               # Runtime data (gitignored): database.db, uploads/
 ├── shared/                 # Client/server shared: page permission model, API permission mapping, password policy, device detection
-└── public/                 # PWA icons and static assets
+└── public/                 # Same-origin manifest, Service Worker and robots.txt
 ```
 
 ---

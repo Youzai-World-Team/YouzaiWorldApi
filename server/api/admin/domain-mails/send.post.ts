@@ -32,6 +32,7 @@ export default defineEventHandler(async (event) => {
   const html = rendered.html
   const attachments = normalizeDomainMailAttachments(body?.attachments)
 
+  // 可见前缀只控制收件读取范围，不授予普通用户代发其它地址的权限。
   const senderAddress = user.isOwner
     ? requireDomainMailSenderAddress(body?.fromLocalPart ?? user.username)
     : `${user.username}@mcyzw.top`.toLowerCase()

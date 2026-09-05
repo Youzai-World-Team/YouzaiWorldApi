@@ -672,7 +672,9 @@ onBeforeUnmount(() => {
               <div slot="supporting-text">{{ item.statusLabel }} · {{ item.hostIp || item.remarks }}</div>
             </md-select-option>
           </md-outlined-select>
-          <p v-else class="empty">当前 ApiKey 名下没有任何实例。</p>
+          <EmptyState v-else image="/images/empty-monitoring-data.svg">
+            当前 ApiKey 名下没有任何实例。
+          </EmptyState>
 
           <div v-if="panelUser" class="panel-meta">
             <span>面板账户 <strong>{{ panelUser.userName }}</strong>（{{ panelUser.permissionLabel }}）</span>

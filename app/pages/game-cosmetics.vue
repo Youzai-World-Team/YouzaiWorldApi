@@ -347,7 +347,7 @@ onMounted(() => {
       </div>
 
       <p v-if="loading" class="empty">加载中…</p>
-      <p v-else-if="!rows.length" class="empty">暂无游戏账户</p>
+      <EmptyState v-else-if="!rows.length" image="/images/empty-profile.svg">暂无游戏账户</EmptyState>
       <p v-else-if="!filtered.length" class="empty">没有匹配的账户</p>
       <div v-else class="grid">
         <article

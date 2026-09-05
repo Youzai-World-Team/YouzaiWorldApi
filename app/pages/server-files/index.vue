@@ -713,9 +713,11 @@ onBeforeUnmount(() => {
 
     <p v-if="loading" class="empty">正在读取面板信息…</p>
 
-    <section v-else-if="!configured" class="card">
-      <h2 class="card-title">尚未连接 MCSM 面板</h2>
-      <p class="card-note">请先到「站点设置」页填写 MCSManager 的面板地址与 ApiKey。</p>
+    <section v-else-if="!configured" class="card server-files-setup-empty">
+      <EmptyState image="/images/empty-looking-for-answers.svg">
+        <template #title>尚未连接 MCSM 面板</template>
+        请先到「站点设置」页填写 MCSManager 的面板地址与 ApiKey。
+      </EmptyState>
       <div class="form-actions">
         <md-filled-button @click="goToSettings">
           <md-icon slot="icon">settings</md-icon>
@@ -743,7 +745,9 @@ onBeforeUnmount(() => {
             <div slot="supporting-text">{{ item.statusLabel }} · {{ item.hostIp || item.remarks }}</div>
           </md-select-option>
         </md-outlined-select>
-        <p v-else class="empty">当前 ApiKey 名下没有任何实例。</p>
+        <EmptyState v-else image="/images/empty-monitoring-data.svg">
+          当前 ApiKey 名下没有任何实例。
+        </EmptyState>
       </section>
 
       <section

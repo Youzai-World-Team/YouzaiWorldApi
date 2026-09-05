@@ -3,11 +3,11 @@ import { domainMailContentDisposition, domainMailHtmlFileName } from '../../../u
 import { UUID_RE } from '../../../utils/game-input'
 
 export default defineEventHandler((event) => {
-  requireAuth(event)
+  const user = requireAuth(event)
   const mailId = String(getQuery(event).mail || '').trim().toLowerCase()
   if (!UUID_RE.test(mailId)) throw createError({ statusCode: 400, statusMessage: '邮件 ID 格式不正确' })
 
-  const detail = getDomainMailDetail(mailId)
+  const detail = getDomainMailDetail(mailId, user.id)
   if (!detail) throw createError({ statusCode: 404, statusMessage: '邮件不存在' })
   if (!detail.htmlBody) throw createError({ statusCode: 404, statusMessage: '这封邮件没有 HTML 正文' })
 

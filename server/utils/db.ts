@@ -58,6 +58,7 @@ import {
   type PasswordExpiryPolicy,
   type PasswordExpiryStatus,
 } from '#shared/password-policy'
+import { WEB_ASSET_BASE_URL } from '#shared/web-assets'
 
 ensureDataDirs()
 
@@ -68,6 +69,15 @@ db.exec(`
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS status_history (
+    captured_at INTEGER PRIMARY KEY,
+    overall TEXT NOT NULL,
+    node_status TEXT NOT NULL,
+    minecraft_status TEXT NOT NULL,
+    snapshot_json TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS status_history_captured_idx
+    ON status_history (captured_at DESC);
   CREATE TABLE IF NOT EXISTS sessions (
     token TEXT PRIMARY KEY,
     time INTEGER NOT NULL,
@@ -433,6 +443,15 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS domain_mail_reads_mail_idx
     ON domain_mail_reads (mail_id, user_id);
+  CREATE TABLE IF NOT EXISTS domain_mail_prefix_permissions (
+    user_id INTEGER NOT NULL,
+    prefix TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, prefix)
+  );
+  CREATE INDEX IF NOT EXISTS domain_mail_prefix_permissions_user_idx
+    ON domain_mail_prefix_permissions (user_id, prefix);
 `)
 
 const defaultGameTitles = [
@@ -711,6 +730,7 @@ const PASSWORD_POLICY_ENABLED_SETTING = 'password_policy.enabled'
 const PASSWORD_POLICY_MINIMUM_SCORE_SETTING = 'password_policy.minimum_score'
 const PASSWORD_EXPIRY_ENABLED_SETTING = 'password_expiry.enabled'
 const PASSWORD_EXPIRY_DAYS_SETTING = 'password_expiry.days'
+const STATUS_HISTORY_CLEARED_AT_SETTING = 'status_history.cleared_at'
 const RESERVED_ADMIN_ENTRIES = new Set([
   'login', 'account', 'activity', 'donors', 'bans', 'updates', 'game-accounts',
   'game-cosmetics', 'game-account-email-templates', 'server-manage', 'server-files',
@@ -739,7 +759,7 @@ const MCSM_DEFAULT_BACKUP_DIR = '/backups'
 
 export const ADMIN_COOKIE_NAME = '__Host-yzwc_admin'
 const ADMIN_USER_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{2,31}$/
-const DEFAULT_ADMIN_AVATAR = '/favicon.ico'
+const DEFAULT_ADMIN_AVATAR = `${WEB_ASSET_BASE_URL}/favicon.ico`
 
 function all(sql: string, ...params: any[]) {
   return db.prepare(sql).all(...params) as Record<string, unknown>[]
@@ -763,6 +783,121 @@ export function setSetting(key: string, value: string) {
 
 export function deleteSetting(key: string) {
   run('DELETE FROM settings WHERE key = ?', key)
+}
+
+export interface StatusHistorySampleInput {
+  capturedAt: number
+  overall: string
+  nodeStatus: string
+  minecraftStatus: string
+  snapshot: unknown
+}
+
+export interface StatusHistoryStats {
+  count: number
+  oldestAt: number | null
+  latestAt: number | null
+}
+
+export function saveStatusHistorySamples(samples: StatusHistorySampleInput[]): number {
+  let saved = 0
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    const clearedAt = Number(getSetting(STATUS_HISTORY_CLEARED_AT_SETTING) || 0)
+    const statement = db.prepare(`
+      INSERT INTO status_history (captured_at, overall, node_status, minecraft_status, snapshot_json)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(captured_at) DO UPDATE SET
+        overall = excluded.overall,
+        node_status = excluded.node_status,
+        minecraft_status = excluded.minecraft_status,
+        snapshot_json = excluded.snapshot_json
+    `)
+    for (const sample of samples) {
+      const capturedAt = Number(sample.capturedAt)
+      if (!Number.isFinite(capturedAt) || capturedAt <= 0 || capturedAt <= clearedAt) continue
+      statement.run(
+        Math.trunc(capturedAt),
+        String(sample.overall || 'unknown'),
+        String(sample.nodeStatus || 'unknown'),
+        String(sample.minecraftStatus || 'unknown'),
+        JSON.stringify(sample.snapshot ?? null),
+      )
+      saved += 1
+    }
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+  return saved
+}
+
+export function getStatusHistoryPoints(fromTime = 0, max = 96): { time: number; status: 'online' | 'offline' }[] {
+  const limit = Number.isFinite(Number(max)) ? Math.max(0, Math.trunc(Number(max))) : 96
+  if (!limit) return []
+  const rows = all(`
+    SELECT captured_at, node_status
+    FROM status_history
+    WHERE captured_at >= ?
+    ORDER BY captured_at ASC
+  `, Math.max(0, Number(fromTime) || 0))
+  const points = rows
+    .map((row) => ({
+      time: Number(row.captured_at),
+      status: ['operational', 'degraded'].includes(String(row.node_status)) ? 'online' as const : 'offline' as const,
+    }))
+    .filter((point) => Number.isFinite(point.time) && point.time > 0)
+  if (points.length <= limit) return points
+  return Array.from({ length: limit }, (_, index) => {
+    const start = Math.floor(index * points.length / limit)
+    const end = Math.floor((index + 1) * points.length / limit)
+    const bucket = points.slice(start, Math.max(start + 1, end))
+    return {
+      time: bucket[bucket.length - 1]!.time,
+      status: bucket.some((point) => point.status === 'offline') ? 'offline' as const : 'online' as const,
+    }
+  })
+}
+
+export function getStatusHistoryStats(): StatusHistoryStats {
+  const row = get('SELECT COUNT(*) AS count, MIN(captured_at) AS oldest_at, MAX(captured_at) AS latest_at FROM status_history')
+  return {
+    count: Number(row?.count || 0),
+    oldestAt: row?.oldest_at == null ? null : Number(row.oldest_at),
+    latestAt: row?.latest_at == null ? null : Number(row.latest_at),
+  }
+}
+
+/**
+ * Return the most recent raw Worker snapshot for a short outage fallback.
+ * The payload is parsed here, then validated and normalized by the status
+ * adapter before it is ever returned to a client.
+ */
+export function getLatestStatusHistorySnapshot(): unknown | null {
+  const row = get('SELECT snapshot_json FROM status_history ORDER BY captured_at DESC LIMIT 1')
+  if (!row?.snapshot_json) return null
+  try {
+    return JSON.parse(String(row.snapshot_json))
+  } catch {
+    return null
+  }
+}
+
+export function clearStatusHistory(): number {
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    const result = db.prepare('DELETE FROM status_history').run()
+    db.prepare(`
+      INSERT INTO settings (key, value) VALUES (?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    `).run(STATUS_HISTORY_CLEARED_AT_SETTING, String(Date.now()))
+    db.exec('COMMIT')
+    return Number(result.changes || 0)
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
 }
 
 export function getPasswordPolicy(): PasswordPolicy {
@@ -1240,6 +1375,7 @@ export function updateAdminPermissions(
   userId: number,
   pageInput: Record<string, unknown>,
   featureInput: Record<string, unknown>,
+  domainMailPrefixes?: unknown,
 ): AdminUser {
   const current = getAdminUserById(userId)
   if (!current) throw createError({ statusCode: 404, statusMessage: '后台用户不存在' })
@@ -1250,10 +1386,21 @@ export function updateAdminPermissions(
     current.permissions,
     current.featurePermissions,
   )
+  const normalizedDomainMailPrefixes = domainMailPrefixes === undefined
+    ? undefined
+    : requireDomainMailPrefixes(domainMailPrefixes)
 
   db.exec('BEGIN IMMEDIATE')
   try {
-    writeAdminPermissions(userId, normalized.pages, normalized.features, Date.now())
+    const now = Date.now()
+    writeAdminPermissions(userId, normalized.pages, normalized.features, now)
+    if (normalizedDomainMailPrefixes !== undefined) {
+      run('DELETE FROM domain_mail_prefix_permissions WHERE user_id = ?', userId)
+      for (const prefix of normalizedDomainMailPrefixes) {
+        run(`INSERT INTO domain_mail_prefix_permissions (user_id, prefix, created_at, updated_at)
+             VALUES (?, ?, ?, ?)`, userId, prefix, now, now)
+      }
+    }
     db.exec('COMMIT')
   } catch (error) {
     db.exec('ROLLBACK')
@@ -1419,6 +1566,7 @@ export function createAdminUser(
 function requireAdminAvatar(value: unknown): string {
   const avatar = String(value ?? '').trim()
   if (!avatar) return ''
+  if (avatar === DEFAULT_ADMIN_AVATAR) return avatar
   if (!ADMIN_AVATAR_RE.test(avatar)) {
     throw createError({ statusCode: 400, statusMessage: '头像地址无效' })
   }
@@ -1542,6 +1690,7 @@ export function deleteAdminUser(userId: number): void {
   run('DELETE FROM admin_feature_permissions WHERE user_id = ?', userId)
   run('DELETE FROM admin_password_history WHERE user_id = ?', userId)
   clearAdminPresence(userId)
+  run('DELETE FROM domain_mail_prefix_permissions WHERE user_id = ?', userId)
   run('DELETE FROM domain_mail_reads WHERE user_id = ?', userId)
   run('DELETE FROM admin_users WHERE id = ?', userId)
 }
@@ -3107,6 +3256,9 @@ export function saveGameTitle(input: Partial<GameTitle> & Pick<GameTitle, 'id' |
     throw createError({ statusCode: 400, statusMessage: '贴图资源标识格式不正确' })
   }
   const fontId = String(input.fontId ?? existing?.fontId ?? 'youzaiworldcore:title').trim()
+  if (fontId.length > 128) {
+    throw createError({ statusCode: 400, statusMessage: '字体资源标识不能超过 128 个字符' })
+  }
   if (!/^[a-z0-9_.-]+:[a-z0-9_./-]+$/.test(fontId)) {
     throw createError({ statusCode: 400, statusMessage: '字体资源标识格式不正确' })
   }
@@ -4300,6 +4452,7 @@ export function initializeAdmin(
     run('DELETE FROM sessions')
     run('DELETE FROM admin_presence')
     run('DELETE FROM admin_password_history')
+    run('DELETE FROM domain_mail_prefix_permissions')
     run('DELETE FROM admin_users')
     const passwordHash = hashAdminPassword(rawPassword)
     const now = Date.now()
@@ -5142,6 +5295,154 @@ export interface DomainMailDetail extends DomainMailSummary {
   attachments: DomainMailAttachmentMeta[]
 }
 
+export interface DomainMailAccessUser {
+  id: number
+  username: string
+  avatar: string
+  fullName: string
+  isOwner: boolean
+  isActive: boolean
+  defaultPrefix: string
+  /** 由所有者配置的追加前缀；不含默认用户名邮箱。 */
+  prefixes: string[]
+  /** 默认用户名邮箱 + 追加前缀（默认项按精确匹配处理）。 */
+  effectivePrefixes: string[]
+  allMailboxes: boolean
+}
+
+const DOMAIN_MAIL_PREFIX_RE = /^[a-z0-9][a-z0-9._+-]{0,63}$/
+const DOMAIN_MAIL_PREFIX_LIMIT = 64
+
+function normalizeDomainMailPrefix(value: unknown, index: number): string {
+  const prefix = String(value ?? '').trim().toLocaleLowerCase('en-US')
+  if (!DOMAIN_MAIL_PREFIX_RE.test(prefix)) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: `第 ${index + 1} 个邮件前缀格式不正确，只能使用字母、数字、点、下划线、加号或连字符`,
+    })
+  }
+  return prefix
+}
+
+function requireDomainMailPrefixes(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    throw createError({ statusCode: 400, statusMessage: '邮件前缀列表格式不正确' })
+  }
+  if (value.length > DOMAIN_MAIL_PREFIX_LIMIT) {
+    throw createError({ statusCode: 400, statusMessage: `每位用户最多配置 ${DOMAIN_MAIL_PREFIX_LIMIT} 个邮件前缀` })
+  }
+  return [...new Set(value.map(normalizeDomainMailPrefix))]
+}
+
+function configuredDomainMailPrefixes(userId: number): string[] {
+  return all('SELECT prefix FROM domain_mail_prefix_permissions WHERE user_id = ? ORDER BY prefix', userId)
+    .map((row) => String(row.prefix ?? ''))
+    .filter(Boolean)
+}
+
+function mapDomainMailAccessUser(
+  row: Record<string, unknown>,
+  configuredPrefixes: string[],
+): DomainMailAccessUser {
+  const username = String(row.username ?? '')
+  const isOwner = Number(row.is_owner ?? 0) === 1
+  const defaultPrefix = username.toLocaleLowerCase('en-US')
+  const effectivePrefixes = isOwner
+    ? []
+    : [...new Set([defaultPrefix, ...configuredPrefixes])]
+  return {
+    id: Number(row.id),
+    username,
+    avatar: String(row.avatar ?? ''),
+    fullName: String(row.full_name ?? ''),
+    isOwner,
+    isActive: Number(row.is_active ?? 0) === 1,
+    defaultPrefix,
+    prefixes: configuredPrefixes,
+    effectivePrefixes,
+    allMailboxes: isOwner,
+  }
+}
+
+export function listDomainMailAccessUsers(): DomainMailAccessUser[] {
+  const prefixesByUser = new Map<number, string[]>()
+  for (const row of all('SELECT user_id, prefix FROM domain_mail_prefix_permissions ORDER BY user_id, prefix')) {
+    const userId = Number(row.user_id)
+    const prefixes = prefixesByUser.get(userId) || []
+    prefixes.push(String(row.prefix ?? ''))
+    prefixesByUser.set(userId, prefixes)
+  }
+  return all(`SELECT id, username, avatar, full_name, is_owner, is_active
+              FROM admin_users ORDER BY is_owner DESC, username COLLATE NOCASE`)
+    .map((row) => mapDomainMailAccessUser(row, prefixesByUser.get(Number(row.id)) || []))
+}
+
+export function getDomainMailAccessUser(userId: number): DomainMailAccessUser | undefined {
+  const row = get(`SELECT id, username, avatar, full_name, is_owner, is_active
+                   FROM admin_users WHERE id = ?`, userId)
+  return row ? mapDomainMailAccessUser(row, configuredDomainMailPrefixes(userId)) : undefined
+}
+
+export function updateDomainMailAccessPrefixes(userId: number, value: unknown): DomainMailAccessUser {
+  const row = get(`SELECT id, username, avatar, full_name, is_owner, is_active
+                   FROM admin_users WHERE id = ?`, userId)
+  if (!row) throw createError({ statusCode: 404, statusMessage: '后台用户不存在' })
+  if (Number(row.is_owner ?? 0) === 1) {
+    throw createError({ statusCode: 400, statusMessage: '初始所有者始终可以查看全部域名邮件' })
+  }
+
+  const prefixes = requireDomainMailPrefixes(value)
+  const now = Date.now()
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    run('DELETE FROM domain_mail_prefix_permissions WHERE user_id = ?', userId)
+    for (const prefix of prefixes) {
+      run(`INSERT INTO domain_mail_prefix_permissions (user_id, prefix, created_at, updated_at)
+           VALUES (?, ?, ?, ?)`, userId, prefix, now, now)
+    }
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+  return mapDomainMailAccessUser(row, prefixes)
+}
+
+interface DomainMailVisibilityFilter {
+  clause: string
+  params: Array<string | number>
+}
+
+function domainMailVisibilityFilter(userId: number): DomainMailVisibilityFilter {
+  const user = get('SELECT username, is_owner FROM admin_users WHERE id = ?', userId)
+  if (!user) return { clause: '1 = 0', params: [] }
+  if (Number(user.is_owner ?? 0) === 1) return { clause: '1 = 1', params: [] }
+
+  const configured = configuredDomainMailPrefixes(userId)
+  const defaultPrefix = String(user.username ?? '').toLocaleLowerCase('en-US')
+  // 用户名对应的邮箱始终保留精确匹配；所有者配置的项目只作为额外的“开头匹配”范围。
+  if (!configured.length) {
+    return {
+      clause: 'lower(m.mailbox) = ?',
+      params: [defaultPrefix],
+    }
+  }
+  const prefixes = configured
+  return {
+    clause: `(lower(m.mailbox) = ? OR ${prefixes.map(() => 'substr(lower(m.mailbox), 1, ?) = ?').join(' OR ')})`,
+    params: [defaultPrefix, ...prefixes.flatMap((prefix) => [prefix.length, prefix])],
+  }
+}
+
+function canAccessDomainMail(userId: number, mailId: string): boolean {
+  const visibility = domainMailVisibilityFilter(userId)
+  return Boolean(get(
+    `SELECT 1 FROM domain_mails m WHERE m.id = ? AND ${visibility.clause}`,
+    mailId,
+    ...visibility.params,
+  ))
+}
+
 // 列表不取正文：单封 HTML 可达 1 MiB，全表拼回去会把响应撑爆。
 // 只用 length() 判断有无正文，正文留给详情接口。
 const DOMAIN_MAIL_SUMMARY_SQL = `
@@ -5184,12 +5485,23 @@ function mapDomainMailSummary(row: Record<string, unknown>): DomainMailSummary {
 }
 
 export function listDomainMails(userId: number): DomainMailSummary[] {
-  return all(`${DOMAIN_MAIL_SUMMARY_SQL} GROUP BY m.id ORDER BY m.received_time DESC, m.id`, userId)
+  const visibility = domainMailVisibilityFilter(userId)
+  return all(
+    `${DOMAIN_MAIL_SUMMARY_SQL} WHERE ${visibility.clause} GROUP BY m.id ORDER BY m.received_time DESC, m.id`,
+    userId,
+    ...visibility.params,
+  )
     .map(mapDomainMailSummary)
 }
 
-export function getDomainMailDetail(id: string, userId = -1): DomainMailDetail | undefined {
-  const row = get(`${DOMAIN_MAIL_SUMMARY_SQL} WHERE m.id = ? GROUP BY m.id`, userId, id)
+export function getDomainMailDetail(id: string, userId: number): DomainMailDetail | undefined {
+  const visibility = domainMailVisibilityFilter(userId)
+  const row = get(
+    `${DOMAIN_MAIL_SUMMARY_SQL} WHERE m.id = ? AND ${visibility.clause} GROUP BY m.id`,
+    userId,
+    id,
+    ...visibility.params,
+  )
   if (!row) return undefined
   const bodies = get('SELECT to_addresses, cc_addresses, reply_to, text_body, html_body FROM domain_mails WHERE id = ?', id)
   const attachments = all(`SELECT id, position, filename, mime_type, disposition, content_id, size, sha256,
@@ -5218,21 +5530,25 @@ export function getDomainMailDetail(id: string, userId = -1): DomainMailDetail |
 }
 
 export function getUnreadDomainMailCount(userId: number): number {
+  const visibility = domainMailVisibilityFilter(userId)
   const row = get(`SELECT COUNT(*) AS count
                    FROM domain_mails m
-                   WHERE NOT EXISTS (
+                   WHERE ${visibility.clause}
+                     AND NOT EXISTS (
                      SELECT 1 FROM domain_mail_reads r
                      WHERE r.user_id = ? AND r.mail_id = m.id
-                   )`, userId)
+                   )`, ...visibility.params, userId)
   return Number(row?.count ?? 0)
 }
 
 /** 只有邮件确实存在时才写入记录；重复查看保持第一次阅读时间。 */
 export function markDomainMailRead(userId: number, mailId: string): boolean {
+  const visibility = domainMailVisibilityFilter(userId)
   const result = run(`INSERT INTO domain_mail_reads (user_id, mail_id, read_at)
-                      SELECT ?, id, ? FROM domain_mails WHERE id = ?
+                      SELECT ?, m.id, ? FROM domain_mails m
+                      WHERE m.id = ? AND ${visibility.clause}
                       ON CONFLICT(user_id, mail_id) DO NOTHING`,
-    userId, Date.now(), mailId)
+    userId, Date.now(), mailId, ...visibility.params)
   return Number(result.changes) > 0
 }
 
@@ -5247,7 +5563,8 @@ export interface DomainMailReader {
 }
 
 /** 返回仍存在的后台用户及其首次阅读时间，最近阅读的用户排在前面。 */
-export function listDomainMailReaders(mailId: string): DomainMailReader[] {
+export function listDomainMailReaders(mailId: string, userId: number): DomainMailReader[] {
+  if (!canAccessDomainMail(userId, mailId)) return []
   return all(`SELECT u.id, u.username, u.avatar, u.full_name, u.is_owner, u.is_active, r.read_at
               FROM domain_mail_reads r
               INNER JOIN admin_users u ON u.id = r.user_id
@@ -5264,13 +5581,14 @@ export function listDomainMailReaders(mailId: string): DomainMailReader[] {
     }))
 }
 
-export function getDomainMailAttachment(mailId: string, attachmentId: string): {
+export function getDomainMailAttachment(mailId: string, attachmentId: string, userId: number): {
   filename: string
   mimeType: string
   size: number
   sha256: string
   content: Buffer
 } | undefined {
+  if (!canAccessDomainMail(userId, mailId)) return undefined
   const row = get(`SELECT filename, mime_type, size, sha256, content
                    FROM domain_mail_attachments WHERE mail_id = ? AND id = ?`, mailId, attachmentId)
   if (!row || row.content == null) return undefined
@@ -5291,7 +5609,7 @@ export function getDomainMailAttachment(mailId: string, attachmentId: string): {
  * 没存下内容的附件 {@code content} 为 null，重建时只在头部登记、不放进正文。
  * </p>
  */
-export function listDomainMailAttachmentsForEml(mailId: string): Array<{
+export function listDomainMailAttachmentsForEml(mailId: string, userId: number): Array<{
   filename: string
   mimeType: string
   disposition: string
@@ -5299,6 +5617,7 @@ export function listDomainMailAttachmentsForEml(mailId: string): Array<{
   size: number
   content: Buffer | null
 }> {
+  if (!canAccessDomainMail(userId, mailId)) return []
   return all(`SELECT filename, mime_type, disposition, content_id, size, content
               FROM domain_mail_attachments WHERE mail_id = ? ORDER BY position`, mailId)
     .map((row) => ({
@@ -5385,7 +5704,8 @@ function pruneDomainMails(): void {
   }
 }
 
-export function deleteDomainMail(id: string): boolean {
+export function deleteDomainMail(id: string, userId: number): boolean {
+  if (!canAccessDomainMail(userId, id)) return false
   db.exec('BEGIN IMMEDIATE')
   try {
     run('DELETE FROM domain_mail_reads WHERE mail_id = ?', id)

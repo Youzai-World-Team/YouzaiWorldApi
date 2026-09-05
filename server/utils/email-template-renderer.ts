@@ -1,6 +1,8 @@
 import type { VerificationEmailTemplate } from './email-templates'
 
-export const VERIFICATION_EMAIL_LOGO_URL = 'https://api.mcyzw.top/images/uzw-tm.png'
+import { webAssetUrl } from '#shared/web-assets'
+
+export const VERIFICATION_EMAIL_LOGO_URL = webAssetUrl('/images/uzw-tm.png')
 
 function escapeHtml(value: string): string {
   return value
@@ -97,5 +99,5 @@ export function replaceVerificationEmailHtmlPlaceholders(
     .replaceAll('{{subject}}', escapeHtml(subject))
     .replaceAll('{{username}}', escapeHtml(username))
     .replaceAll('{{code}}', escapeHtml(code))
-  return withText.replace(/\{\{logoUrl\}\}|https:\/\/api\.mcyzw\.top\/images\/uzw-tm\.png|(?<!https?:)\/images\/uzw-tm\.png/g, escapeHtml(logoUrl))
+  return withText.replace(/\{\{logoUrl\}\}|https:\/\/api\.mcyzw\.top\/images\/uzw-tm\.png|https:\/\/assets\.mcyzw\.top\/images\/uzw-tm\.png|(?<!https?:)\/images\/uzw-tm\.png/g, escapeHtml(logoUrl))
 }

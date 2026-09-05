@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { webAssetUrl } from '#shared/web-assets'
 
 useHead({ title: '玩家称号' })
 
@@ -88,7 +89,7 @@ const filteredPlayers = computed(() => {
 function textureUrl(title: GameTitle) {
   const key = title.texture_key.split('/').map((part) => encodeURIComponent(part)).join('/')
   return title.texture_key
-    ? `https://assets.mcyzw.top/images/titles/${key}.png`
+    ? webAssetUrl(`/images/titles/${key}.png`)
     : ''
 }
 
@@ -98,11 +99,11 @@ function sourceLabel(source: GrantSource) {
   return '后台手动授予'
 }
 
-function grantsFor(player: PlayerTitles, titleId: string) {
-  return player.grants.filter((grant) => grant.title_id === titleId)
+function grantsFor(player: PlayerTitles | null | undefined, titleId: string) {
+  return player?.grants?.filter((grant) => grant.title_id === titleId) ?? []
 }
 
-function hasEditableGrant(player: PlayerTitles, titleId: string) {
+function hasEditableGrant(player: PlayerTitles | null | undefined, titleId: string) {
   return grantsFor(player, titleId).some((grant) => grant.source !== 'permission')
 }
 
@@ -363,15 +364,17 @@ onMounted(async () => {
     <md-dialog ref="playerDialog" :open="!!playerTarget" :aria-busy="pendingOperation ? 'true' : 'false'" @closed="playerTarget = null">
       <div slot="headline">管理 {{ playerTarget?.username }} 的称号</div>
       <div slot="content" class="grant-list">
-        <div class="unequip-row"><span>当前佩戴：{{ playerTarget ? equippedName(playerTarget) : '' }}</span><md-text-button v-if="canEditGrants && playerTarget?.equipped_title_id" :disabled="!!pendingOperation" @click="equipForPlayer(playerTarget!, null)">{{ playerTarget && operationPending('equip', playerTarget, null) ? '卸下中…' : '卸下' }}</md-text-button></div>
-        <div v-for="title in overview.titles" :key="title.id" class="grant-row">
-          <div><strong>{{ title.display_name }}</strong><span v-if="!title.enabled" class="disabled-badge">已停用</span><div class="source-list"><span v-for="grant in grantsFor(playerTarget!, title.id)" :key="`${grant.source}-${grant.source_key}`">{{ sourceLabel(grant.source) }}</span><span v-if="!grantsFor(playerTarget!, title.id).length">尚未拥有</span></div></div>
-          <div class="grant-actions">
-            <md-icon-button v-if="canEditGrants && title.enabled && playerTarget?.owned_title_ids.includes(title.id) && playerTarget.equipped_title_id !== title.id" aria-label="佩戴称号" title="佩戴称号" :disabled="!!pendingOperation" @click="equipForPlayer(playerTarget!, title.id)"><md-icon>{{ playerTarget && operationPending('equip', playerTarget, title.id) ? 'progress_activity' : 'check_circle' }}</md-icon></md-icon-button>
-            <md-icon-button v-if="canEditGrants && title.enabled && !playerTarget?.owned_title_ids.includes(title.id)" aria-label="授予称号" title="授予称号" :disabled="!!pendingOperation" @click="changeGrant(playerTarget!, title, 'grant')"><md-icon>{{ playerTarget && operationPending('grant', playerTarget, title.id) ? 'progress_activity' : 'add_circle' }}</md-icon></md-icon-button>
-            <md-icon-button v-if="canEditGrants && hasEditableGrant(playerTarget!, title.id)" aria-label="回收称号" title="仅回收注册和手动来源" :disabled="!!pendingOperation" @click="changeGrant(playerTarget!, title, 'revoke')"><md-icon>{{ playerTarget && operationPending('revoke', playerTarget, title.id) ? 'progress_activity' : 'remove_circle' }}</md-icon></md-icon-button>
+        <template v-if="playerTarget">
+          <div class="unequip-row"><span>当前佩戴：{{ equippedName(playerTarget) }}</span><md-text-button v-if="canEditGrants && playerTarget.equipped_title_id" :disabled="!!pendingOperation" @click="equipForPlayer(playerTarget, null)">{{ operationPending('equip', playerTarget, null) ? '卸下中…' : '卸下' }}</md-text-button></div>
+          <div v-for="title in overview.titles" :key="title.id" class="grant-row">
+            <div><strong>{{ title.display_name }}</strong><span v-if="!title.enabled" class="disabled-badge">已停用</span><div class="source-list"><span v-for="grant in grantsFor(playerTarget, title.id)" :key="`${grant.source}-${grant.source_key}`">{{ sourceLabel(grant.source) }}</span><span v-if="!grantsFor(playerTarget, title.id).length">尚未拥有</span></div></div>
+            <div class="grant-actions">
+              <md-icon-button v-if="canEditGrants && title.enabled && playerTarget.owned_title_ids.includes(title.id) && playerTarget.equipped_title_id !== title.id" aria-label="佩戴称号" title="佩戴称号" :disabled="!!pendingOperation" @click="equipForPlayer(playerTarget, title.id)"><md-icon>{{ operationPending('equip', playerTarget, title.id) ? 'progress_activity' : 'check_circle' }}</md-icon></md-icon-button>
+              <md-icon-button v-if="canEditGrants && title.enabled && !playerTarget.owned_title_ids.includes(title.id)" aria-label="授予称号" title="授予称号" :disabled="!!pendingOperation" @click="changeGrant(playerTarget, title, 'grant')"><md-icon>{{ operationPending('grant', playerTarget, title.id) ? 'progress_activity' : 'add_circle' }}</md-icon></md-icon-button>
+              <md-icon-button v-if="canEditGrants && hasEditableGrant(playerTarget, title.id)" aria-label="回收称号" title="仅回收注册和手动来源" :disabled="!!pendingOperation" @click="changeGrant(playerTarget, title, 'revoke')"><md-icon>{{ operationPending('revoke', playerTarget, title.id) ? 'progress_activity' : 'remove_circle' }}</md-icon></md-icon-button>
+            </div>
           </div>
-        </div>
+        </template>
       </div>
       <div slot="actions"><md-text-button :disabled="!!pendingOperation" @click="playerTarget = null">关闭</md-text-button></div>
     </md-dialog>

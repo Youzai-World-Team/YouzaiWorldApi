@@ -1,11 +1,6 @@
-const CACHE_NAME = 'youzaiworld-pwa-v1'
+const CACHE_NAME = 'youzaiworld-pwa-v2'
 const STATIC_ASSETS = [
-  '/favicon.ico',
-  '/images/uzw-tm.png',
   '/manifest.webmanifest',
-  '/pwa/icon-192.png',
-  '/pwa/icon-512.png',
-  '/pwa/icon-maskable-512.png',
 ]
 const STATIC_PATHS = new Set(STATIC_ASSETS)
 

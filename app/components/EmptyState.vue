@@ -1,23 +1,29 @@
 <script setup lang="ts">
-withDefaults(defineProps<{
+import { computed } from 'vue'
+import { webAssetUrl } from '#shared/web-assets'
+
+const DEFAULT_EMPTY_STATE_IMAGE = 'https://assets.mcyzw.top/images/empty-looking-for-answers.svg'
+
+const props = withDefaults(defineProps<{
   illustrated?: boolean
   image?: string
 }>(), {
   illustrated: true,
-  image: '/images/empty-looking-for-answers.svg',
+  image: 'https://assets.mcyzw.top/images/empty-looking-for-answers.svg',
 })
+const resolvedImage = computed(() => webAssetUrl(props.image || DEFAULT_EMPTY_STATE_IMAGE))
 </script>
 
 <template>
   <div
     class="empty-state"
-    :class="{ 'empty-state--compact': !illustrated }"
+    :class="{ 'empty-state--compact': !props.illustrated }"
     role="status"
   >
     <img
-      v-if="illustrated"
+      v-if="props.illustrated"
       class="empty-state__image"
-      :src="image"
+      :src="resolvedImage"
       alt=""
       aria-hidden="true"
     />

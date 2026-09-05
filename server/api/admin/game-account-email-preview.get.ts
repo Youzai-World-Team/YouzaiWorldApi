@@ -1,10 +1,10 @@
 import {
   buildVerificationEmailFromTemplate,
 } from '../../utils/smtp'
-import { getRequestURL } from 'h3'
 import { getVerificationEmailTemplates, requirePagePermission } from '../../utils/db'
 import type { VerificationEmailTemplateKind } from '../../utils/email-templates'
 import { addEmailPreviewScrollbar } from '../../utils/email-preview-scrollbar'
+import { webAssetUrl } from '#shared/web-assets'
 
 const PREVIEW_KINDS: VerificationEmailTemplateKind[] = [
   'registration',
@@ -25,6 +25,6 @@ export default defineEventHandler((event) => {
     getVerificationEmailTemplates()[requestedKind],
     user.fullName || user.username,
     '123456',
-    `${getRequestURL(event).origin}/images/uzw-tm.png`,
+    webAssetUrl('/images/uzw-tm.png'),
   ))
 })

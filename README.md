@@ -31,7 +31,7 @@
 | **生存玩家** | 通过模组内的注册 / 登录 / 邮件 / 称号 / 外观功能间接受益；官网聊天区以玩家身份发言 |
 | **Web 开发者** | 了解全栈架构、扩展接口或贡献代码 |
 
-> **技术说明**：本项目为纯服务端渲染 + API 应用（非静态站点），生产运行 `.output/server/index.mjs`；运行期数据（SQLite 数据库与上传文件）全部保存在 `server/data/`，部署更新不会触碰数据。
+> **技术说明**：本项目为纯服务端渲染 + API 应用（非静态站点），生产运行 `.output/server/index.mjs`；运行期数据（SQLite 数据库与上传文件）全部保存在 `server/data/`，部署更新不会触碰数据。后台图片、图标与 PWA 素材由 `https://assets.mcyzw.top/` 统一托管；API 本地 `public/` 仅保留必须同源的 manifest、Service Worker 与 robots.txt。
 
 ---
 
@@ -82,6 +82,7 @@
 - **收件**：Cloudflare Email Routing 经 Email Worker 解析 MIME 后以独立密钥签名投递到 `/api/inbound-mail`，服务端做「不信任上游」的边界校验（体积、条数、编码、附件预算）后落库；收件保留最近 2000 封，超限按时间淘汰
 - **发件**：后台可视化 HTML 编辑器（模板 + 占位符 + 附件）、发送前预览、EML 导出、附件下载；发送走**原生 SMTP 客户端**（`server/utils/smtp.ts`，支持 none / STARTTLS / TLS）
 - **已读管理**：按后台用户记录已读状态，侧边栏实时未读计数
+- **可见范围**：普通后台用户始终可以查看与用户名相同的邮箱（例如 `zhangshan@mcyzw.top`）；初始所有者在「权限管理」页为每位用户追加一个或多个本地部分前缀（按开头匹配，留空表示不追加），详情、附件、EML、HTML、未读数和删除操作均遵循同一范围；追加范围只影响收件查看，不改变普通用户的发信地址或发信权限
 - **投递密钥独立于游戏 API 密钥**：Email Worker 被攻破也只能写入收件，碰不到 `/api/game/*`
 
 ### 7. 服务器管理（MCSManager 网关）
@@ -103,6 +104,15 @@
 | `/api/updates` + `/api/update/[key]` | 更新服务：按 key 查询最新版本、类型、强制更新标记、发布日期与更新日志，**供模组 / 整合包更新检查器调用** |
 | `/api/downloads` | 下载项目（整合包 / 模组，名称 / 地址 / 版本 / 描述），后台增删改 |
 | `/api/chat*` | 官网聊天区：访客经 Turnstile 发言（昵称 2–16 位、内容 2–200 字、5 条 / 分钟限流、保留最近 500 条）；游戏玩家凭账户登录发言（角色标记 + 头像）；后台账户可管理 / 删除 / 清空；IP 归属地按哈希缓存 7 天 |
+
+### 服务器状态 Worker
+
+官网状态页和本后台统一读取 `https://status.mcyzw.top` 的 Cloudflare Worker：
+
+- `GET /api/status`：当前官网、API、静态资源、邮件服务、EQAD-003 节点与 Minecraft 状态；
+- `GET /api/status/history?hours=72`：Worker D1 中最近最多 72 小时的 5 分钟样本；
+- API 服务端每 5 分钟主动同步，`GET /api/admin/status` 也会补偿同步当前样本和历史到本地 SQLite `status_history`；可在「站点设置」清除长期历史，清除时间水位会阻止旧样本被再次导入；
+- `YZWC_STATUS_WORKER_URL` 可用于部署环境覆盖 Worker 地址（默认值见 `.env.example`）。
 
 ### 9. 自动部署
 
@@ -176,6 +186,7 @@ pnpm preview --port 3800   # 本地预览构建产物
 | `YZWC_IP_GEO_DISABLED` / `YZWC_MOJANG_DISABLED` | 关闭 IP 归属地 / Mojang 外呼 | 未设置即开启外呼 |
 | `YZWC_ADMIN_USERNAME` / `YZWC_ADMIN_PASSWORD` / `YZWC_ADMIN_ENTRY` | 无人值守 OOBE 初始化 | 无（走页面引导） |
 | `YZWC_GAME_SESSION_TTL_SECONDS` | 游戏会话时长 | 43200（12 小时，上限 24 小时） |
+| `YZWC_STATUS_WORKER_URL` | 状态 Worker 当前/历史接口地址 | `https://status.mcyzw.top/api/status` |
 
 > 生产环境运行时不会读取 `.env`（仅开发兼容），密钥类配置请优先保存在后台「站点设置」页（写入数据库 `settings` 表，优先级高于环境变量）。
 
@@ -199,7 +210,7 @@ YouzaiWorldApi/
 │   ├── utils/              # db.ts（核心）+ MCSM / SMTP / 邮件 / Mojang / 部署等 24 个模块
 │   └── data/               # 运行期数据（gitignore）：database.db、uploads/
 ├── shared/                 # 前后端共享：页面权限模型、API 权限映射、密码策略、设备识别
-└── public/                 # PWA 图标与静态资源
+└── public/                 # 必须同源的 manifest、Service Worker 与 robots.txt
 ```
 
 ---

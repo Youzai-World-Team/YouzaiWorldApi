@@ -124,7 +124,7 @@ YouzaiWorldApi/
 │   ├── password-policy.ts            # 密码强度评分/策略/过期计算（前后端同源）
 │   └── client-device.ts              # 浏览器/OS/设备识别（前后端同源）
 │
-└── public/                           # PWA 图标、manifest.webmanifest、robots.txt 等静态资源
+└── public/                           # 必须同源的 manifest.webmanifest、Service Worker 与 robots.txt；图片/图标由 assets.mcyzw.top 托管
 ```
 
 **入口与初始化时序**：

@@ -2,6 +2,10 @@
  * Bundled domain-mail template. Keeping the HTML in a TypeScript module makes
  * Nitro include it in the server bundle instead of relying on a deployment file.
  */
+import { webAssetUrl } from '#shared/web-assets'
+
+const DOMAIN_MAIL_TEMPLATE_LOGO_URL = webAssetUrl('/images/uzw-tm.png')
+
 export const DOMAIN_MAIL_TEMPLATE_HTML = `<!doctype html>
 <html lang="zh-CN">
   <head>
@@ -21,7 +25,7 @@ export const DOMAIN_MAIL_TEMPLATE_HTML = `<!doctype html>
                   <!-- 头部：logo -->
                   <tr>
                     <td style="padding:18px 28px;background-color:#eefaf5;border-top:4px solid #a8e6cf;border-bottom:1px solid #dcedc1;">
-                      <img src="https://assets.mcyzw.top/images/uzw-tm.png" width="240" alt="Youzai-World" style="display:block;width:240px;max-width:100%;height:auto;border:0;">
+                      <img src="${DOMAIN_MAIL_TEMPLATE_LOGO_URL}" width="240" alt="Youzai-World" style="display:block;width:240px;max-width:100%;height:auto;border:0;">
                     </td>
                   </tr>
                   <!-- 正文 -->

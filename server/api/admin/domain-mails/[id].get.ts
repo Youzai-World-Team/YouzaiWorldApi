@@ -18,7 +18,7 @@ export default defineEventHandler((event) => {
 
   const sanitized = sanitizeEmailHtml(detail.htmlBody)
   markDomainMailRead(user.id, id)
-  const readers = listDomainMailReaders(id)
+  const readers = listDomainMailReaders(id, user.id)
   return {
     ...detail,
     unread: false,

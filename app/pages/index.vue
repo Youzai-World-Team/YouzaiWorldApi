@@ -40,7 +40,8 @@ interface StatusSnapshot {
   node: { nickname: string; timestamp: number; system: { type: string; cpuUsage: number; memUsage: number } } | null
   minecraft: { online: boolean; host: string; port: number; players?: { online: number; max: number }; version?: string; delay?: number; error?: string } | null
   history: AvailabilityPoint[]
-  errors: Partial<Record<'node' | 'minecraft' | 'history', string>>
+  errors: Partial<Record<'node' | 'minecraft' | 'history' | 'storage' | 'worker', string>>
+  stale?: boolean
 }
 interface Metric { key: string; label: string; value: string; detail: string; icon: string; tone: Tone; to: string }
 interface AttentionItem { key: string; title: string; detail: string; icon: string; tone: Tone; to?: string }
@@ -156,12 +157,14 @@ const recentAvailability = computed(() => (statusSnapshot.value?.history || []).
 const statusSourceErrors = computed(() => Object.values(statusSnapshot.value?.errors || {}).filter(Boolean) as string[])
 const serverTone = computed<Tone>(() => {
   if (statusLoading.value && !statusSnapshot.value) return 'neutral'
+  if (statusSnapshot.value?.stale) return 'warning'
   if (statusSnapshot.value?.minecraft?.online) return 'success'
   if (statusError.value || statusSnapshot.value?.minecraft?.online === false) return 'error'
   return 'neutral'
 })
 const serverLabel = computed(() => {
   if (statusLoading.value && !statusSnapshot.value) return '正在检查'
+  if (statusSnapshot.value?.stale) return '显示最近数据'
   if (statusSnapshot.value?.minecraft?.online) return '服务器在线'
   if (statusSnapshot.value?.minecraft?.online === false) return '服务器离线'
   if (statusError.value) return '状态不可用'
@@ -169,7 +172,10 @@ const serverLabel = computed(() => {
 })
 const serverDetail = computed(() => {
   const minecraft = statusSnapshot.value?.minecraft
-  if (minecraft?.online) return `${minecraft.version || 'Minecraft'} · ${statusSnapshot.value?.minecraftAddress || ''}`
+  if (minecraft?.online) {
+    const detail = `${minecraft.version || 'Minecraft'} · ${statusSnapshot.value?.minecraftAddress || ''}`
+    return statusSnapshot.value?.stale ? `状态 Worker 暂不可用 · ${detail}` : detail
+  }
   return minecraft?.error || statusError.value || statusSnapshot.value?.minecraftAddress || '尚未获取 Minecraft 服务状态'
 })
 const serverFacts = computed(() => {
@@ -381,7 +387,7 @@ onBeforeUnmount(() => {
 
       <section v-if="canView('status')" class="server-overview" :class="`server-overview--${serverTone}`">
         <div class="server-identity">
-          <span class="server-state-icon" :class="`tone-icon--${serverTone}`"><md-icon>{{ serverTone === 'success' ? 'check_circle' : serverTone === 'error' ? 'cloud_off' : 'pending' }}</md-icon></span>
+          <span class="server-state-icon" :class="`tone-icon--${serverTone}`"><md-icon>{{ serverTone === 'success' ? 'check_circle' : serverTone === 'error' ? 'cloud_off' : serverTone === 'warning' ? 'history' : 'pending' }}</md-icon></span>
           <div>
             <div class="server-title-line"><h2>{{ serverLabel }}</h2><span v-if="statusSnapshot?.node" class="node-label">{{ statusSnapshot.nodeName }}</span></div>
             <p>{{ serverDetail }}</p>
@@ -537,7 +543,7 @@ onBeforeUnmount(() => {
 .online-admin-item time { white-space: nowrap; }
 
 .server-overview { position: relative; margin-bottom: 16px; overflow: hidden; border: 1px solid var(--md-sys-color-outline-variant); border-left-width: 4px; border-radius: 8px; background: var(--md-sys-color-surface-container); }
-.server-overview--success { border-left-color: var(--act-success); } .server-overview--error { border-left-color: var(--act-error); } .server-overview--neutral { border-left-color: var(--md-sys-color-outline); }
+.server-overview--success { border-left-color: var(--act-success); } .server-overview--warning { border-left-color: var(--act-warning); } .server-overview--error { border-left-color: var(--act-error); } .server-overview--neutral { border-left-color: var(--md-sys-color-outline); }
 .server-identity { min-width: 0; display: grid; grid-template-columns: 44px minmax(0, 1fr) 40px; align-items: center; gap: 12px; padding: 18px 20px 14px; }
 .server-state-icon, .metric-icon, .attention-icon, .timeline-icon, .release-icon { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; }
 .server-state-icon { width: 44px; height: 44px; border-radius: 50%; } .server-state-icon md-icon { --md-icon-size: 24px; }

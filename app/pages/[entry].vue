@@ -2,6 +2,7 @@
 import { computed, ref, onBeforeUnmount, onMounted } from 'vue'
 import type { ThemeMode } from '../composables/useThemeTransition'
 import { clientDeviceIcon } from '#shared/client-device'
+import { WEB_ASSET_BASE_URL } from '#shared/web-assets'
 
 definePageMeta({ layout: false })
 
@@ -186,7 +187,7 @@ onBeforeUnmount(() => {
     </div>
 
     <main class="login-content">
-      <img class="brand-logo" src="/images/uzw-tm.png" alt="悠哉世界" />
+      <img class="brand-logo" :src="`${WEB_ASSET_BASE_URL}/images/uzw-tm.png`" alt="悠哉世界" />
 
       <div class="login-card">
         <md-outlined-text-field

@@ -22,14 +22,14 @@ function asciiFallbackName(filename: string): string {
 }
 
 export default defineEventHandler((event) => {
-  requireAuth(event)
+  const user = requireAuth(event)
   const query = getQuery(event)
   const mailId = String(query.mail || '').trim().toLowerCase()
   const attachmentId = String(query.id || '').trim().toLowerCase()
   if (!UUID_RE.test(mailId)) throw createError({ statusCode: 400, statusMessage: '邮件 ID 格式不正确' })
   if (!UUID_RE.test(attachmentId)) throw createError({ statusCode: 400, statusMessage: '附件 ID 格式不正确' })
 
-  const attachment = getDomainMailAttachment(mailId, attachmentId)
+  const attachment = getDomainMailAttachment(mailId, attachmentId, user.id)
   if (!attachment) throw createError({ statusCode: 404, statusMessage: '附件不存在或未保存内容' })
 
   const fallback = asciiFallbackName(attachment.filename)

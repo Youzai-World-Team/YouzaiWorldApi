@@ -1,4 +1,6 @@
-const TEMPLATE_LOGO_URL = 'https://assets.mcyzw.top/images/uzw-tm.png'
+import { webAssetUrl } from '#shared/web-assets'
+
+const TEMPLATE_LOGO_URL = webAssetUrl('/images/uzw-tm.png')
 const TEMPLATE_LOGO_MAX_BYTES = 1024 * 1024
 let cachedLogo: Buffer | null = null
 let pendingLogo: Promise<Buffer> | null = null

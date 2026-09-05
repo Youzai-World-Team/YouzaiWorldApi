@@ -37,7 +37,8 @@ interface StatusSnapshot {
   node: StatusNode | null
   minecraft: MinecraftStatus | null
   history: AvailabilityPoint[]
-  errors: Partial<Record<'node' | 'minecraft' | 'history', string>>
+  errors: Partial<Record<'node' | 'minecraft' | 'history' | 'storage' | 'worker', string>>
+  stale?: boolean
 }
 
 const MAX_HISTORY_POINTS = 96
@@ -162,6 +163,10 @@ onBeforeUnmount(() => {
     </div>
 
     <template v-else>
+      <div v-if="snapshot?.stale" class="partial-warning" role="status">
+        <md-icon>history</md-icon>
+        <span>{{ snapshot.errors.worker || '状态 Worker 暂时不可用，当前显示最近一次成功数据。' }}</span>
+      </div>
       <div v-if="requestError" class="partial-warning" role="status">
         <md-icon>warning</md-icon>
         <span>{{ requestError }}，当前显示上次成功获取的数据。</span>
@@ -259,13 +264,12 @@ onBeforeUnmount(() => {
             :title="historyTitle(point)"
           ></span>
         </div>
-        <div v-else class="source-error">
-          <md-icon>history_toggle_off</md-icon>
-          <span>{{ snapshot?.errors.history || '暂无历史状态数据' }}</span>
-        </div>
+        <EmptyState v-else image="/images/empty-monitoring-data.svg">
+          {{ snapshot?.errors.history || '暂无历史状态数据' }}
+        </EmptyState>
 
-        <div class="history-axis"><span>24 小时前</span><span>12 小时前</span><span>现在</span></div>
-        <div class="history-legend">
+        <div v-if="history.length" class="history-axis"><span>24 小时前</span><span>12 小时前</span><span>现在</span></div>
+        <div v-if="history.length" class="history-legend">
           <span><i class="legend-online"></i>在线</span>
           <span><i class="legend-offline"></i>离线</span>
           <span><i class="legend-empty"></i>无数据</span>
