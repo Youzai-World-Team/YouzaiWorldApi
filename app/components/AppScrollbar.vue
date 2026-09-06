@@ -67,7 +67,7 @@ function getMetrics() {
   if (props.target) {
     const style = window.getComputedStyle(props.target)
     const overflow = isHorizontal.value ? style.overflowX : style.overflowY
-    const enabled = overflow !== 'visible' && overflow !== 'clip'
+    const enabled = overflow === 'auto' || overflow === 'scroll' || overflow === 'overlay'
     return isHorizontal.value
       ? { content: enabled ? props.target.scrollWidth : props.target.clientWidth, viewport: props.target.clientWidth, current: props.target.scrollLeft }
       : { content: enabled ? props.target.scrollHeight : props.target.clientHeight, viewport: props.target.clientHeight, current: props.target.scrollTop }
@@ -107,10 +107,12 @@ function clippingAncestors(target: Element): Element[] {
 
 function visibleTargetRect(target: HTMLElement): DOMRect {
   const targetBox = target.getBoundingClientRect()
-  let left = targetBox.left
-  let right = targetBox.right
-  let top = targetBox.top
-  let bottom = targetBox.bottom
+  // The scrollbar is fixed to the viewport, so an off-screen target must not
+  // leave a stale track visible at its old document position.
+  let left = Math.max(0, targetBox.left)
+  let right = Math.min(window.innerWidth, targetBox.right)
+  let top = Math.max(0, targetBox.top)
+  let bottom = Math.min(window.innerHeight, targetBox.bottom)
 
   for (const ancestor of clippingAncestors(target)) {
     const style = window.getComputedStyle(ancestor)
@@ -136,7 +138,8 @@ function updateScrollbar() {
     ? (isHorizontal.value ? targetRect.value.width : targetRect.value.height)
     : (isHorizontal.value ? track.value?.clientWidth : track.value?.clientHeight) || Math.max(0, metrics.viewport - 72)
   const max = Math.max(0, metrics.content - metrics.viewport)
-  isScrollable.value = max > 1 && trackLength > 0
+  const visibleTarget = !props.target || (targetRect.value && targetRect.value.width > 0 && targetRect.value.height > 0)
+  isScrollable.value = Boolean(visibleTarget) && max > 1 && trackLength > 0
   scrollOffset.value = Math.min(metrics.current, max)
   maxOffset.value = max
   if (!isScrollable.value) {

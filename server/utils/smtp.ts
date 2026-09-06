@@ -232,7 +232,7 @@ export async function sendRegistrationVerificationEmail(
 ): Promise<void> {
   const template = getVerificationEmailTemplates().registration
   const resolved = resolveVerificationEmailTemplateValues(template, username, code)
-  const message = buildMessage(
+  const message = buildSmtpMessage(
     settings,
     recipient,
     resolved.subject,
@@ -250,7 +250,7 @@ export async function sendPasswordResetVerificationEmail(
 ): Promise<void> {
   const template = getVerificationEmailTemplates()['password-reset']
   const resolved = resolveVerificationEmailTemplateValues(template, username, code)
-  const message = buildMessage(
+  const message = buildSmtpMessage(
     settings,
     recipient,
     resolved.subject,
@@ -268,7 +268,7 @@ export async function sendEmailChangeVerificationEmail(
 ): Promise<void> {
   const template = getVerificationEmailTemplates()['email-change']
   const resolved = resolveVerificationEmailTemplateValues(template, username, code)
-  const message = buildMessage(
+  const message = buildSmtpMessage(
     settings,
     recipient,
     resolved.subject,

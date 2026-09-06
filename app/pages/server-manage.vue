@@ -632,7 +632,6 @@ onBeforeUnmount(() => {
 
           <pre ref="consoleBox" class="console">{{ logText || (logLoading ? '加载中…' : liveMode && liveState !== 'closed' ? '正在连接实时控制台…' : '（暂无输出）') }}</pre>
           <AppScrollbar :target="consoleBox" label="服务器控制台滚动条" />
-          <AppScrollbar :target="consoleBox" axis="horizontal" label="服务器控制台横向滚动条" />
           <h3 class="section-title">发送命令</h3>
           <p v-if="!canCommand" class="card-note">当前账户没有「发送命令」权限，输入框已禁用。</p>
           <div class="command-row">
@@ -781,7 +780,7 @@ onBeforeUnmount(() => {
   .live-badge--open .live-dot { animation: none; }
 }
 .switch-row { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--md-sys-color-on-surface-variant); cursor: pointer; }
-.console { margin: 16px 0 0; padding: 14px; border-radius: 8px; background: var(--md-sys-color-surface); color: var(--md-sys-color-on-surface); height: 420px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-family: 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.6; }
+.console { margin: 16px 0 0; padding: 14px; border-radius: 8px; background: var(--md-sys-color-surface); color: var(--md-sys-color-on-surface); height: 420px; overflow-x: hidden; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-family: 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.6; }
 .command-row { display: flex; align-items: flex-start; gap: 12px; margin-top: 12px; flex-wrap: wrap; }
 .command-input { flex: 1 1 360px; min-width: 0; }
 .quick-commands { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
