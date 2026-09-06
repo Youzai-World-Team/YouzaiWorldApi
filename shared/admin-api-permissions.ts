@@ -47,7 +47,6 @@ export function isReadOperation(path: string, method: string): boolean {
     || path === '/api/admin/game-cosmetics/lookup'
     // ElementsPanel 这几条查询接口因参数结构使用 POST，但不会修改面板状态。
     // 标成只读后，具备对应区域「查看」权限的后台用户才能正常使用。
-    || path === '/api/admin/mcsm/mods/batch-info'
     || path === '/api/admin/mcsm/instance-config/list'
     || path === '/api/admin/mcsm/instance-config/async-status'
 }

@@ -76,16 +76,12 @@ const canPower = computed(() => canEditPage.value && access.featureLevelForKey('
 const canCommand = computed(() => canEditPage.value && access.featureLevelForKey('server-manage-command') === 'edit')
 const backupLevel = computed(() => access.featureLevelForKey('server-manage-backup'))
 const canBackup = computed(() => canEditPage.value && access.featureLevelForKey('server-manage-backup') === 'edit')
-// 这三块各自有独立区域权限：hidden 时整个卡片不渲染，view 时只读。
+// 可选管理卡片各自有独立区域权限：hidden 时整个卡片不渲染，view 时只读。
 const propertiesLevel = computed(() => access.featureLevelForKey('server-manage-properties'))
 const scheduleLevel = computed(() => access.featureLevelForKey('server-manage-schedule'))
 const canEditProperties = computed(() => canEditPage.value && propertiesLevel.value === 'edit')
 const canEditSchedule = computed(() => canEditPage.value && scheduleLevel.value === 'edit')
-const modsLevel = computed(() => access.featureLevelForKey('server-manage-mods'))
 const instanceConfigLevel = computed(() => access.featureLevelForKey('server-manage-instance-config'))
-const overviewLevel = computed(() => access.featureLevelForKey('server-manage-overview'))
-const javaLevel = computed(() => access.featureLevelForKey('server-manage-java'))
-const marketLevel = computed(() => access.featureLevelForKey('server-manage-market'))
 
 const loading = ref(true)
 const configured = ref(false)
@@ -681,14 +677,6 @@ onBeforeUnmount(() => {
           :can-edit="canEditSchedule"
         />
 
-        <ServerMods
-          v-if="modsLevel !== 'hidden'"
-          :uuid="current.instanceUuid"
-          :daemon-id="current.daemonId"
-          :can-view="modsLevel !== 'hidden'"
-          :can-edit="canEditPage && modsLevel === 'edit'"
-        />
-
         <ServerInstanceTools
           v-if="instanceConfigLevel !== 'hidden'"
           :uuid="current.instanceUuid"
@@ -696,23 +684,6 @@ onBeforeUnmount(() => {
           :instance="detail || current"
           :can-view="instanceConfigLevel !== 'hidden'"
           :can-edit="canEditPage && instanceConfigLevel === 'edit'"
-        />
-
-        <ServerPanelOverview
-          v-if="overviewLevel !== 'hidden'"
-          :uuid="current.instanceUuid"
-          :daemon-id="current.daemonId"
-          :can-view="overviewLevel !== 'hidden'"
-          :can-java="javaLevel !== 'hidden'"
-          :can-edit-layout="canEditPage && overviewLevel === 'edit'"
-        />
-
-        <ServerMarket
-          v-if="marketLevel !== 'hidden'"
-          :uuid="current.instanceUuid"
-          :daemon-id="current.daemonId"
-          :can-view="marketLevel !== 'hidden'"
-          :can-edit="canEditPage && marketLevel === 'edit'"
         />
 
       </template>
