@@ -185,7 +185,7 @@ onBeforeUnmount(() => {
             <span class="stat-icon" :class="minecraft?.online ? 'tone-success' : 'tone-error'"><md-icon>sports_esports</md-icon></span>
             <span>
               <strong class="stat-value">{{ minecraft ? (minecraft.online ? '在线' : '离线') : '不可用' }}</strong>
-              <span class="stat-label">{{ snapshot?.minecraftAddress || 'play.mcyzw.top:25565' }}</span>
+              <span class="stat-label">{{ snapshot?.minecraftAddress || 'play.mcyzw.top:25703' }}</span>
             </span>
           </section>
           <section class="card stat-card">
