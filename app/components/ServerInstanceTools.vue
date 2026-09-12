@@ -21,7 +21,7 @@ const settings = reactive({
   rconPort: 25575,
   rconPassword: '',
   pingIp: '',
-  pingPort: 25565,
+  pingPort: 25703,
   autoStart: false,
   autoRestart: false,
   terminalColor: true,
@@ -43,7 +43,7 @@ function syncInstance() {
   settings.rconPort = Number(item.rconPort) || 25575
   settings.rconPassword = String(item.rconPassword || '')
   settings.pingIp = String(item.pingConfig?.ip || '')
-  settings.pingPort = Number(item.pingConfig?.port) || 25565
+  settings.pingPort = Number(item.pingConfig?.port) || 25703
   settings.autoStart = Boolean(item.autoStart)
   settings.autoRestart = Boolean(item.autoRestart)
   settings.terminalColor = item.terminalOption?.haveColor !== undefined ? Boolean(item.terminalOption.haveColor) : settings.terminalColor

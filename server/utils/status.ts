@@ -14,7 +14,7 @@ const REQUEST_TIMEOUT_MS = 12_000
 const STATUS_BUCKET_MS = 5 * 60 * 1000
 const NODE_NAME = 'EQAD-003'
 const MINECRAFT_HOST = 'play.mcyzw.top'
-const MINECRAFT_PORT = 25565
+const MINECRAFT_PORT = 25703
 
 export interface StatusNode {
   nickname: string
