@@ -1,6 +1,6 @@
 import { recordAudit, requireFeaturePermission } from '../../../utils/db'
 import { BACKUP_NAME_RE, deleteBackup, listBackups } from '../../../utils/mcsm-backup'
-import { assertInstanceAllowed } from '../../../utils/mcsm'
+import { assertManagedInstanceAllowed } from '../../../utils/mcsm'
 
 /** 删除一个备份压缩包。只认备份插件返回、符合命名规则的文件名。 */
 export default defineEventHandler(async (event) => {
@@ -13,7 +13,7 @@ export default defineEventHandler(async (event) => {
   if (!BACKUP_NAME_RE.test(name)) {
     throw createError({ statusCode: 400, statusMessage: '备份文件名不合法' })
   }
-  const instance = await assertInstanceAllowed(uuid, daemonId)
+  const instance = await assertManagedInstanceAllowed(uuid, daemonId)
 
   const backups = await listBackups(uuid, daemonId)
   if (!backups.some((backup) => backup.name === name)) {

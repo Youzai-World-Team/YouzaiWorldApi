@@ -18,44 +18,111 @@ const archiveOpen = ref(false)
 const archiveLoading = ref(false)
 const archiveItems = ref<any[]>([])
 let timer: ReturnType<typeof setInterval> | null = null
+let disposed = false
+let generation = 0
+let statusRequestId = 0
+function currentRequest() {
+  const started = generation
+  return () => !disposed && started === generation
+}
 function base() { return { uuid: props.uuid, daemonId: props.daemonId } }
 function errorMessage(error: any, fallback: string) { return error?.data?.statusMessage || error?.statusMessage || fallback }
 async function loadStatus() {
-  if (!props.canView || !props.uuid) return
+  if (!props.canView || !props.uuid || disposed) return
+  const matchesTarget = currentRequest()
+  const requestId = ++statusRequestId
+  const isCurrent = () => matchesTarget() && requestId === statusRequestId
   statusLoading.value = true
-  try { status.value = await $fetch('/api/admin/mcsm/files/status', { query: base() }) }
-  catch (error: any) { showToast(errorMessage(error, '文件任务状态加载失败'), 'error') }
-  finally { statusLoading.value = false }
+  try {
+    const result = await $fetch('/api/admin/mcsm/files/status', { query: base() })
+    if (isCurrent()) status.value = result
+  } catch (error: any) {
+    if (isCurrent()) showToast(errorMessage(error, '文件任务状态加载失败'), 'error')
+  } finally {
+    if (isCurrent()) statusLoading.value = false
+  }
 }
 async function chmod() {
-  if (!props.canEdit || !chmodPath.value.trim()) return
+  if (!props.canEdit || !chmodPath.value.trim() || chmodBusy.value || disposed) return
+  const isCurrent = currentRequest()
   chmodBusy.value = true
-  try { await $fetch('/api/admin/mcsm/files/chmod', { method: 'POST', body: { ...base(), paths: [chmodPath.value.trim()], mode: Number.parseInt(chmodMode.value, 8), deep: chmodDeep.value } }); showToast('文件权限已更新'); await loadStatus() }
-  catch (error: any) { showToast(errorMessage(error, '修改文件权限失败'), 'error') }
-  finally { chmodBusy.value = false }
+  try {
+    await $fetch('/api/admin/mcsm/files/chmod', { method: 'POST', body: { ...base(), paths: [chmodPath.value.trim()], mode: Number.parseInt(chmodMode.value, 8), deep: chmodDeep.value } })
+    if (!isCurrent()) return
+    showToast('文件权限已更新')
+    await loadStatus()
+  } catch (error: any) {
+    if (isCurrent()) showToast(errorMessage(error, '修改文件权限失败'), 'error')
+  } finally {
+    if (isCurrent()) chmodBusy.value = false
+  }
 }
 async function downloadFromUrl() {
-  if (!props.canEdit || !downloadUrl.value.trim() || !downloadName.value.trim()) return
+  if (!props.canEdit || !downloadUrl.value.trim() || !downloadName.value.trim() || downloadBusy.value || disposed) return
+  const isCurrent = currentRequest()
   downloadBusy.value = true
-  try { await $fetch('/api/admin/mcsm/files/download-from-url', { method: 'POST', body: { ...base(), url: downloadUrl.value.trim(), fileName: downloadName.value.trim() } }); showToast('URL 下载任务已提交'); downloadUrl.value = ''; await loadStatus() }
-  catch (error: any) { showToast(errorMessage(error, 'URL 下载失败'), 'error') }
-  finally { downloadBusy.value = false }
+  try {
+    await $fetch('/api/admin/mcsm/files/download-from-url', { method: 'POST', body: { ...base(), url: downloadUrl.value.trim(), fileName: downloadName.value.trim() } })
+    if (!isCurrent()) return
+    showToast('URL 下载任务已提交')
+    downloadUrl.value = ''
+    await loadStatus()
+  } catch (error: any) {
+    if (isCurrent()) showToast(errorMessage(error, 'URL 下载失败'), 'error')
+  } finally {
+    if (isCurrent()) downloadBusy.value = false
+  }
 }
 async function stopDownload(task: any) {
-  if (!props.canEdit) return
-  try { await $fetch('/api/admin/mcsm/files/stop-download', { method: 'POST', body: { ...base(), fileName: task.path } }); showToast('下载任务已停止'); await loadStatus() }
-  catch (error: any) { showToast(errorMessage(error, '停止下载任务失败'), 'error') }
+  if (!props.canEdit || disposed) return
+  const isCurrent = currentRequest()
+  try {
+    await $fetch('/api/admin/mcsm/files/stop-download', { method: 'POST', body: { ...base(), fileName: task.path } })
+    if (!isCurrent()) return
+    showToast('下载任务已停止')
+    await loadStatus()
+  } catch (error: any) {
+    if (isCurrent()) showToast(errorMessage(error, '停止下载任务失败'), 'error')
+  }
 }
 async function previewArchive() {
-  if (!archivePath.value.trim()) return
+  if (!props.canView || !archivePath.value.trim() || archiveLoading.value || disposed) return
+  const isCurrent = currentRequest()
   archiveLoading.value = true; archiveOpen.value = true
-  try { const result = await $fetch<any>('/api/admin/mcsm/files/archive-preview', { query: { ...base(), path: archivePath.value.trim(), code: archiveCode.value } }); archiveItems.value = result.items || [] }
-  catch (error: any) { showToast(errorMessage(error, '压缩包预览失败'), 'error'); archiveItems.value = [] }
-  finally { archiveLoading.value = false }
+  try {
+    const result = await $fetch<any>('/api/admin/mcsm/files/archive-preview', { query: { ...base(), path: archivePath.value.trim(), code: archiveCode.value } })
+    if (isCurrent()) archiveItems.value = result.items || []
+  } catch (error: any) {
+    if (isCurrent()) {
+      showToast(errorMessage(error, '压缩包预览失败'), 'error')
+      archiveItems.value = []
+    }
+  } finally {
+    if (isCurrent()) archiveLoading.value = false
+  }
 }
-watch(() => [props.uuid, props.daemonId, props.canView], () => { void loadStatus() }, { immediate: true })
+watch(() => [props.uuid, props.daemonId, props.canView], () => {
+  generation++
+  if (timer) clearInterval(timer)
+  timer = null
+  status.value = null
+  statusLoading.value = false
+  chmodPath.value = ''
+  chmodMode.value = '644'
+  chmodDeep.value = false
+  chmodBusy.value = false
+  downloadUrl.value = ''
+  downloadName.value = ''
+  downloadBusy.value = false
+  archivePath.value = ''
+  archiveCode.value = 'utf-8'
+  archiveOpen.value = false
+  archiveLoading.value = false
+  archiveItems.value = []
+  void loadStatus()
+}, { immediate: true, flush: 'sync' })
 watch(() => status.value?.downloadTasks?.length, (count) => { if (count && !timer) timer = setInterval(() => void loadStatus(), 2500); if (!count && timer) { clearInterval(timer); timer = null } })
-onBeforeUnmount(() => { if (timer) clearInterval(timer) })
+onBeforeUnmount(() => { disposed = true; generation++; if (timer) clearInterval(timer) })
 </script>
 
 <template>

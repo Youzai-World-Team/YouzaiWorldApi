@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, onMounted } from 'vue'
+import { mcsmInstanceKey, type McsmInstanceTarget } from '#shared/mcsm-instance'
 import {
   DEFAULT_PASSWORD_EXPIRY_POLICY,
   DEFAULT_PASSWORD_POLICY,
@@ -39,6 +40,21 @@ interface McsmConfig {
   apiKeyConfigured: boolean
   apiKeySource: SettingSource
   configured: boolean
+  managedInstance: McsmInstanceTarget | null
+}
+
+interface McsmInstanceOption extends McsmInstanceTarget {
+  nickname: string
+  statusLabel: string
+  hostIp: string
+  remarks: string
+}
+
+interface McsmInstanceOptions {
+  configured: boolean
+  managedInstance: McsmInstanceTarget | null
+  user: { userName: string; permissionLabel: string } | null
+  instances: McsmInstanceOption[]
 }
 
 interface McsmProbe {
@@ -75,6 +91,18 @@ const mcsmProbe = ref<McsmProbe | null>(null)
 const showMcsmApiKey = ref(false)
 const mcsmLoading = ref(true)
 const savingMcsm = ref(false)
+const mcsmInstances = ref<McsmInstanceOption[]>([])
+const mcsmInstancesLoading = ref(false)
+const mcsmInstancesError = ref('')
+const mcsmPanelUser = ref<McsmInstanceOptions['user']>(null)
+const mcsmSelectedKey = ref('')
+const savingMcsmInstance = ref(false)
+const mcsmSavedKey = computed(() => mcsmInstanceKey(mcsmState.value?.managedInstance))
+const mcsmSelectedInstance = computed(() => mcsmInstances.value.find(item => mcsmInstanceKey(item) === mcsmSelectedKey.value))
+const mcsmCredentialsDirty = computed(() => Boolean(mcsmState.value) && (
+  mcsmForm.baseUrl.trim().replace(/\/+$/, '') !== mcsmState.value!.baseUrl.replace(/\/+$/, '')
+  || Boolean(mcsmForm.apiKey.trim() && mcsmForm.apiKey.trim() !== mcsmState.value!.apiKey)
+))
 const statusHistoryLoading = ref(true)
 const statusHistoryClearing = ref(false)
 const statusHistoryStats = ref<StatusHistoryStats>({ count: 0, oldestAt: null, latestAt: null })
@@ -356,6 +384,8 @@ async function loadMcsm() {
     mcsmState.value = config
     mcsmForm.baseUrl = config.baseUrl
     mcsmForm.apiKey = config.apiKey
+    mcsmSelectedKey.value = mcsmInstanceKey(config.managedInstance)
+    if (config.configured) await loadMcsmInstances()
   } catch (e: any) {
     showToast(e?.data?.statusMessage || 'MCSM 面板配置加载失败', 'error')
   } finally {
@@ -364,7 +394,7 @@ async function loadMcsm() {
 }
 
 async function saveMcsm() {
-  if (savingMcsm.value || !canEditMcsm.value) return
+  if (savingMcsm.value || savingMcsmInstance.value || mcsmInstancesLoading.value || !canEditMcsm.value) return
   if (!mcsmForm.baseUrl.trim()) {
     showToast('请填写 MCSM 面板地址', 'error')
     return
@@ -387,12 +417,65 @@ async function saveMcsm() {
     mcsmState.value = config
     mcsmForm.baseUrl = config.baseUrl
     mcsmForm.apiKey = config.apiKey
+    mcsmSelectedKey.value = mcsmInstanceKey(config.managedInstance)
     mcsmProbe.value = probe
+    mcsmInstances.value = []
+    mcsmPanelUser.value = null
+    mcsmInstancesError.value = probe.ok ? '' : (probe.message || '面板连接失败，请检查连接信息')
+    if (probe.ok) await loadMcsmInstances()
     showToast(probe.ok ? '已保存，面板连接正常' : '配置已保存，但连接面板失败', probe.ok ? 'info' : 'error')
   } catch (e: any) {
     showToast(e?.data?.statusMessage || '保存失败', 'error')
   } finally {
     savingMcsm.value = false
+  }
+}
+
+async function loadMcsmInstances() {
+  if (!canViewMcsm.value || !mcsmState.value?.configured || mcsmInstancesLoading.value || savingMcsmInstance.value) return
+  const previousKey = mcsmSelectedKey.value
+  const selectionWasSaved = previousKey === mcsmSavedKey.value
+  mcsmInstancesLoading.value = true
+  mcsmInstancesError.value = ''
+  try {
+    const result = await $fetch<McsmInstanceOptions>('/api/admin/mcsm-settings/instances')
+    mcsmInstances.value = result.instances
+    mcsmPanelUser.value = result.user
+    mcsmState.value.managedInstance = result.managedInstance
+    mcsmState.value.configured = result.configured
+    if (selectionWasSaved && mcsmSelectedKey.value === previousKey) {
+      mcsmSelectedKey.value = mcsmInstanceKey(result.managedInstance)
+    }
+  } catch (error: any) {
+    mcsmInstances.value = []
+    mcsmPanelUser.value = null
+    mcsmInstancesError.value = error?.data?.statusMessage || '实例列表加载失败，请重试'
+  } finally {
+    mcsmInstancesLoading.value = false
+  }
+}
+
+async function saveMcsmInstance() {
+  if (!canEditMcsm.value || !mcsmState.value?.configured || mcsmCredentialsDirty.value
+    || mcsmLoading.value || savingMcsm.value || mcsmInstancesLoading.value || savingMcsmInstance.value) return
+  const selected = mcsmSelectedInstance.value
+  if (mcsmSelectedKey.value && !selected) {
+    showToast('请选择当前面板账户可用的实例', 'error')
+    return
+  }
+  savingMcsmInstance.value = true
+  try {
+    const result = await $fetch<{ managedInstance: McsmInstanceTarget | null }>('/api/admin/mcsm-settings/instance', {
+      method: 'PATCH',
+      body: { managedInstance: selected ? { instanceUuid: selected.instanceUuid, daemonId: selected.daemonId } : null },
+    })
+    mcsmState.value.managedInstance = result.managedInstance
+    mcsmSelectedKey.value = mcsmInstanceKey(result.managedInstance)
+    showToast(result.managedInstance ? '管理实例已保存' : '已取消管理实例绑定')
+  } catch (error: any) {
+    showToast(error?.data?.statusMessage || '管理实例保存失败', 'error')
+  } finally {
+    savingMcsmInstance.value = false
   }
 }
 
@@ -769,13 +852,13 @@ function generateInboundMailKey() {
       </div>
     </section>
 
-    <section v-if="canViewMcsm" class="card settings-card">
+    <section v-if="canViewMcsm" id="mcsm" class="card settings-card">
       <h2 class="card-title">MCSManager 面板</h2>
       <p class="card-note">ApiKey 权限与面板账户完全一致，请当作密码保管。</p>
 
       <p v-if="!mcsmLoading && !mcsmState?.configured" class="inherit-warning">
         <md-icon>warning</md-icon>
-        <span>尚未配置，「服务器管理」页会一直提示去这里填写。</span>
+        <span>尚未配置，「服务器管理」与「服务器文件」页会提示去这里填写。</span>
       </p>
       <p v-else-if="!mcsmLoading && mcsmState?.apiKeySource === 'env'" class="source-note">
         <md-icon>info</md-icon>
@@ -790,7 +873,7 @@ function generateInboundMailKey() {
           supporting-text="形如 http://127.0.0.1:23333，不要带路径参数；反向代理下的路径前缀可以保留"
           autocomplete="off"
           spellcheck="false"
-          :disabled="mcsmLoading"
+          :disabled="mcsmLoading || savingMcsm || savingMcsmInstance"
           :readonly="!canEditMcsm"
           :value="mcsmForm.baseUrl"
           @input="mcsmForm.baseUrl = ($event.target as HTMLInputElement).value"
@@ -803,7 +886,7 @@ function generateInboundMailKey() {
             :supporting-text="mcsmState?.apiKeyConfigured ? '已配置，可直接查看或修改；留空表示沿用' : '尚未配置，必须填写'"
             autocomplete="new-password"
             spellcheck="false"
-            :disabled="mcsmLoading"
+            :disabled="mcsmLoading || savingMcsm || savingMcsmInstance"
             :readonly="!canEditMcsm"
             :value="mcsmForm.apiKey"
             @input="mcsmForm.apiKey = ($event.target as HTMLInputElement).value"
@@ -821,7 +904,7 @@ function generateInboundMailKey() {
         </div>
 
         <div v-if="canEditMcsm" class="form-actions">
-          <md-filled-button :disabled="mcsmLoading || savingMcsm" @click="saveMcsm">
+          <md-filled-button :disabled="mcsmLoading || savingMcsm || savingMcsmInstance || mcsmInstancesLoading" @click="saveMcsm">
             {{ savingMcsm ? '保存并测试中…' : '保存并测试连接' }}
           </md-filled-button>
         </div>
@@ -834,6 +917,64 @@ function generateInboundMailKey() {
           </span>
           <span v-else>配置已保存，但连接面板失败：{{ mcsmProbe.message }}</span>
         </p>
+
+        <div class="mcsm-instance-settings">
+          <div class="mcsm-instance-heading">
+            <h3>管理实例</h3>
+            <md-icon-button
+              aria-label="刷新实例列表"
+              title="刷新实例列表"
+              :disabled="mcsmLoading || savingMcsm || savingMcsmInstance || mcsmInstancesLoading || !mcsmState?.configured || mcsmCredentialsDirty"
+              @click="loadMcsmInstances"
+            ><md-icon>refresh</md-icon></md-icon-button>
+          </div>
+          <p class="card-note">「服务器管理」与「服务器文件」共用这里保存的实例。更换面板地址或 ApiKey 后，需要重新选择。</p>
+          <p v-if="!mcsmLoading && !mcsmState?.configured" class="card-note">请先保存面板连接信息。</p>
+          <template v-else>
+            <p v-if="mcsmPanelUser" class="card-note">
+              面板账户：{{ mcsmPanelUser.userName }}（{{ mcsmPanelUser.permissionLabel }}）
+            </p>
+            <p v-if="mcsmInstancesError" class="inherit-warning" role="alert">
+              <md-icon>error</md-icon><span>{{ mcsmInstancesError }}</span>
+            </p>
+            <md-outlined-select
+              class="mcsm-instance-select"
+              label="管理实例"
+              :value="mcsmSelectedKey"
+              :disabled="!canEditMcsm || mcsmLoading || savingMcsm || savingMcsmInstance || mcsmInstancesLoading || mcsmCredentialsDirty"
+              @change="mcsmSelectedKey = ($event.target as HTMLSelectElement).value"
+            >
+              <md-select-option value="" :selected="!mcsmSelectedKey">
+                <div slot="headline">未选择管理实例</div>
+              </md-select-option>
+              <md-select-option
+                v-if="mcsmSelectedKey && !mcsmSelectedInstance"
+                :value="mcsmSelectedKey"
+                selected
+                disabled
+              ><div slot="headline">{{ mcsmInstancesLoading ? '正在读取已选实例…' : '已选实例暂不可用' }}</div></md-select-option>
+              <md-select-option
+                v-for="item in mcsmInstances"
+                :key="mcsmInstanceKey(item)"
+                :value="mcsmInstanceKey(item)"
+                :selected="mcsmInstanceKey(item) === mcsmSelectedKey"
+              >
+                <div slot="headline">{{ item.nickname || item.instanceUuid }}</div>
+                <div slot="supporting-text">{{ item.statusLabel }} · {{ item.remarks || item.hostIp || item.daemonId }}</div>
+              </md-select-option>
+            </md-outlined-select>
+            <p v-if="mcsmCredentialsDirty" class="card-note">请先保存面板连接信息，再选择管理实例。</p>
+            <p v-else-if="mcsmInstancesLoading" class="card-note">正在读取可管理的实例…</p>
+            <p v-else-if="!mcsmInstancesError && !mcsmInstances.length" class="card-note">当前面板账户没有可用实例。</p>
+            <p v-else-if="mcsmSelectedKey !== mcsmSavedKey" class="card-note">实例选择尚未保存。</p>
+            <div v-if="canEditMcsm" class="form-actions">
+              <md-filled-button
+                :disabled="mcsmLoading || savingMcsm || savingMcsmInstance || mcsmInstancesLoading || mcsmCredentialsDirty || mcsmSelectedKey === mcsmSavedKey || (!!mcsmSelectedKey && !mcsmSelectedInstance)"
+                @click="saveMcsmInstance"
+              >{{ savingMcsmInstance ? '保存中…' : '保存管理实例' }}</md-filled-button>
+            </div>
+          </template>
+        </div>
       </div>
     </section>
 
@@ -1243,6 +1384,32 @@ function generateInboundMailKey() {
 
 .setting-form md-outlined-text-field {
   width: 100%;
+}
+
+.mcsm-instance-settings {
+  min-width: 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.mcsm-instance-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mcsm-instance-heading h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.mcsm-instance-select {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  margin: 16px 0;
 }
 
 .password-field {

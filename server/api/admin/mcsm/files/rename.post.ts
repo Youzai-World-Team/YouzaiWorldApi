@@ -1,5 +1,5 @@
 import { recordAudit, requireFeaturePermission } from '../../../../utils/db'
-import { assertInstanceAllowed } from '../../../../utils/mcsm'
+import { assertManagedInstanceAllowed } from '../../../../utils/mcsm'
 import { renameEntry } from '../../../../utils/mcsm-files'
 
 /** 重命名。面板没有独立的 rename，内部用 move 在同目录内改名。 */
@@ -9,7 +9,7 @@ export default defineEventHandler(async (event) => {
 
   const uuid = String(body?.uuid || '')
   const daemonId = String(body?.daemonId || '')
-  const instance = await assertInstanceAllowed(uuid, daemonId)
+  const instance = await assertManagedInstanceAllowed(uuid, daemonId)
 
   const from = String(body?.path || '')
   const target = await renameEntry(uuid, daemonId, from, body?.name)

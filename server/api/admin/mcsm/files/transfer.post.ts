@@ -1,5 +1,5 @@
 import { recordAudit, requireFeaturePermission } from '../../../../utils/db'
-import { assertInstanceAllowed } from '../../../../utils/mcsm'
+import { assertManagedInstanceAllowed } from '../../../../utils/mcsm'
 import { transferEntries } from '../../../../utils/mcsm-files'
 
 /** 批量复制或移动到目标目录。 */
@@ -9,7 +9,7 @@ export default defineEventHandler(async (event) => {
 
   const uuid = String(body?.uuid || '')
   const daemonId = String(body?.daemonId || '')
-  const instance = await assertInstanceAllowed(uuid, daemonId)
+  const instance = await assertManagedInstanceAllowed(uuid, daemonId)
 
   const mode = String(body?.mode || '')
   if (mode !== 'copy' && mode !== 'move') {

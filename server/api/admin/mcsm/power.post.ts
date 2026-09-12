@@ -1,6 +1,6 @@
 import { recordAudit, requireFeaturePermission } from '../../../utils/db'
 import {
-  assertInstanceAllowed,
+  assertManagedInstanceAllowed,
   isPowerAction,
   POWER_ACTION_LABELS,
   runPowerAction,
@@ -23,7 +23,7 @@ export default defineEventHandler(async (event) => {
   }
   const uuid = String(body?.uuid || '')
   const daemonId = String(body?.daemonId || '')
-  const instance = await assertInstanceAllowed(uuid, daemonId)
+  const instance = await assertManagedInstanceAllowed(uuid, daemonId)
 
   await runPowerAction(uuid, daemonId, action)
   recordAudit(event, user, `对实例「${instance.nickname || uuid}」执行${POWER_ACTION_LABELS[action]}`)

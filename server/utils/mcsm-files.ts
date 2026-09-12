@@ -1,6 +1,20 @@
 import { createError } from 'h3'
-import { callPanel } from './mcsm'
+import { callPanel, createManagedInstanceGuard } from './mcsm'
 import { getAdminMcsmConfig } from './db'
+import { resolveDaemonBase } from './mcsm-daemon'
+
+/** 文件操作统一复核绑定；票据或目录响应返回时也不能沿用已失效的目标。 */
+async function callFilePanel<T>(
+  uuid: string,
+  daemonId: string,
+  endpoint: string,
+  options: Parameters<typeof callPanel>[1],
+): Promise<T> {
+  const assertCurrent = createManagedInstanceGuard(uuid, daemonId)
+  const result = await callPanel<T>(endpoint, options)
+  assertCurrent()
+  return result
+}
 
 /**
  * MCSManager 文件管理客户端。
@@ -17,7 +31,10 @@ import { getAdminMcsmConfig } from './db'
  * </p>
  */
 
-const FILE_PAGE_SIZE = 200
+// 修改版面板会把每页数量限制在 100，不能靠增大 page_size 读取整个目录。
+const FILE_PAGE_SIZE = 100
+const FILE_LIST_MAX_PAGES = 1_000
+const FILE_LIST_TIMEOUT_MS = 30_000
 // 在线编辑只针对文本配置：给个体积上限，别把几十 MB 的日志灌进浏览器。
 export const TEXT_FILE_MAX_CHARS = 512 * 1024
 // 内联预览的体积上限。下载不设限（流式转发），只有「在页面里显示」需要拦一下。
@@ -202,15 +219,22 @@ export async function listFiles(
   const rawPage = Math.trunc(Number(pageValue))
   const page = Number.isFinite(rawPage) && rawPage > 0 ? Math.min(rawPage, 10_000) : 0
 
-  const data = await callPanel<any>('/api/files/list', {
+  const data = await callFilePanel<any>(uuid, daemonId, '/api/files/list', {
     query: { uuid, daemonId, target, page, page_size: FILE_PAGE_SIZE, file_name: '' },
   })
-  const items = Array.isArray(data?.items) ? data.items : []
+  const responsePage = Number(data?.page ?? page)
+  const pageSize = Number(data?.pageSize ?? FILE_PAGE_SIZE)
+  const total = Number(data?.total)
+  if (!Array.isArray(data?.items) || !Number.isSafeInteger(total) || total < 0
+    || !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > FILE_PAGE_SIZE || responsePage !== page) {
+    throw createError({ statusCode: 502, statusMessage: '面板返回了无效的目录分页数据，请刷新后重试' })
+  }
+  const items: any[] = data.items
   return {
     path: target,
-    page: Number(data?.page) || page,
-    pageSize: Number(data?.pageSize) || FILE_PAGE_SIZE,
-    total: Number(data?.total) || 0,
+    page: responsePage,
+    pageSize,
+    total,
     items: items
       // 名字里带斜杠的条目不可能是同级项，出现就说明面板回了异常数据。
       .filter((item: any) => String(item?.name || '') && !String(item.name).includes('/'))
@@ -231,8 +255,51 @@ export async function listFiles(
   }
 }
 
+/** 文件浏览和目标目录选择默认读取完整目录，避免筛选、排序和选择只作用于第一页。 */
+export async function listAllFiles(
+  uuid: string,
+  daemonId: string,
+  targetValue: unknown,
+): Promise<{ path: string; total: number; items: FileEntry[] }> {
+  const target = requireInstancePath(targetValue)
+  const assertCurrent = createManagedInstanceGuard(uuid, daemonId)
+  const deadline = Date.now() + FILE_LIST_TIMEOUT_MS
+  const items: FileEntry[] = []
+  const names = new Set<string>()
+  let expectedTotal: number | undefined
+  let expectedPageSize: number | undefined
+
+  for (let page = 0; page < FILE_LIST_MAX_PAGES; page++) {
+    assertCurrent()
+    if (Date.now() >= deadline) {
+      throw createError({ statusCode: 504, statusMessage: '完整目录读取超时，请稍后重试或分页读取' })
+    }
+    const result = await listFiles(uuid, daemonId, target, page)
+    assertCurrent()
+    expectedTotal ??= result.total
+    expectedPageSize ??= result.pageSize
+    if (Math.ceil(expectedTotal / expectedPageSize) > FILE_LIST_MAX_PAGES) {
+      throw createError({ statusCode: 413, statusMessage: '目录条目过多，无法一次性加载，请分页读取' })
+    }
+    // 中途增删或异常分页不能悄悄返回一份缺项的列表。
+    if (result.total !== expectedTotal || result.pageSize !== expectedPageSize
+      || result.items.length !== Math.min(expectedPageSize, expectedTotal - page * expectedPageSize)) {
+      throw createError({ statusCode: 409, statusMessage: '目录内容已变化或列表不完整，请刷新后重试' })
+    }
+    for (const item of result.items) {
+      if (names.has(item.name)) {
+        throw createError({ statusCode: 409, statusMessage: '目录分页出现重复条目，请刷新后重试' })
+      }
+      names.add(item.name)
+      items.push(item)
+    }
+    if (items.length === expectedTotal) return { path: target, total: expectedTotal, items }
+  }
+  throw createError({ statusCode: 413, statusMessage: '目录分页过多，无法一次性加载，请分页读取' })
+}
+
 export async function getFileStatus(uuid: string, daemonId: string): Promise<FileTaskStatus> {
-  const data = await callPanel<any>('/api/files/status', { query: { uuid, daemonId } })
+  const data = await callFilePanel<any>(uuid, daemonId, '/api/files/status', { query: { uuid, daemonId } })
   return {
     instanceFileTask: Math.max(0, Number(data?.instanceFileTask) || 0),
     globalFileTask: Math.max(0, Number(data?.globalFileTask) || 0),
@@ -258,7 +325,7 @@ export async function previewArchive(
 ): Promise<{ items: ArchiveEntry[]; total: number }> {
   const target = requireInstancePath(pathValue, { allowRoot: false })
   const code = String(codeValue ?? 'utf-8').trim().slice(0, 40) || 'utf-8'
-  const data = await callPanel<any>('/api/files/preview', {
+  const data = await callFilePanel<any>(uuid, daemonId, '/api/files/preview', {
     query: { uuid, daemonId, target, code },
   })
   const items = Array.isArray(data?.items) ? data.items.map((item: any) => ({
@@ -290,13 +357,13 @@ export async function chmodEntries(
   const chmod = requireChmod(modeValue)
   const deep = Boolean(deepValue)
   if (paths.length === 1) {
-    return callPanel('/api/files/chmod', {
+    return callFilePanel(uuid, daemonId, '/api/files/chmod', {
       method: 'PUT',
       query: { uuid, daemonId },
       body: { target: paths[0], chmod, deep },
     })
   }
-  return callPanel('/api/files/chmod_batch', {
+  return callFilePanel(uuid, daemonId, '/api/files/chmod_batch', {
     method: 'PUT',
     query: { uuid, daemonId },
     body: { targets: paths, chmod, deep },
@@ -324,9 +391,8 @@ export async function downloadFromUrl(
   urlValue: unknown,
   fileNameValue: unknown,
 ): Promise<unknown> {
-  await assertInstanceAllowed(uuid, daemonId)
   const fileName = requireInstancePath(fileNameValue, { allowRoot: false })
-  return callPanel('/api/files/download_from_url', {
+  return callFilePanel(uuid, daemonId, '/api/files/download_from_url', {
     method: 'POST',
     query: { uuid, daemonId },
     body: { uuid, daemonId, url: requireRemoteDownloadUrl(urlValue), file_name: fileName },
@@ -334,9 +400,8 @@ export async function downloadFromUrl(
 }
 
 export async function stopDownload(uuid: string, daemonId: string, fileNameValue: unknown): Promise<unknown> {
-  await assertInstanceAllowed(uuid, daemonId)
   const fileName = requireInstancePath(fileNameValue, { allowRoot: false })
-  return callPanel('/api/mod/stop_transfer', {
+  return callFilePanel(uuid, daemonId, '/api/mod/stop_transfer', {
     method: 'POST',
     body: { uuid, daemonId, fileName, type: 'download' },
   })
@@ -357,7 +422,7 @@ export async function readTextFile(
   targetValue: unknown,
 ): Promise<{ path: string; text: string; truncated: boolean }> {
   const path = requireTextFilePath(targetValue)
-  const data = await callPanel<any>('/api/files/', {
+  const data = await callFilePanel<any>(uuid, daemonId, '/api/files/', {
     method: 'PUT',
     query: { uuid, daemonId },
     body: { target: path },
@@ -381,7 +446,7 @@ export async function writeTextFile(
   if (text.length > TEXT_FILE_MAX_CHARS) {
     throw createError({ statusCode: 400, statusMessage: '文件内容超出可编辑上限' })
   }
-  await callPanel<any>('/api/files/', {
+  await callFilePanel<any>(uuid, daemonId, '/api/files/', {
     method: 'PUT',
     query: { uuid, daemonId },
     body: { target: path, text },
@@ -391,14 +456,14 @@ export async function writeTextFile(
 export async function makeDirectory(uuid: string, daemonId: string, dirValue: unknown, nameValue: unknown): Promise<string> {
   const dir = requireInstancePath(dirValue)
   const target = joinPath(dir, requireFileName(nameValue))
-  await callPanel<any>('/api/files/mkdir', { method: 'POST', query: { uuid, daemonId }, body: { target } })
+  await callFilePanel<any>(uuid, daemonId, '/api/files/mkdir', { method: 'POST', query: { uuid, daemonId }, body: { target } })
   return target
 }
 
 export async function createEmptyFile(uuid: string, daemonId: string, dirValue: unknown, nameValue: unknown): Promise<string> {
   const dir = requireInstancePath(dirValue)
   const target = joinPath(dir, requireFileName(nameValue))
-  await callPanel<any>('/api/files/touch', { method: 'POST', query: { uuid, daemonId }, body: { target } })
+  await callFilePanel<any>(uuid, daemonId, '/api/files/touch', { method: 'POST', query: { uuid, daemonId }, body: { target } })
   return target
 }
 
@@ -412,7 +477,7 @@ export async function renameEntry(
   const path = requireInstancePath(pathValue, { allowRoot: false })
   const target = joinPath(parentOf(path), requireFileName(newNameValue))
   if (target === path) return path
-  const result = await callPanel<any>('/api/files/move', {
+  const result = await callFilePanel<any>(uuid, daemonId, '/api/files/move', {
     method: 'PUT',
     query: { uuid, daemonId },
     body: { targets: [[path, target]] },
@@ -462,7 +527,7 @@ export async function transferEntries(
 
   const endpoint = mode === 'copy' ? '/api/files/copy' : '/api/files/move'
   const method = mode === 'copy' ? 'POST' : 'PUT'
-  const result = await callPanel<any>(endpoint, { method, query: { uuid, daemonId }, body: { targets } })
+  const result = await callFilePanel<any>(uuid, daemonId, endpoint, { method, query: { uuid, daemonId }, body: { targets } })
 
   // 检查是否有文件被占用或操作失败
   if (result?.data) {
@@ -491,7 +556,7 @@ export async function transferEntries(
 
 export async function deleteEntries(uuid: string, daemonId: string, pathsValue: unknown): Promise<string[]> {
   const paths = requirePathList(pathsValue)
-  const result = await callPanel<any>('/api/files', {
+  const result = await callFilePanel<any>(uuid, daemonId, '/api/files', {
     method: 'DELETE',
     query: { uuid, daemonId },
     body: { targets: paths }
@@ -540,7 +605,7 @@ export async function compressEntries(
     throw createError({ statusCode: 400, statusMessage: '压缩包名必须以 .zip 结尾' })
   }
   const source = joinPath(dir, name)
-  const result = await callPanel<any>('/api/files/compress', {
+  const result = await callFilePanel<any>(uuid, daemonId, '/api/files/compress', {
     method: 'POST',
     query: { uuid, daemonId },
     body: { type: 1, code: 'utf-8', source, targets: paths },
@@ -581,7 +646,7 @@ export async function extractArchive(
     toDir = joinPath(toDir, requireFileName(folderName))
   }
 
-  const result = await callPanel<any>('/api/files/compress', {
+  const result = await callFilePanel<any>(uuid, daemonId, '/api/files/compress', {
     method: 'POST',
     query: { uuid, daemonId },
     body: { type: 2, code: 'utf-8', source: path, targets: toDir },
@@ -600,38 +665,10 @@ export async function extractArchive(
 
 // ===== 下载与上传：两步式票据 =====
 
-function daemonBase(addr: string, prefix: string): string {
-  const scheme = new URL(getAdminMcsmConfig().baseUrl).protocol
-  const raw = addr.trim()
-  // filemananger_router 返回的是 fullAddr（host:port 可能已经带 prefix），
-  // 但旧版本或自定义面板也可能返回一个完整 URL。统一交给 URL 解析，
-  // 兼容路径前缀和 IPv6，同时拒绝把查询串/认证信息带进票据地址。
-  const candidate = /^[a-z][a-z\d+.-]*:\/\//i.test(raw) ? raw : `http://${raw}`
-  let parsed: URL
-  try {
-    parsed = new URL(candidate)
-  } catch {
-    throw createError({ statusCode: 502, statusMessage: 'MCSM 面板返回的节点地址格式无法识别' })
-  }
-  if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:')
-    || !parsed.hostname || parsed.username || parsed.password || parsed.search || parsed.hash) {
-    throw createError({ statusCode: 502, statusMessage: 'MCSM 面板返回的节点地址格式无法识别' })
-  }
-
-  const currentPath = parsed.pathname.replace(/\/+$/, '')
-  const returnedPrefix = String(prefix || '').trim().replace(/^\/*/, '').replace(/\/*$/, '')
-  const extraPath = returnedPrefix ? `/${returnedPrefix}` : ''
-  const pathname = currentPath && (currentPath === extraPath || currentPath.startsWith(`${extraPath}/`))
-    ? currentPath
-    : `${currentPath}${extraPath}`
-  // 节点用面板同一个协议：面板是 https 时节点也按 https 走。
-  return `${scheme}//${parsed.host}${pathname}`
-}
-
 /** 换取某个文件的一次性下载地址（直连守护进程）。 */
 export async function fileDownloadUrl(uuid: string, daemonId: string, pathValue: unknown): Promise<{ path: string; url: string }> {
   const path = requireInstancePath(pathValue, { allowRoot: false })
-  const data = await callPanel<any>('/api/files/download', {
+  const data = await callFilePanel<any>(uuid, daemonId, '/api/files/download', {
     method: 'POST',
     query: { uuid, daemonId, file_name: path },
   })
@@ -642,14 +679,14 @@ export async function fileDownloadUrl(uuid: string, daemonId: string, pathValue:
   }
   return {
     path,
-    url: `${daemonBase(addr, String(data?.prefix || ''))}/download/${encodeURIComponent(password)}/${encodeURIComponent(nameOf(path))}`,
+    url: `${resolveDaemonBase(data, getAdminMcsmConfig().baseUrl)}/download/${encodeURIComponent(password)}/${encodeURIComponent(nameOf(path))}`,
   }
 }
 
-/** 换取上传地址（直连守护进程），由调用方把 multipart 转发过去。 */
+/** 换取分块上传初始化地址，调用方再向守护进程逐块传送。 */
 export async function fileUploadUrl(uuid: string, daemonId: string, dirValue: unknown): Promise<{ dir: string; url: string }> {
   const dir = requireInstancePath(dirValue)
-  const data = await callPanel<any>('/api/files/upload', {
+  const data = await callFilePanel<any>(uuid, daemonId, '/api/files/upload', {
     method: 'POST',
     query: { uuid, daemonId, upload_dir: dir },
   })
@@ -658,7 +695,7 @@ export async function fileUploadUrl(uuid: string, daemonId: string, dirValue: un
   if (!password || !addr) {
     throw createError({ statusCode: 502, statusMessage: 'MCSM 面板没有返回上传地址' })
   }
-  return { dir, url: `${daemonBase(addr, String(data?.prefix || ''))}/upload/${encodeURIComponent(password)}` }
+  return { dir, url: `${resolveDaemonBase(data, getAdminMcsmConfig().baseUrl)}/upload-new/${encodeURIComponent(password)}` }
 }
 
 /** 内联预览时用的 Content-Type；不在白名单里的一律按附件下发。 */

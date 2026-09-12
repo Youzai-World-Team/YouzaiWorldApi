@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { mcsmInstanceKey, normalizeMcsmInstanceTarget } from '#shared/mcsm-instance'
 
 /**
  * 独立预览页。
@@ -20,9 +21,18 @@ const daemonId = computed(() => String(route.query.daemonId || ''))
 const path = computed(() => String(route.query.path || ''))
 const kind = computed(() => String(route.query.kind || 'binary'))
 const size = computed(() => Number(route.query.size) || 0)
+const { loading, configured, instanceConfigured, instanceKey, loadError } = useMcsmFileInstance()
+const linkTarget = computed(() => normalizeMcsmInstanceTarget({ instanceUuid: uuid.value, daemonId: daemonId.value }))
+const previewError = computed(() => {
+  if (!linkTarget.value || !path.value) return '缺少有效的实例与文件路径，请从「服务器文件」页重新打开预览。'
+  if (loadError.value) return loadError.value
+  if (!configured.value || !instanceConfigured.value) return '尚未配置管理实例，请管理员先到站点设置完成绑定。'
+  if (mcsmInstanceKey(linkTarget.value) !== instanceKey.value) return '管理实例已变更，此预览链接已失效。请返回「服务器文件」页重新打开，避免操作错误的实例。'
+  return ''
+})
 
 const fileName = computed(() => path.value.split('/').filter(Boolean).pop() || '文件预览')
-const ready = computed(() => Boolean(uuid.value && daemonId.value && path.value))
+const ready = computed(() => !loading.value && !previewError.value)
 
 useHead({ title: () => `${fileName.value} · 服务器文件` })
 
@@ -57,12 +67,14 @@ function backToFiles() {
     </div>
 
     <section class="card">
-      <EmptyState v-if="!ready" compact image="/images/empty-looking-for-answers.svg">
+      <p v-if="loading" class="empty">正在确认管理实例…</p>
+      <EmptyState v-else-if="!ready" compact image="/images/empty-looking-for-answers.svg">
         <template #title>无法打开文件预览</template>
-        缺少必要的参数（实例与文件路径），请从「服务器文件」页打开预览。
+        {{ previewError }}
       </EmptyState>
       <FilePreview
         v-else
+        :key="`${instanceKey}:${path}:${kind}`"
         :uuid="uuid"
         :daemon-id="daemonId"
         :path="path"

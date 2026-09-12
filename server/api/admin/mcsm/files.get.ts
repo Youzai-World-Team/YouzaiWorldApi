@@ -1,13 +1,15 @@
 import { requirePagePermission } from '../../../utils/db'
-import { assertInstanceAllowed } from '../../../utils/mcsm'
-import { listFiles } from '../../../utils/mcsm-files'
+import { assertManagedInstanceAllowed } from '../../../utils/mcsm'
+import { listAllFiles, listFiles } from '../../../utils/mcsm-files'
 
-/** 列出实例目录内容，附带类型判定（可编辑 / 可预览）供「服务器文件」页分派。 */
+/** 默认列出完整目录；显式传 page 时保留单页读取，附带可编辑 / 可预览的类型判定。 */
 export default defineEventHandler(async (event) => {
   requirePagePermission(event, 'server-files', 'view')
   const query = getQuery(event)
   const uuid = String(query.uuid || '')
   const daemonId = String(query.daemonId || '')
-  await assertInstanceAllowed(uuid, daemonId)
-  return listFiles(uuid, daemonId, query.path, query.page)
+  await assertManagedInstanceAllowed(uuid, daemonId)
+  return query.page === undefined
+    ? listAllFiles(uuid, daemonId, query.path)
+    : listFiles(uuid, daemonId, query.path, query.page)
 })

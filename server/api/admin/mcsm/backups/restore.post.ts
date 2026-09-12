@@ -4,7 +4,7 @@ import {
   listBackups,
   restoreBackup,
 } from '../../../../utils/mcsm-backup'
-import { assertInstanceAllowed } from '../../../../utils/mcsm'
+import { assertManagedInstanceAllowed } from '../../../../utils/mcsm'
 
 /**
  * 恢复备份：把压缩包解压回实例根目录，同名文件直接覆盖。
@@ -24,7 +24,7 @@ export default defineEventHandler(async (event) => {
   if (!BACKUP_NAME_RE.test(name)) {
     throw createError({ statusCode: 400, statusMessage: '备份文件名不合法' })
   }
-  const instance = await assertInstanceAllowed(uuid, daemonId)
+  const instance = await assertManagedInstanceAllowed(uuid, daemonId)
   if (instance.status !== 0) {
     throw createError({
       statusCode: 409,

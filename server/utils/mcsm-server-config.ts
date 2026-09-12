@@ -1,13 +1,13 @@
 import { createError } from 'h3'
 import { listBackups } from './mcsm-backup'
-import { assertInstanceAllowed, callPanel } from './mcsm'
+import { assertManagedInstanceAllowed, callPanel } from './mcsm'
 
 /**
  * MCSManager 面板里「实例配置 / 计划任务 / 文件」这三块的客户端。
  * <p>
  * 与 {@code mcsm.ts} 共用同一个 {@link callPanel} 出口（ApiKey 拼装与错误映射都在那边），
  * 这里只负责各自的参数校验和返回值裁剪。每个写操作都由接口层先过
- * {@link assertInstanceAllowed}，确保实例属于当前 ApiKey。
+ * {@link assertManagedInstanceAllowed}，确保实例与站点设置中的管理目标一致。
  * </p>
  * <p>
  * 下面这些字段名和取值都是拿真实面板（10.12.5）实测出来的，官方 API 文档没有覆盖
@@ -421,5 +421,5 @@ export async function deleteSchedule(uuid: string, daemonId: string, nameValue: 
 
 /** 供接口层复用：先确认实例归属，再返回规范化后的实例信息。 */
 export async function requireInstance(uuid: string, daemonId: string) {
-  return assertInstanceAllowed(uuid, daemonId)
+  return assertManagedInstanceAllowed(uuid, daemonId)
 }

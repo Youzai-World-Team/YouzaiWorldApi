@@ -59,6 +59,7 @@ import {
   type PasswordExpiryStatus,
 } from '#shared/password-policy'
 import { WEB_ASSET_BASE_URL } from '#shared/web-assets'
+import { normalizeMcsmInstanceTarget, type McsmInstanceTarget } from '#shared/mcsm-instance'
 
 ensureDataDirs()
 
@@ -807,6 +808,7 @@ const DOMAIN_MAIL_SENT_RETENTION_ROWS = 2000
 // 与 turnstile.secret / inbound_mail.key 同一套存法，全部外呼只在服务端发起。
 const MCSM_BASE_URL_SETTING = 'mcsm.base_url'
 const MCSM_API_KEY_SETTING = 'mcsm.api_key'
+const MCSM_MANAGED_INSTANCE_SETTING = 'mcsm.managed_instance'
 const MCSM_BASE_URL_ENV = 'YZWC_MCSM_BASE_URL'
 const MCSM_API_KEY_ENV = 'YZWC_MCSM_API_KEY'
 
@@ -2915,6 +2917,7 @@ export interface McsmAdminConfig {
   apiKeyConfigured: boolean
   apiKeySource: SettingSource
   configured: boolean
+  managedInstance: McsmInstanceTarget | null
 }
 
 /**
@@ -2980,6 +2983,31 @@ export function mcsmConfigured(): boolean {
   return Boolean(config.baseUrl && config.apiKey)
 }
 
+/** 单条设置同时保存实例和节点，避免读取到不配套的两项 ID。 */
+export function getMcsmManagedInstance(): McsmInstanceTarget | null {
+  const value = getSetting(MCSM_MANAGED_INSTANCE_SETTING)
+  if (!value) return null
+  try {
+    return normalizeMcsmInstanceTarget(JSON.parse(value))
+  } catch {
+    return null
+  }
+}
+
+/** 调用方在保存非空目标前，必须确认实例属于当前面板账户。 */
+export function setMcsmManagedInstance(value: unknown): McsmInstanceTarget | null {
+  if (value === null) {
+    deleteSetting(MCSM_MANAGED_INSTANCE_SETTING)
+    return null
+  }
+  const target = normalizeMcsmInstanceTarget(value)
+  if (!target) {
+    throw createError({ statusCode: 400, statusMessage: '请选择有效的管理实例' })
+  }
+  setSetting(MCSM_MANAGED_INSTANCE_SETTING, JSON.stringify(target))
+  return target
+}
+
 export function getAdminMcsmConfig(): McsmAdminConfig {
   const config = getMcsmConfig()
   return {
@@ -2989,6 +3017,7 @@ export function getAdminMcsmConfig(): McsmAdminConfig {
     apiKeyConfigured: Boolean(config.apiKey),
     apiKeySource: settingSource(MCSM_API_KEY_SETTING, MCSM_API_KEY_ENV),
     configured: Boolean(config.baseUrl && config.apiKey),
+    managedInstance: getMcsmManagedInstance(),
   }
 }
 
@@ -3008,6 +3037,10 @@ export function setMcsmConfig(input: { baseUrl?: unknown; apiKey?: unknown }): M
   }
   setSetting(MCSM_BASE_URL_SETTING, baseUrl)
   setSetting(MCSM_API_KEY_SETTING, apiKey)
+  // 更换连接后重新选择目标，避免把旧面板的实例绑定带到新账户。
+  if (baseUrl !== current.baseUrl.replace(/\/+$/, '') || apiKey !== current.apiKey) {
+    setMcsmManagedInstance(null)
+  }
   return getAdminMcsmConfig()
 }
 

@@ -1,6 +1,6 @@
 import { recordAudit, requireFeaturePermission } from '../../../utils/db'
 import { startBackup } from '../../../utils/mcsm-backup'
-import { assertInstanceAllowed } from '../../../utils/mcsm'
+import { assertManagedInstanceAllowed } from '../../../utils/mcsm'
 
 /**
  * 启动 ElementsPanel 原生整实例备份任务。
@@ -12,7 +12,7 @@ export default defineEventHandler(async (event) => {
 
   const uuid = String(body?.uuid || '')
   const daemonId = String(body?.daemonId || '')
-  const instance = await assertInstanceAllowed(uuid, daemonId)
+  const instance = await assertManagedInstanceAllowed(uuid, daemonId)
   if (instance.status !== 0) {
     throw createError({
       statusCode: 409,

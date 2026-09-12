@@ -1,5 +1,5 @@
 import { recordAudit, requireFeaturePermission } from '../../../utils/db'
-import { assertInstanceAllowed, requireCommand, sendCommand } from '../../../utils/mcsm'
+import { assertManagedInstanceAllowed, requireCommand, sendCommand } from '../../../utils/mcsm'
 
 /**
  * 向实例控制台发送一条命令。
@@ -15,7 +15,7 @@ export default defineEventHandler(async (event) => {
   const uuid = String(body?.uuid || '')
   const daemonId = String(body?.daemonId || '')
   const command = requireCommand(body?.command)
-  const instance = await assertInstanceAllowed(uuid, daemonId)
+  const instance = await assertManagedInstanceAllowed(uuid, daemonId)
 
   await sendCommand(uuid, daemonId, command)
   recordAudit(event, user, `向实例「${instance.nickname || uuid}」发送命令：${command}`)

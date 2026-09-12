@@ -1,5 +1,5 @@
 import { recordAudit, requireFeaturePermission } from '../../../../utils/db'
-import { assertInstanceAllowed } from '../../../../utils/mcsm'
+import { assertManagedInstanceAllowed } from '../../../../utils/mcsm'
 import { createEmptyFile, makeDirectory } from '../../../../utils/mcsm-files'
 
 /** 新建目录或空文件。kind 决定走 mkdir 还是 touch。 */
@@ -9,7 +9,7 @@ export default defineEventHandler(async (event) => {
 
   const uuid = String(body?.uuid || '')
   const daemonId = String(body?.daemonId || '')
-  const instance = await assertInstanceAllowed(uuid, daemonId)
+  const instance = await assertManagedInstanceAllowed(uuid, daemonId)
 
   const kind = String(body?.kind || 'directory')
   if (kind !== 'directory' && kind !== 'file') {

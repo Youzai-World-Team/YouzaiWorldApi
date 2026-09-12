@@ -1,5 +1,8 @@
 import { createError } from 'h3'
-import { getMcsmConfig, type McsmConfig } from './db'
+import { getMcsmConfig, getMcsmManagedInstance, type McsmConfig } from './db'
+import { MCSM_UUID_RE, mcsmInstanceKey, type McsmInstanceTarget } from '#shared/mcsm-instance'
+
+export { MCSM_UUID_RE } from '#shared/mcsm-instance'
 
 /**
  * MCSManager 面板客户端。
@@ -22,10 +25,6 @@ const REQUEST_TIMEOUT_MS = 15_000
 const LOG_SIZE_MIN_CHARS = 1_000
 const LOG_SIZE_MAX_CHARS = 500_000
 const LOG_SIZE_DEFAULT_CHARS = 60_000
-// 备份文件名由后台生成，只允许这一类；恢复和删除也只认这个模式，
-// 避免把面板文件接口变成任意路径的删除工具。
-export const MCSM_UUID_RE = /^[0-9a-f]{32}$/i
-
 /** 面板实例状态码。-1 忙碌，0 停止，1 停止中，2 启动中，3 运行中。 */
 export const INSTANCE_STATUS_LABELS: Record<number, string> = {
   '-1': '忙碌',
@@ -260,9 +259,45 @@ export async function assertInstanceAllowed(uuid: string, daemonId: string): Pro
   return matched
 }
 
+/** 管理页和文件页只能操作站点设置中明确指定的同一个实例；页面权限仍分别校验。 */
+export function requireManagedInstanceTarget(uuid: string, daemonId: string): McsmInstanceTarget {
+  if (!MCSM_UUID_RE.test(uuid) || !MCSM_UUID_RE.test(daemonId)) {
+    throw createError({ statusCode: 400, statusMessage: '实例 ID 或节点 ID 格式不正确' })
+  }
+  const target = getMcsmManagedInstance()
+  if (!target) {
+    throw createError({ statusCode: 503, statusMessage: '请先在站点设置中选择管理实例' })
+  }
+  if (mcsmInstanceKey(target) !== mcsmInstanceKey({ instanceUuid: uuid, daemonId })) {
+    throw createError({ statusCode: 409, statusMessage: '管理实例已变更，请刷新页面后重试' })
+  }
+  return target
+}
+
+/** 在异步步骤之间复核目标及面板连接，阻止旧票据或旧请求继续操作。 */
+export function createManagedInstanceGuard(uuid: string, daemonId: string): () => void {
+  requireManagedInstanceTarget(uuid, daemonId)
+  const connection = getMcsmConfig()
+  return () => {
+    requireManagedInstanceTarget(uuid, daemonId)
+    const latestConnection = getMcsmConfig()
+    if (connection.baseUrl !== latestConnection.baseUrl || connection.apiKey !== latestConnection.apiKey) {
+      throw createError({ statusCode: 409, statusMessage: '面板连接已变更，请刷新页面后重试' })
+    }
+  }
+}
+
+export async function assertManagedInstanceAllowed(uuid: string, daemonId: string): Promise<McsmInstanceSummary> {
+  const assertCurrent = createManagedInstanceGuard(uuid, daemonId)
+  const instance = await assertInstanceAllowed(uuid, daemonId)
+  assertCurrent()
+  return instance
+}
+
 export async function getInstanceDetail(uuid: string, daemonId: string): Promise<McsmInstanceDetail> {
-  const summary = await assertInstanceAllowed(uuid, daemonId)
+  const summary = await assertManagedInstanceAllowed(uuid, daemonId)
   const raw = await callPanel<any>('/api/instance', { query: { uuid, daemonId } })
+  requireManagedInstanceTarget(uuid, daemonId)
   const config = raw?.config || {}
   const info = raw?.info || {}
   const runtime = raw?.processInfo || {}

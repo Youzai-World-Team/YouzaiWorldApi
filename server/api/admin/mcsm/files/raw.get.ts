@@ -1,5 +1,5 @@
 import { requirePagePermission } from '../../../../utils/db'
-import { assertInstanceAllowed } from '../../../../utils/mcsm'
+import { assertManagedInstanceAllowed, createManagedInstanceGuard } from '../../../../utils/mcsm'
 import {
   fileDownloadUrl,
   INLINE_PREVIEW_MAX_BYTES,
@@ -24,11 +24,13 @@ import {
  * </p>
  */
 export default defineEventHandler(async (event) => {
+  setResponseHeader(event, 'Cache-Control', 'no-store')
   requirePagePermission(event, 'server-files', 'view')
   const query = getQuery(event)
   const uuid = String(query.uuid || '')
   const daemonId = String(query.daemonId || '')
-  await assertInstanceAllowed(uuid, daemonId)
+  await assertManagedInstanceAllowed(uuid, daemonId)
+  const assertCurrent = createManagedInstanceGuard(uuid, daemonId)
 
   const path = requireInstancePath(query.path, { allowRoot: false })
   const name = path.split('/').filter(Boolean).pop() || 'download'
@@ -36,12 +38,19 @@ export default defineEventHandler(async (event) => {
   const inlineType = inlineContentType(name)
 
   const { url } = await fileDownloadUrl(uuid, daemonId, path)
+  assertCurrent()
 
   let upstream: Response
   try {
     upstream = await fetch(url, { signal: AbortSignal.timeout(30_000) })
   } catch {
     throw createError({ statusCode: 504, statusMessage: '无法从守护进程取回文件' })
+  }
+  try {
+    assertCurrent()
+  } catch (error) {
+    await upstream.body?.cancel().catch(() => {})
+    throw error
   }
   if (!upstream.ok || !upstream.body) {
     throw createError({ statusCode: 502, statusMessage: `守护进程返回异常状态 ${upstream.status}` })

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { marked } from 'marked'
 import JSZip from 'jszip'
 import mammoth from 'mammoth'
@@ -47,6 +47,13 @@ const LANGUAGE_BY_EXT: Record<string, string> = {
 }
 
 const { showToast } = useToast()
+let requestGeneration = 0
+let disposed = false
+
+function currentRequest() {
+  const generation = requestGeneration
+  return () => !disposed && generation === requestGeneration
+}
 
 const text = ref('')
 const original = ref('')
@@ -123,23 +130,26 @@ function formatBytes(value: number) {
 }
 
 async function loadText() {
+  const isCurrent = currentRequest()
   loading.value = true
   mediaError.value = false
   try {
     const result = await $fetch<{ path: string; text: string; truncated: boolean }>('/api/admin/mcsm/file', {
       query: { uuid: props.uuid, daemonId: props.daemonId, path: props.path },
     })
+    if (!isCurrent()) return
     text.value = result.text
     original.value = result.text
     truncated.value = result.truncated
   } catch (error: any) {
-    showToast(error?.data?.statusMessage || '文件读取失败', 'error')
+    if (isCurrent()) showToast(error?.data?.statusMessage || '文件读取失败', 'error')
   } finally {
-    loading.value = false
+    if (isCurrent()) loading.value = false
   }
 }
 
 async function loadBinaryAsText() {
+  const isCurrent = currentRequest()
   binaryTextLoading.value = true
   try {
     const url = `/api/admin/mcsm/files/raw?uuid=${props.uuid}&daemonId=${props.daemonId}&path=${encodeURIComponent(props.path)}`
@@ -154,6 +164,7 @@ async function loadBinaryAsText() {
     console.log('Blob type:', blob.type, 'size:', blob.size)
 
     const rawText = await blob.text()
+    if (!isCurrent()) return
 
     // 调试：检查每行开头
     const lines = rawText.split('\n').slice(0, 5)
@@ -177,15 +188,17 @@ async function loadBinaryAsText() {
 
     // 等待 DOM 更新后手动触发 Monaco 重新布局
     await nextTick()
-    binaryEditorRef.value?.layout()
+    if (isCurrent()) binaryEditorRef.value?.layout()
   } catch (error: any) {
-    showToast(error?.message || '文件读取失败', 'error')
+    if (isCurrent()) showToast(error?.message || '文件读取失败', 'error')
   } finally {
-    binaryTextLoading.value = false
+    if (isCurrent()) binaryTextLoading.value = false
   }
 }
 
 async function loadDocument() {
+  const isCurrent = currentRequest()
+  const ext = extension.value
   docLoading.value = true
   docError.value = ''
   docHtml.value = ''
@@ -193,8 +206,7 @@ async function loadDocument() {
     const url = `/api/admin/mcsm/files/raw?uuid=${props.uuid}&daemonId=${props.daemonId}&path=${encodeURIComponent(props.path)}`
     const response = await fetch(url)
     if (!response.ok) throw new Error(`HTTP ${response.status}`)
-
-    const ext = extension.value
+    if (!isCurrent()) return
     if (ext === 'pdf') {
       // PDF 直接用 iframe 展示
       docHtml.value = `<iframe src="${url}" style="width:100%;height:min(70vh,800px);border:0"></iframe>`
@@ -202,14 +214,17 @@ async function loadDocument() {
     }
 
     const blob = await response.blob()
+    if (!isCurrent()) return
 
     if (ext === 'docx') {
       const arrayBuffer = await blob.arrayBuffer()
       const result = await mammoth.convertToHtml({ arrayBuffer })
+      if (!isCurrent()) return
       docHtml.value = result.value
       if (result.messages.length) console.warn('mammoth warnings:', result.messages)
     } else if (ext === 'xlsx') {
       const arrayBuffer = await blob.arrayBuffer()
+      if (!isCurrent()) return
       const workbook = XLSX.read(arrayBuffer)
       let html = '<div class="xlsx-preview">'
       for (const sheetName of workbook.SheetNames) {
@@ -223,6 +238,7 @@ async function loadDocument() {
     } else if (ext === 'zip' || ext === 'jar') {
       const arrayBuffer = await blob.arrayBuffer()
       const zip = await JSZip.loadAsync(arrayBuffer)
+      if (!isCurrent()) return
       const files: string[] = []
       zip.forEach((path, file) => {
         if (!file.dir) files.push(path)
@@ -234,9 +250,9 @@ async function loadDocument() {
       docError.value = '不支持的文档格式'
     }
   } catch (error: any) {
-    docError.value = error?.message || '文档加载失败'
+    if (isCurrent()) docError.value = error?.message || '文档加载失败'
   } finally {
-    docLoading.value = false
+    if (isCurrent()) docLoading.value = false
   }
 }
 
@@ -291,20 +307,24 @@ function zipGoUp() {
 }
 
 async function save() {
-  if (!props.canEdit || saving.value || !dirty.value || truncated.value) return
+  if (!props.canEdit || loading.value || saving.value || !dirty.value || truncated.value || disposed) return
+  const isCurrent = currentRequest()
+  const savedText = text.value
+  const savedName = fileName.value
   saving.value = true
   try {
     await $fetch('/api/admin/mcsm/file', {
       method: 'PUT',
-      body: { uuid: props.uuid, daemonId: props.daemonId, path: props.path, text: text.value },
+      body: { uuid: props.uuid, daemonId: props.daemonId, path: props.path, text: savedText },
     })
-    original.value = text.value
-    showToast(`${fileName.value} 已保存`)
+    if (!isCurrent()) return
+    original.value = savedText
+    showToast(`${savedName} 已保存`)
     emit('saved')
   } catch (error: any) {
-    showToast(error?.data?.statusMessage || '保存失败', 'error')
+    if (isCurrent()) showToast(error?.data?.statusMessage || '保存失败', 'error')
   } finally {
-    saving.value = false
+    if (isCurrent()) saving.value = false
   }
 }
 
@@ -318,7 +338,11 @@ function relayout() {
 }
 defineExpose({ relayout, dirty, save })
 
-watch(() => [props.path, props.kind], () => {
+watch(() => [props.uuid, props.daemonId, props.path, props.kind], () => {
+  requestGeneration++
+  loading.value = false
+  docLoading.value = false
+  saving.value = false
   text.value = ''
   original.value = ''
   truncated.value = false
@@ -332,7 +356,12 @@ watch(() => [props.path, props.kind], () => {
   binaryTextLoading.value = false
   if (isText.value) void loadText()
   else if (isDocument.value || props.kind === 'archive') void loadDocument()
-}, { immediate: true })
+}, { immediate: true, flush: 'sync' })
+
+onBeforeUnmount(() => {
+  disposed = true
+  requestGeneration++
+})
 </script>
 
 <template>

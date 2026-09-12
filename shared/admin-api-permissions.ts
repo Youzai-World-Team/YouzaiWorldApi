@@ -14,11 +14,9 @@ export function pageKeyForApi(path: string): string | undefined {
     || path.startsWith('/api/admin/mcsm-settings')
     || path.startsWith('/api/auth/game-api-key')
     || path.startsWith('/api/auth/inbound-mail-key')) return 'settings'
-  // 实例列表两个页面都要用，交给接口自己做「任一页面可见」判定。
-  if (path.startsWith('/api/admin/mcsm/instances')) return undefined
   // 游戏统计同步接口使用独立功能权限；它虽然是 POST，但所属页面本身是只读页。
   if (path.replace(/\/+$/, '') === '/api/admin/game-stats/sync') return undefined
-  // /api/admin/mcsm/file 与 /api/admin/mcsm/files* 都归「服务器文件」页，
+  // /api/admin/mcsm/file 与 /api/admin/mcsm/files*（包括绑定实例摘要）都归「服务器文件」页，
   // 必须排在下面那条通用的 mcsm 规则前面。
   if (path.startsWith('/api/admin/mcsm/file')) return 'server-files'
   if (path.startsWith('/api/admin/mcsm/')) return 'server-manage'
@@ -47,6 +45,5 @@ export function isReadOperation(path: string, method: string): boolean {
     || path === '/api/admin/game-cosmetics/lookup'
     // ElementsPanel 这几条查询接口因参数结构使用 POST，但不会修改面板状态。
     // 标成只读后，具备对应区域「查看」权限的后台用户才能正常使用。
-    || path === '/api/admin/mcsm/instance-config/list'
     || path === '/api/admin/mcsm/instance-config/async-status'
 }

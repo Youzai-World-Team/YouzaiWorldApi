@@ -1,5 +1,5 @@
 import { recordAudit, requireFeaturePermission } from '../../../../utils/db'
-import { assertInstanceAllowed } from '../../../../utils/mcsm'
+import { assertManagedInstanceAllowed } from '../../../../utils/mcsm'
 import { deleteEntries } from '../../../../utils/mcsm-files'
 
 /**
@@ -12,7 +12,7 @@ export default defineEventHandler(async (event) => {
 
   const uuid = String(body?.uuid || '')
   const daemonId = String(body?.daemonId || '')
-  const instance = await assertInstanceAllowed(uuid, daemonId)
+  const instance = await assertManagedInstanceAllowed(uuid, daemonId)
 
   const paths = await deleteEntries(uuid, daemonId, body?.paths)
   const summary = paths.slice(0, 10).join('、') + (paths.length > 10 ? ` 等 ${paths.length} 项` : '')

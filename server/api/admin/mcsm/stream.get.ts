@@ -1,6 +1,6 @@
 import { createEventStream } from 'h3'
 import { requirePagePermission } from '../../../utils/db'
-import { assertInstanceAllowed, fetchOutputLog, stripAnsi } from '../../../utils/mcsm'
+import { assertManagedInstanceAllowed, fetchOutputLog, requireManagedInstanceTarget, stripAnsi } from '../../../utils/mcsm'
 import { openConsoleStream, requireConsoleStreamSupport } from '../../../utils/mcsm-console-stream'
 
 /**
@@ -33,7 +33,7 @@ export default defineEventHandler(async (event) => {
   const query = getQuery(event)
   const uuid = String(query.uuid || '')
   const daemonId = String(query.daemonId || '')
-  await assertInstanceAllowed(uuid, daemonId)
+  await assertManagedInstanceAllowed(uuid, daemonId)
 
   if (activeStreams >= MAX_CONCURRENT_STREAMS) {
     throw createError({ statusCode: 503, statusMessage: '实时控制台连接数已达上限，请稍后再试' })
@@ -54,7 +54,15 @@ export default defineEventHandler(async (event) => {
     void stream.push({ event: name, data: JSON.stringify(payload) }).catch(() => stop())
   }
 
-  const heartbeat = setInterval(() => push('ping', { time: Date.now() }), HEARTBEAT_MS)
+  const heartbeat = setInterval(() => {
+    try {
+      requireManagedInstanceTarget(uuid, daemonId)
+      push('ping', { time: Date.now() })
+    } catch {
+      push('status', { state: 'changed', message: '管理实例已变更，正在重新连接' })
+      stop()
+    }
+  }, HEARTBEAT_MS)
 
   function stop() {
     if (stopped) return
@@ -108,7 +116,9 @@ export default defineEventHandler(async (event) => {
         stop()
       },
     })
-    push('status', { state: 'open', message: '' })
+    // 等待节点建连期间可能已取消绑定或关闭页面，及时释放迟到的连接。
+    if (stopped) upstream.close()
+    else push('status', { state: 'open', message: '' })
   } catch (error: any) {
     push('status', { state: 'error', message: String(error?.statusMessage || '实时控制台连接失败') })
     stop()

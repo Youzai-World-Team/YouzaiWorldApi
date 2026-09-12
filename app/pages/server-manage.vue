@@ -1,13 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { mcsmInstanceKey } from '#shared/mcsm-instance'
 
 useHead({ title: '服务器管理' })
-
-interface PanelUser {
-  userName: string
-  permission: number
-  permissionLabel: string
-}
 
 interface InstanceSummary {
   instanceUuid: string
@@ -82,13 +77,13 @@ const scheduleLevel = computed(() => access.featureLevelForKey('server-manage-sc
 const canEditProperties = computed(() => canEditPage.value && propertiesLevel.value === 'edit')
 const canEditSchedule = computed(() => canEditPage.value && scheduleLevel.value === 'edit')
 const instanceConfigLevel = computed(() => access.featureLevelForKey('server-manage-instance-config'))
+const canConfigureMcsm = computed(() => access.levelForKey('settings') === 'edit'
+  && access.featureLevelForKey('settings-mcsm') === 'edit')
 
 const loading = ref(true)
 const configured = ref(false)
-const panelUser = ref<PanelUser | null>(null)
-const panelBaseUrl = ref('')
-const instances = ref<InstanceSummary[]>([])
-const selectedKey = ref('')
+const instanceConfigured = ref(false)
+const loadError = ref('')
 
 const detail = ref<InstanceDetail | null>(null)
 const detailLoading = ref(false)
@@ -119,15 +114,16 @@ const powerPending = ref(false)
 let timer: ReturnType<typeof setInterval> | null = null
 // 刷新在飞时不再叠加下一轮：面板在慢节点上单次响应可能超过一个轮询周期。
 let refreshing = false
+let disposed = false
+let detailRequestId = 0
+let logRequestId = 0
+let powerRefreshTimer: ReturnType<typeof setTimeout> | null = null
+let commandRefreshTimer: ReturnType<typeof setTimeout> | null = null
 
-const selected = computed(() => instances.value.find((item) => instanceKey(item) === selectedKey.value) || null)
-const current = computed<InstanceSummary | InstanceDetail | null>(() => detail.value || selected.value)
+const current = computed(() => detail.value)
+const currentKey = computed(() => mcsmInstanceKey(current.value))
 const stopped = computed(() => current.value?.status === 0)
 const running = computed(() => current.value?.status === 3)
-
-function instanceKey(item: { daemonId: string; instanceUuid: string }) {
-  return `${item.daemonId}:${item.instanceUuid}`
-}
 
 function statusClass(status: number | undefined) {
   if (status === 3) return 'badge-running'
@@ -176,64 +172,52 @@ function errorMessage(error: any, fallback: string) {
   return error?.data?.statusMessage || error?.statusMessage || fallback
 }
 
-async function loadInstances() {
-  loading.value = true
+async function loadDetail(quiet = false) {
+  if (disposed) return
+  const requestId = ++detailRequestId
+  if (!quiet) detailLoading.value = true
   try {
     const result = await $fetch<{
       configured: boolean
-      baseUrl?: string
-      user: PanelUser | null
-      instances: InstanceSummary[]
-    }>('/api/admin/mcsm/instances')
+      instanceConfigured: boolean
+      instance: InstanceDetail | null
+    }>('/api/admin/mcsm/instance')
+    if (disposed || requestId !== detailRequestId) return
     configured.value = result.configured
-    panelBaseUrl.value = result.baseUrl || ''
-    panelUser.value = result.user
-    instances.value = result.instances
-    if (!result.instances.some((item) => instanceKey(item) === selectedKey.value)) {
-      selectedKey.value = result.instances.length ? instanceKey(result.instances[0]!) : ''
-    }
+    instanceConfigured.value = result.instanceConfigured
+    loadError.value = ''
+    detail.value = result.instance
   } catch (error: any) {
-    showToast(errorMessage(error, '实例列表加载失败'), 'error')
-  } finally {
-    loading.value = false
-  }
-}
-
-async function loadDetail(quiet = false) {
-  const target = selected.value
-  if (!target) {
+    if (disposed || requestId !== detailRequestId) return
     detail.value = null
-    return
-  }
-  if (!quiet) detailLoading.value = true
-  try {
-    detail.value = await $fetch<InstanceDetail>('/api/admin/mcsm/instance', {
-      query: { uuid: target.instanceUuid, daemonId: target.daemonId },
-    })
-  } catch (error: any) {
-    if (!quiet) showToast(errorMessage(error, '实例状态加载失败'), 'error')
+    loadError.value = errorMessage(error, '实例信息加载失败，请稍后重试')
   } finally {
-    detailLoading.value = false
+    if (!disposed && requestId === detailRequestId) {
+      detailLoading.value = false
+      loading.value = false
+    }
   }
 }
 
 async function loadLog(quiet = false) {
-  const target = selected.value
+  const target = current.value
   if (!target) {
     logText.value = ''
     return
   }
+  const requestId = ++logRequestId
   if (!quiet) logLoading.value = true
   try {
     const result = await $fetch<{ text: string; rawBytes: number }>('/api/admin/mcsm/log', {
       query: { uuid: target.instanceUuid, daemonId: target.daemonId, size: logSizeChars.value },
     })
+    if (disposed || requestId !== logRequestId || mcsmInstanceKey(target) !== currentKey.value) return
     logText.value = result.text
     if (autoScroll.value) scrollConsoleToBottom()
   } catch (error: any) {
-    if (!quiet) showToast(errorMessage(error, '控制台输出加载失败'), 'error')
+    if (!disposed && requestId === logRequestId && !quiet) showToast(errorMessage(error, '控制台输出加载失败'), 'error')
   } finally {
-    logLoading.value = false
+    if (requestId === logRequestId) logLoading.value = false
   }
 }
 
@@ -267,6 +251,7 @@ function closeStream() {
     flushTimer = null
   }
   logBuffer = ''
+  liveState.value = 'closed'
 }
 
 /**
@@ -277,8 +262,8 @@ function closeStream() {
  * </p>
  */
 function openStream() {
-  const target = selected.value
-  if (!target || !liveMode.value) return
+  const target = current.value
+  if (!target || !liveMode.value || disposed) return
   closeStream()
   liveState.value = 'connecting'
   logText.value = ''
@@ -291,15 +276,21 @@ function openStream() {
   eventSource = source
 
   source.addEventListener('history', (event) => {
+    if (eventSource !== source) return
     logText.value = (event as MessageEvent).data ? JSON.parse((event as MessageEvent).data).text : ''
     if (autoScroll.value) scrollConsoleToBottom()
   })
   source.addEventListener('log', (event) => {
+    if (eventSource !== source) return
     appendLive(JSON.parse((event as MessageEvent).data).text)
   })
   source.addEventListener('status', (event) => {
+    if (eventSource !== source) return
     const payload = JSON.parse((event as MessageEvent).data)
-    if (payload.state === 'open') liveState.value = 'open'
+    if (payload.state === 'changed') {
+      closeStream()
+      void refreshAll(true)
+    } else if (payload.state === 'open') liveState.value = 'open'
     else if (payload.state === 'closed' || payload.state === 'error') {
       liveState.value = 'closed'
       if (payload.message) showToast(payload.message, payload.state === 'error' ? 'error' : 'info')
@@ -309,6 +300,7 @@ function openStream() {
   })
   // 服务端主动 close 或网络断开：EventSource 会自己重连，这里先标记为连接中。
   source.onerror = () => {
+    if (eventSource !== source) return
     if (liveState.value === 'open') liveState.value = 'connecting'
   }
 }
@@ -335,19 +327,16 @@ function scrollConsoleToBottom() {
 
 // 状态（详情）仍然轮询，但控制台走 SSE 实时流，不再随轮询拉日志。
 async function refreshAll(quiet = false) {
-  if (refreshing) return
+  if (refreshing || disposed) return
   refreshing = true
+  const previousKey = currentKey.value
   try {
     await loadDetail(quiet)
     // 暂停实时模式时，刷新按钮顺带把控制台快照也更新一次。
-    if (!liveMode.value && !quiet) await loadLog(true)
+    if (!liveMode.value && !quiet && previousKey === currentKey.value) await loadLog(true)
   } finally {
     refreshing = false
   }
-}
-
-function onInstanceChange(event: Event) {
-  selectedKey.value = (event.target as HTMLSelectElement).value
 }
 
 function onLogSizeChange(event: Event) {
@@ -373,7 +362,7 @@ function requestPower(action: PowerAction) {
 }
 
 async function runPower(action: PowerAction) {
-  const target = selected.value
+  const target = current.value
   if (!target || !canPower.value || powerPending.value) return
   powerPending.value = true
   try {
@@ -384,8 +373,8 @@ async function runPower(action: PowerAction) {
     showToast(`已提交${POWER_LABELS[action]}指令`)
     powerConfirm.value = null
     // 面板状态是异步变的，稍等一下再拉，避免刚提交就显示旧状态。
-    setTimeout(() => {
-      void loadInstances()
+    if (powerRefreshTimer) clearTimeout(powerRefreshTimer)
+    powerRefreshTimer = setTimeout(() => {
       void refreshAll(true)
     }, 1200)
   } catch (error: any) {
@@ -396,7 +385,7 @@ async function runPower(action: PowerAction) {
 }
 
 async function sendCommand() {
-  const target = selected.value
+  const target = current.value
   const text = command.value.trim()
   if (!target || !canCommand.value || sending.value || !text) return
   sending.value = true
@@ -405,11 +394,17 @@ async function sendCommand() {
       method: 'POST',
       body: { uuid: target.instanceUuid, daemonId: target.daemonId, command: text },
     })
+    if (disposed || mcsmInstanceKey(target) !== currentKey.value) return
     commandHistory.value = [text, ...commandHistory.value.filter((item) => item !== text)].slice(0, 30)
     historyCursor.value = -1
     command.value = ''
     // 实时模式下回显会自己推过来，只有暂停时才需要手动补一次。
-    if (!liveMode.value) setTimeout(() => void loadLog(true), 900)
+    if (!liveMode.value) {
+      if (commandRefreshTimer) clearTimeout(commandRefreshTimer)
+      commandRefreshTimer = setTimeout(() => {
+        if (!disposed && mcsmInstanceKey(target) === currentKey.value) void loadLog(true)
+      }, 900)
+    }
   } catch (error: any) {
     showToast(errorMessage(error, '命令发送失败'), 'error')
   } finally {
@@ -437,32 +432,41 @@ function onCommandKeydown(event: KeyboardEvent) {
 }
 
 function goToSettings() {
-  void navigateTo('/settings')
+  void navigateTo('/settings#mcsm')
 }
 
-watch(selectedKey, async (key) => {
+watch(currentKey, (key) => {
   closeStream()
+  logRequestId += 1
   logText.value = ''
-  detail.value = null
+  logLoading.value = false
+  powerConfirm.value = null
+  command.value = ''
+  commandHistory.value = []
+  historyCursor.value = -1
   if (!key) return
-  // 实时流自己会补历史；暂停模式下由 refreshAll 拉快照。
+  // 绑定变更时清空旧控制台和操作上下文，再连接新的管理实例。
   if (liveMode.value) openStream()
-  await refreshAll()
+  else void loadLog(true)
 })
 
 onMounted(async () => {
-  // 首次状态与控制台由 selectedKey 的 watcher 触发，这里不再重复拉取。
-  await loadInstances()
-  // 状态（玩家数、CPU、内存）没有推流通道，仍然轮询；控制台已经走 SSE，
-  // 所以这里的周期可以放宽到 10 秒。
+  await refreshAll()
+  if (disposed) return
+  // 同时读取最新绑定，其他管理员在设置中切换实例后，本页会自动更新。
   timer = setInterval(() => {
-    if (!selectedKey.value || document.hidden) return
+    if (document.hidden) return
     void refreshAll(true)
   }, STATUS_INTERVAL_MS)
 })
 
 onBeforeUnmount(() => {
+  disposed = true
+  detailRequestId += 1
+  logRequestId += 1
   if (timer) clearInterval(timer)
+  if (powerRefreshTimer) clearTimeout(powerRefreshTimer)
+  if (commandRefreshTimer) clearTimeout(commandRefreshTimer)
   timer = null
   closeStream()
 })
@@ -473,20 +477,31 @@ onBeforeUnmount(() => {
     <div class="page-heading">
       <h1 class="page-title">服务器管理</h1>
       <div class="heading-actions">
-        <md-icon-button aria-label="刷新" title="刷新" :disabled="loading" @click="loadInstances">
+        <md-icon-button aria-label="刷新" title="刷新" :disabled="loading || detailLoading" @click="refreshAll()">
           <md-icon>refresh</md-icon>
         </md-icon-button>
       </div>
     </div>
 
-    <p v-if="loading" class="empty">正在读取面板信息…</p>
+    <p v-if="loading" class="empty">正在读取管理实例…</p>
+
+    <section v-else-if="loadError" class="card">
+      <EmptyState image="/images/empty-monitoring-data.svg">
+        <template #title>暂时无法读取管理实例</template>
+        {{ loadError }}
+      </EmptyState>
+      <div class="form-actions">
+        <md-filled-button :disabled="detailLoading" @click="refreshAll()">重新加载</md-filled-button>
+        <md-outlined-button v-if="canConfigureMcsm" @click="goToSettings">检查站点设置</md-outlined-button>
+      </div>
+    </section>
 
     <section v-else-if="!configured" class="card">
       <EmptyState image="/images/empty-looking-for-answers.svg">
         <template #title>尚未连接 MCSM 面板</template>
-        请在「站点设置」填写面板地址与 ApiKey；ApiKey 权限等同面板账户，请妥善保管。
+        {{ canConfigureMcsm ? '请在「站点设置」填写面板连接信息并选择管理实例。' : '请联系管理员在「站点设置」配置面板连接和管理实例。' }}
       </EmptyState>
-      <div class="form-actions">
+      <div v-if="canConfigureMcsm" class="form-actions">
         <md-filled-button @click="goToSettings">
           <md-icon slot="icon">settings</md-icon>
           去站点设置
@@ -494,38 +509,17 @@ onBeforeUnmount(() => {
       </div>
     </section>
 
-    <template v-else>
-      <section class="card">
-        <div class="instance-bar">
-          <md-outlined-select
-            v-if="instances.length"
-            class="instance-select"
-            label="实例"
-            :value="selectedKey"
-            @change="onInstanceChange"
-          >
-            <md-select-option
-              v-for="item in instances"
-              :key="instanceKey(item)"
-              :value="instanceKey(item)"
-              :selected="instanceKey(item) === selectedKey"
-            >
-              <div slot="headline">{{ item.nickname || item.instanceUuid }}</div>
-              <div slot="supporting-text">{{ item.statusLabel }} · {{ item.hostIp || item.remarks }}</div>
-            </md-select-option>
-          </md-outlined-select>
-          <EmptyState v-else image="/images/empty-monitoring-data.svg">
-            当前 ApiKey 名下没有任何实例。
-          </EmptyState>
+    <section v-else-if="!instanceConfigured" class="card">
+      <EmptyState image="/images/empty-looking-for-answers.svg">
+        <template #title>尚未选择管理实例</template>
+        {{ canConfigureMcsm ? '请前往「站点设置 → MCSManager 面板」选择并保存管理实例。' : '请联系管理员在「站点设置」中指定要管理的实例。' }}
+      </EmptyState>
+      <div v-if="canConfigureMcsm" class="form-actions">
+        <md-filled-button @click="goToSettings"><md-icon slot="icon">settings</md-icon>去站点设置</md-filled-button>
+      </div>
+    </section>
 
-          <div v-if="panelUser" class="panel-meta">
-            <span>面板账户 <strong>{{ panelUser.userName }}</strong>（{{ panelUser.permissionLabel }}）</span>
-            <span class="mono">{{ panelBaseUrl }}</span>
-          </div>
-        </div>
-      </section>
-
-      <template v-if="current">
+    <template v-else-if="current" :key="currentKey">
         <section class="card">
           <div class="card-heading">
             <h2 class="card-title">
@@ -686,7 +680,6 @@ onBeforeUnmount(() => {
           :can-edit="canEditPage && instanceConfigLevel === 'edit'"
         />
 
-      </template>
     </template>
 
     <ConfirmDialog
@@ -720,10 +713,7 @@ onBeforeUnmount(() => {
 .card-note { margin: 8px 0 0; font-size: 13px; line-height: 1.7; color: var(--md-sys-color-on-surface-variant); }
 .card-note code { padding: 1px 5px; border-radius: 4px; background: var(--md-sys-color-surface); font-family: 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 .section-title { margin: 22px 0 10px; font-size: 13px; font-weight: 600; color: var(--md-sys-color-on-surface-variant); }
-.instance-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
-.instance-select { min-width: 280px; flex: 1 1 280px; }
 .size-select { min-width: 160px; }
-.panel-meta { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--md-sys-color-on-surface-variant); text-align: right; }
 .meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px 20px; margin: 18px 0 0; }
 .meta-wide { grid-column: 1 / -1; }
 .meta dt { color: var(--md-sys-color-on-surface-variant); font-size: 12px; }
@@ -762,9 +752,7 @@ onBeforeUnmount(() => {
 @media (max-width: 720px) {
   .page-heading { align-items: stretch; flex-direction: column; }
   .heading-actions { width: 100%; justify-content: flex-end; flex-wrap: wrap; }
-  .panel-meta { text-align: left; }
   .console { height: 320px; }
-  .instance-select { min-width: 0; flex-basis: 100%; }
   .size-select { width: 100%; min-width: 0; }
   .command-row md-filled-button { width: 100%; }
 }

@@ -1,5 +1,5 @@
 import { requirePagePermission } from '../../../utils/db'
-import { assertInstanceAllowed, fetchOutputLog, stripAnsi } from '../../../utils/mcsm'
+import { assertManagedInstanceAllowed, fetchOutputLog, stripAnsi } from '../../../utils/mcsm'
 
 /**
  * 控制台输出快照。
@@ -14,7 +14,7 @@ export default defineEventHandler(async (event) => {
   const query = getQuery(event)
   const uuid = String(query.uuid || '')
   const daemonId = String(query.daemonId || '')
-  await assertInstanceAllowed(uuid, daemonId)
+  await assertManagedInstanceAllowed(uuid, daemonId)
 
   const size = Number(query.size)
   const raw = await fetchOutputLog(uuid, daemonId, Number.isFinite(size) ? size : undefined)
