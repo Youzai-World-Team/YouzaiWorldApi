@@ -24,6 +24,7 @@ export function pageKeyForApi(path: string): string | undefined {
     || path.startsWith('/api/admin/game-account-settings')
     || path.startsWith('/api/admin/game-account-email-preview')
     || path.startsWith('/api/admin/game-account-uuid')) return 'game-accounts'
+  if (path.startsWith('/api/admin/game-maps')) return 'game-maps'
   if (path.startsWith('/api/admin/game-stats')) return 'game-stats'
   if (path.startsWith('/api/admin/game-cosmetics')) return 'game-cosmetics'
   if (path.startsWith('/api/admin/game-titles')) return 'game-titles'

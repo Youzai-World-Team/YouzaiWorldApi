@@ -130,6 +130,18 @@ The website status page and this dashboard use the Cloudflare Worker at `https:/
 
 ---
 
+### 11. Server Maps (YouzaiWorldCore integration)
+
+The dashboard Server Maps page (`/game-maps`) displays uploaded terrain with world, dimension and height selection, pan/zoom, coordinate navigation, lighting and chunk grids. It follows the dashboard theme and requires login plus `game-maps` view permission.
+
+Core uploads incremental terrain 48 hours after each successful sync, tries the first sync about 60 seconds after startup and retries failures after ten minutes. The schedule survives restarts. Existing `api_module.base_url/server_key` settings are reused; `map_module.api_upload` and `capture_underground` default to enabled. Administrators can trigger `/yzwc map upload`.
+
+HMAC-protected `POST /api/game/maps/upload` accepts version 1 `begin/tiles/complete` sessions, up to 128 tiles per batch. Each 16×16 tile contains 1792 bytes of RGBA, elevation and light data encoded as Base64. World UUID, dimension, layer, height and chunk coordinates identify tiles. SQLite tables `game_map_worlds/game_map_tiles/game_map_layers` store snapshots, bounds and progress. Atomic batches and sequence checks prevent duplicate counts and partial writes. Interrupted syncs retain saved data; only completion advances the last-success time. An empty map store requests a full upload.
+
+Capture records actually loaded chunks: surface, roof and underground slices every 8 blocks, plus saved cave layers. Briefly loaded chunks may remain incomplete; historical chunks need reloading. Viewing maps never loads or generates game chunks. This is a sampled snapshot, not a live 3D world. Private waypoints, drawings and live player positions are not uploaded.
+
+Read-only endpoints: `GET /api/admin/game-maps` and `GET /api/admin/game-maps/tiles`. Viewports are limited to 256×256 chunks and pages to 256 tiles; the canvas paints progressively and cancels stale requests. Storage supports up to 64 worlds and two million layer tiles per world. Exceeding capacity rejects the whole batch while preserving existing maps. Include maps in the normal full SQLite backup.
+
 ## 🔐 Mod Integration: HMAC Signature Scheme
 
 The YouzaiWorldCore mod (Minecraft server) must send signature headers when calling `/api/game/*`:

@@ -1,3 +1,5 @@
+import type { MapUpload, MapViewport } from './game-map-input'
+import { MAP_PAGE_TILES, type GameMapWorld, type GameMapDimension, type GameMapLayerSummary, type GameMapTilePage } from '#shared/game-map'
 import { DatabaseSync } from 'node:sqlite'
 import {
   createCipheriv,
@@ -66,6 +68,41 @@ ensureDataDirs()
 const db = new DatabaseSync(path.join(dataDir, 'database.db'))
 
 db.exec(`
+  CREATE TABLE IF NOT EXISTS game_map_worlds (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    dimensions TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    last_batch INTEGER NOT NULL DEFAULT -1,
+    last_batch_hash TEXT NOT NULL DEFAULT '',
+    syncing INTEGER NOT NULL DEFAULT 1,
+    tile_count INTEGER NOT NULL DEFAULT 0,
+    last_success INTEGER NOT NULL DEFAULT 0,
+    last_activity INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS game_map_tiles (
+    world_id TEXT NOT NULL,
+    dimension TEXT NOT NULL,
+    layer TEXT NOT NULL,
+    height INTEGER NOT NULL,
+    x INTEGER NOT NULL,
+    z INTEGER NOT NULL,
+    data BLOB NOT NULL,
+    PRIMARY KEY (world_id, dimension, layer, height, z, x)
+  ) WITHOUT ROWID;
+  CREATE TABLE IF NOT EXISTS game_map_layers (
+    world_id TEXT NOT NULL,
+    dimension TEXT NOT NULL,
+    layer TEXT NOT NULL,
+    height INTEGER NOT NULL,
+    tile_count INTEGER NOT NULL,
+    min_x INTEGER NOT NULL,
+    min_z INTEGER NOT NULL,
+    max_x INTEGER NOT NULL,
+    max_z INTEGER NOT NULL,
+    PRIMARY KEY (world_id, dimension, layer, height)
+  ) WITHOUT ROWID;
+
   CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -789,7 +826,7 @@ const PASSWORD_EXPIRY_DAYS_SETTING = 'password_expiry.days'
 const STATUS_HISTORY_CLEARED_AT_SETTING = 'status_history.cleared_at'
 const RESERVED_ADMIN_ENTRIES = new Set([
   'login', 'account', 'activity', 'donors', 'bans', 'updates', 'game-accounts',
-  'game-cosmetics', 'game-stats', 'game-account-email-templates', 'server-manage', 'server-files',
+  'game-cosmetics', 'game-stats', 'game-maps', 'game-account-email-templates', 'server-manage', 'server-files',
   'admin-users', 'audit-logs', 'chat', 'mail', 'domain-mail', 'settings', 'permissions', 'api', '_nuxt', '_ipx', 'favicon', '__nuxt_error',
 ])
 
@@ -6322,4 +6359,115 @@ export async function migrateFromJson() {
   for (const file of ['config.json', 'sessions.json', 'login-history.json', 'activities.json', 'donors.json', 'bans.json', 'updates.json']) {
     await fs.rm(path.join(dataDir, file), { force: true }).catch(() => {})
   }
+}
+
+// ===== 已加载地图：HMAC 分批增量上传与后台只读浏览 =====
+const MAX_MAP_WORLDS = 64
+const MAX_MAP_TILES_PER_WORLD = 2_000_000
+
+interface MapWorldRow {
+  id: string; name: string; dimensions: string; run_id: string; last_batch: number
+  last_batch_hash: string; syncing: number; tile_count: number; last_success: number; last_activity: number
+}
+
+/** 一批内原子写入；重试同一批不重复计数，只有 complete 确认后更新完整同步时间。 */
+export function uploadGameMap(input: MapUpload): { ok: true; full_required?: boolean } {
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    const result = applyGameMapBatch(input)
+    db.exec('COMMIT')
+    return result
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+}
+
+function applyGameMapBatch(input: MapUpload): { ok: true; full_required?: boolean } {
+  const world = db.prepare('SELECT * FROM game_map_worlds WHERE id = ?').get(input.worldId) as unknown as MapWorldRow | undefined
+  const now = Date.now()
+  if (input.phase === 'begin') {
+    if (!world) {
+      const count = db.prepare('SELECT COUNT(*) AS total FROM game_map_worlds').get() as { total: number }
+      if (count.total >= MAX_MAP_WORLDS) throw createError({ statusCode: 507, statusMessage: '地图存档数量已达上限' })
+      db.prepare('INSERT INTO game_map_worlds (id, name, dimensions, run_id, last_activity) VALUES (?, ?, ?, ?, ?)')
+        .run(input.worldId, input.name, JSON.stringify(input.dimensions), input.runId, now)
+    } else if (world.run_id !== input.runId) {
+      db.prepare(`UPDATE game_map_worlds SET name = ?, dimensions = ?, run_id = ?, last_batch = -1,
+        last_batch_hash = '', syncing = 1, last_activity = ? WHERE id = ?`)
+        .run(input.name, JSON.stringify(input.dimensions), input.runId, now, input.worldId)
+    }
+    return { ok: true, full_required: !world?.last_success }
+  }
+  if (!world || world.run_id !== input.runId) {
+    throw createError({ statusCode: 409, statusMessage: '地图上传会话已失效，请重新开始' })
+  }
+  if (input.phase === 'complete') {
+    if (input.batch !== world.last_batch + 1) throw createError({ statusCode: 409, statusMessage: '地图批次不完整' })
+    if (world.syncing) db.prepare('UPDATE game_map_worlds SET syncing = 0, last_success = ?, last_activity = ? WHERE id = ?')
+      .run(now, now, input.worldId)
+    return { ok: true }
+  }
+  const hash = createHash('sha256')
+  for (const tile of input.tiles) {
+    hash.update(JSON.stringify([tile.dimension, tile.layer, tile.height, tile.x, tile.z]))
+    hash.update(tile.data)
+  }
+  const digest = hash.digest('hex')
+  if (input.batch === world.last_batch && digest === world.last_batch_hash) return { ok: true }
+  if (!world.syncing || input.batch !== world.last_batch + 1) {
+    throw createError({ statusCode: 409, statusMessage: '地图批次顺序错误或已完成' })
+  }
+  const dimensions = JSON.parse(world.dimensions) as GameMapDimension[]
+  const insert = db.prepare('INSERT OR IGNORE INTO game_map_tiles (world_id, dimension, layer, height, x, z, data) VALUES (?, ?, ?, ?, ?, ?, ?)')
+  const update = db.prepare('UPDATE game_map_tiles SET data = ? WHERE world_id = ? AND dimension = ? AND layer = ? AND height = ? AND x = ? AND z = ?')
+  const layer = db.prepare(`INSERT INTO game_map_layers (world_id, dimension, layer, height, tile_count, min_x, min_z, max_x, max_z)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(world_id, dimension, layer, height) DO UPDATE SET
+    tile_count = tile_count + excluded.tile_count, min_x = MIN(min_x, excluded.min_x), min_z = MIN(min_z, excluded.min_z),
+    max_x = MAX(max_x, excluded.max_x), max_z = MAX(max_z, excluded.max_z)`)
+  let added = 0
+  for (const tile of input.tiles) {
+    const dimension = dimensions.find((value) => value.id === tile.dimension)
+    if (!dimension || ((tile.layer === 'CAVE' || tile.layer === 'FIXED') && (tile.height < dimension.min_y || tile.height > dimension.max_y))) {
+      throw createError({ statusCode: 400, statusMessage: '地图维度或切片高度不在存档范围内' })
+    }
+    const key = [input.worldId, tile.dimension, tile.layer, tile.height, tile.x, tile.z] as const
+    const created = Number(insert.run(...key, tile.data).changes)
+    added += created
+    if (!created) update.run(tile.data, ...key)
+    layer.run(input.worldId, tile.dimension, tile.layer, tile.height, created, tile.x, tile.z, tile.x, tile.z)
+  }
+  if (world.tile_count + added > MAX_MAP_TILES_PER_WORLD) {
+    throw createError({ statusCode: 507, statusMessage: '存档地图容量已达上限，本批次未保存' })
+  }
+  db.prepare('UPDATE game_map_worlds SET last_batch = ?, last_batch_hash = ?, tile_count = tile_count + ?, last_activity = ? WHERE id = ?')
+    .run(input.batch, digest, added, now, input.worldId)
+  return { ok: true }
+}
+
+/** 只返回有权限后台页需要的存档、图层范围和同步状态，不含账户信息。 */
+export function listGameMapWorlds(): GameMapWorld[] {
+  const worlds = db.prepare('SELECT * FROM game_map_worlds ORDER BY name, id').all() as unknown as MapWorldRow[]
+  const layers = db.prepare('SELECT dimension, layer, height, tile_count, min_x, min_z, max_x, max_z FROM game_map_layers WHERE world_id = ? ORDER BY dimension, layer, height')
+  return worlds.map((world) => ({ id: world.id, name: world.name, dimensions: JSON.parse(world.dimensions),
+    layers: layers.all(world.id) as unknown as GameMapLayerSummary[], last_success: world.last_success,
+    last_activity: world.last_activity, syncing: !!world.syncing, tile_count: world.tile_count }))
+}
+
+/** 按行分页读取有界视口；查询坐标不会产生 Minecraft 区块加载。 */
+export function readGameMapTiles(view: MapViewport): GameMapTilePage {
+  if (!db.prepare('SELECT id FROM game_map_worlds WHERE id = ?').get(view.worldId)) {
+    throw createError({ statusCode: 404, statusMessage: '地图存档不存在' })
+  }
+  const width = view.maxX - view.minX + 1
+  const afterZ = view.after < 0 ? view.minZ - 1 : view.minZ + Math.floor(view.after / width)
+  const afterX = view.after < 0 ? view.minX - 1 : view.minX + view.after % width
+  const rows = db.prepare(`SELECT x, z, data FROM game_map_tiles WHERE world_id = ? AND dimension = ? AND layer = ? AND height = ?
+    AND z BETWEEN ? AND ? AND x BETWEEN ? AND ? AND (z > ? OR (z = ? AND x > ?)) ORDER BY z, x LIMIT ?`)
+    .all(view.worldId, view.dimension, view.layer, view.height, view.minZ, view.maxZ, view.minX, view.maxX,
+      afterZ, afterZ, afterX, MAP_PAGE_TILES + 1) as unknown as { x: number; z: number; data: Uint8Array }[]
+  const visible = rows.slice(0, MAP_PAGE_TILES)
+  const last = visible.at(-1)
+  return { tiles: visible.map((tile) => ({ x: tile.x, z: tile.z, data: Buffer.from(tile.data).toString('base64') })),
+    next: rows.length > MAP_PAGE_TILES && last ? (last.z - view.minZ) * width + last.x - view.minX : null }
 }

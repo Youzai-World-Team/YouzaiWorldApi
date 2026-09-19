@@ -130,6 +130,18 @@
 
 ---
 
+### 11. 服务器地图（YouzaiWorldCore 联动）
+
+后台「服务器地图」(`/game-maps`) 查看服务端上传的地形，支持存档、维度和高度选择、平移缩放、坐标定位、光照与区块网格；跟随现有明暗主题。使用 `game-maps` 页面查看权限，未登录用户无法访问地图接口。
+
+Core 通过现有 HMAC 网桥每次成功后 48 小时增量上传；首次启动约 60 秒后上传，失败十分钟后重试，重启保留同步时间。沿用 `api_module.base_url/server_key`；Core 的 `map_module.api_upload` 和 `capture_underground` 默认开启，管理员可执行 `/yzwc map upload` 手动上传。
+
+上传接口 `POST /api/game/maps/upload` 使用版本 1 的 `begin/tiles/complete` 会话，每批最多 128 个 16×16 瓦片。每个瓦片含 RGBA、高度和光照共 1792 字节（Base64 传输）。世界 UUID、维度、图层、高度及区块坐标共同定位瓦片。SQLite 的 `game_map_worlds/game_map_tiles/game_map_layers` 保存数据、范围和同步进度；事务与批次校验防止重复计数和部分批次写入。中断的同步保留原数据，只有 complete 更新完整同步时间；新建地图库自动要求全量补传。
+
+采集实际加载区块的地表、顶板及每 8 格地下切片，并上传已保存洞穴图层；短暂加载区块可能采样不全，历史未重载区块不会回填，不强制加载或生成世界。网页显示采样快照而非实时三维世界。私人路径点、绘图及玩家实时位置不上传。
+
+只读接口为 `GET /api/admin/game-maps` 和 `GET /api/admin/game-maps/tiles`。视口至多 256×256 区块、每页 256 个瓦片，前端逐页绘制且切换视口取消旧请求。后台最多 64 个存档，每存档最多 200 万图层区块，达到上限整批拒绝并保留原地图；备份沿用完整 SQLite 数据备份。
+
 ## 🔐 模组对接：HMAC 签名规范
 
 YouzaiWorldCore 模组（Minecraft 服务端）调用 `/api/game/*` 时必须携带签名头：
