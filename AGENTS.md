@@ -156,6 +156,8 @@ Nitro 启动
 
 ### 4.3 数据库规范（强制）
 
+- **地图重写例外**：协议 2 只接受 Minecraft 区块存储生成的数据，使用 `game_map_v2_worlds/dimensions/tiles/layers` 新表，不迁移或转换旧地图。隔离验证脚本为 `node scripts/check-map-protocol.mjs`；生产构建仍需执行 `pnpm build`。
+
 - **唯一入口** `server/utils/db.ts`：所有表结构、索引、触发器、迁移、业务查询都在此文件；新增表在顶部 `db.exec` 建表块中追加 `CREATE TABLE IF NOT EXISTS`。
 - **列迁移模式**：先 `PRAGMA table_info(<table>)` 检查列是否存在，再 `ALTER TABLE ADD COLUMN`，catch 中复查以兼容多进程同时启动。
 - SQLite 为同步 API（`db.prepare(...).all/get/run`），**不要引入异步数据库驱动**。

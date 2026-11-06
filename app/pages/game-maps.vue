@@ -200,7 +200,7 @@ onBeforeUnmount(() => { mounted = false; cancel(); observer?.disconnect(); if (f
 <template>
   <section class="map-page">
     <div class="map-heading">
-      <div><h1>服务器地图</h1><p>浏览服务器已记录的地表和地下切片，每两天自动同步。</p></div>
+      <div><h1>服务器地图</h1><p>浏览 Minecraft 服务端记录并定期同步的地表和地下切片。</p></div>
       <md-outlined-button :disabled="refreshing" @click="refreshWorlds"><md-icon slot="icon">refresh</md-icon>刷新数据</md-outlined-button>
     </div>
     <div v-if="error" class="map-error" role="alert">{{ error }}</div>
@@ -237,7 +237,7 @@ onBeforeUnmount(() => { mounted = false; cancel(); observer?.disconnect(); if (f
     <div v-if="world" class="map-sync" aria-live="polite">
       <span>{{ syncText }}</span><span>最近完整同步：{{ date(world.last_success) }}</span><span>已保存 {{ world.tile_count.toLocaleString() }} 个图层区块</span>
     </div>
-    <p v-if="world" class="map-note">地下高度切片每 8 格自动记录，也可查看游戏内已保存的洞穴图层。地形按采样进度逐步补齐；此页显示上传快照，不是实时画面。</p>
+    <p v-if="world" class="map-note">地图根据服务端已保存的区块逐步生成，区块修改保存后自动更新。地下高度每 8 格记录；此页显示最近上传的快照。</p>
   </section>
 </template>
 

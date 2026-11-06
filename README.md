@@ -134,11 +134,11 @@
 
 后台「服务器地图」(`/game-maps`) 查看服务端上传的地形，支持存档、维度和高度选择、平移缩放、坐标定位、光照与区块网格；跟随现有明暗主题。使用 `game-maps` 页面查看权限，未登录用户无法访问地图接口。
 
-Core 通过现有 HMAC 网桥每次成功后 48 小时增量上传；首次启动约 60 秒后上传，失败十分钟后重试，重启保留同步时间。沿用 `api_module.base_url/server_key`；Core 的 `map_module.api_upload` 和 `capture_underground` 默认开启，管理员可执行 `/yzwc map upload` 手动上传。
+Core 从 Minecraft 区块文件生成地图，通过现有 HMAC 网桥按修订号增量上传。默认每次成功后 48 小时上传，可在 Core 服务端地图 SQLite 的 `settings`（`scope=server`）修改 `upload_interval_minutes` 并重载。首次约 60 秒后尝试，失败十分钟后重试，重启保留游标。沿用 `api_module.base_url/server_key`；地图 `api_upload` 和 `capture_underground` 默认开启，管理员可执行 `/yzwc map upload`。
 
-上传接口 `POST /api/game/maps/upload` 使用版本 1 的 `begin/tiles/complete` 会话，每批最多 128 个 16×16 瓦片。每个瓦片含 RGBA、高度和光照共 1792 字节（Base64 传输）。世界 UUID、维度、图层、高度及区块坐标共同定位瓦片。SQLite 的 `game_map_worlds/game_map_tiles/game_map_layers` 保存数据、范围和同步进度；事务与批次校验防止重复计数和部分批次写入。中断的同步保留原数据，只有 complete 更新完整同步时间；新建地图库自动要求全量补传。
+上传接口 `POST /api/game/maps/upload` 使用版本 2、来源 `minecraft_chunk_storage` 的 `begin/tiles/complete` 会话；会话携带修订上界，瓦片携带单调修订号，每批最多 128 个 16×16 瓦片。每个瓦片含 RGBA、高度和光照共 1792 字节（Base64 传输）。世界 UUID、维度、图层、高度及区块坐标共同定位瓦片。SQLite 的 `game_map_v2_worlds/game_map_v2_dimensions/game_map_v2_tiles/game_map_v2_layers` 保存数据、范围和同步进度；事务与批次校验防止重复计数和部分批次写入。中断的同步保留原数据，只有 complete 推进成功修订号和时间；新建地图库要求全量补传。本次直接使用新表，不迁移或转换旧地图数据；Core 与 API 需配套更新。
 
-采集实际加载区块的地表、顶板及每 8 格地下切片，并上传已保存洞穴图层；短暂加载区块可能采样不全，历史未重载区块不会回填，不强制加载或生成世界。网页显示采样快照而非实时三维世界。私人路径点、绘图及玩家实时位置不上传。
+Minecraft 服务端在后台读取已保存的完整区块 NBT，扫描已有区域文件并监听区块保存，生成地表、顶板及每 8 格洞穴/固定高度切片；已查看的自定义高度也随区块修改更新。历史已保存区域可直接回填，不强制加载或生成世界，上传数据不来自玩家客户端。网页显示采样快照而非实时三维世界。私人路径点、绘图及玩家实时位置不上传。
 
 只读接口为 `GET /api/admin/game-maps` 和 `GET /api/admin/game-maps/tiles`。视口至多 256×256 区块、每页 256 个瓦片，前端逐页绘制且切换视口取消旧请求。后台最多 64 个存档，每存档最多 200 万图层区块，达到上限整批拒绝并保留原地图；备份沿用完整 SQLite 数据备份。
 

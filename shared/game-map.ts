@@ -13,7 +13,7 @@ export interface GameMapLayerSummary {
 }
 export interface GameMapWorld {
   id: string; name: string; dimensions: GameMapDimension[]; layers: GameMapLayerSummary[]
-  last_success: number; last_activity: number; syncing: boolean; tile_count: number
+  source_revision: number; last_success: number; last_activity: number; syncing: boolean; tile_count: number
 }
 export interface GameMapTile { x: number; z: number; data: string }
 export interface GameMapTilePage { tiles: GameMapTile[]; next: number | null }

@@ -19,17 +19,17 @@ function text(value: unknown, max: number, pattern?: RegExp): string {
   return value
 }
 export function gameMapId(value: unknown): string { return text(value, 36, UUID) }
-export interface UploadTile { dimension: string; layer: GameMapLayer; height: number; x: number; z: number; data: Buffer }
+export interface UploadTile { dimension: string; layer: GameMapLayer; height: number; x: number; z: number; revision: number; data: Buffer }
 export interface MapUpload {
   worldId: string; runId: string; phase: 'begin' | 'tiles' | 'complete'; batch: number
-  name: string; dimensions: GameMapDimension[]; tiles: UploadTile[]
+  revision: number; name: string; dimensions: GameMapDimension[]; tiles: UploadTile[]
 }
 /** 在 SQLite 事务前完整校验整批数据，拒绝部分写入。 */
 export function parseMapUpload(value: unknown): MapUpload {
   const body = record(value)
-  if (body.version !== 1 || !['begin', 'tiles', 'complete'].includes(String(body.phase))) invalid()
+  if (body.version !== 2 || body.source !== 'minecraft_chunk_storage' || !['begin', 'tiles', 'complete'].includes(String(body.phase))) invalid()
   const output: MapUpload = { worldId: gameMapId(body.world_id), runId: gameMapId(body.run_id),
-    phase: body.phase as MapUpload['phase'], batch: integer(body.batch, 0, 1_000_000), name: '', dimensions: [], tiles: [] }
+    phase: body.phase as MapUpload['phase'], batch: integer(body.batch, 0, 1_000_000), revision: integer(body.revision, 0, Number.MAX_SAFE_INTEGER), name: '', dimensions: [], tiles: [] }
   if (output.phase === 'begin') {
     if (output.batch !== 0) invalid()
     output.name = text(body.name, 128)
@@ -64,7 +64,7 @@ export function parseMapUpload(value: unknown): MapUpload {
         if (alpha !== 0 && alpha !== 255) invalid()
         if (elevation !== -32768 && (elevation < -4096 || elevation > 4095)) invalid()
       }
-      return { dimension, layer, height, x, z, data }
+      return { dimension, layer, height, x, z, revision: integer(item.revision, 1, output.revision), data }
     })
   }
   return output
