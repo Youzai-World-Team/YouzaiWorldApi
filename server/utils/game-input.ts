@@ -81,6 +81,35 @@ export interface MailAttachment {
   data: string
   amount: number
   itemNbt: string | null
+  /** 写出 itemNbt 时的 Minecraft 数据版本；模组据此用原版 DataFixer 升级物品。无物品数据时为 null。 */
+  dataVersion: number | null
+}
+
+/**
+ * Minecraft 26.2 的数据版本。引入 data_version 之前保存的物品附件，以及未携带该字段的旧版模组请求，
+ * 都由 26.2 写出，按此版本记录，供模组升级为当前格式。
+ */
+export const MAIL_ITEM_LEGACY_DATA_VERSION = 4903
+const MAIL_DATA_VERSION_MAX = 1_000_000
+
+function mailItemDataVersion(raw: unknown, strict: boolean): number {
+  if (raw == null || raw === '') return MAIL_ITEM_LEGACY_DATA_VERSION
+  const version = Number(raw)
+  if (Number.isInteger(version) && version >= 1 && version <= MAIL_DATA_VERSION_MAX) return version
+  if (strict) throw createError({ statusCode: 400, message: '邮件物品附件的数据版本不正确' })
+  return MAIL_ITEM_LEGACY_DATA_VERSION
+}
+
+/** 读取数据库中的附件：旧数据缺少版本号时补为 26.2，损坏的版本号同样回落到 26.2。 */
+export function normalizeStoredMailAttachment(value: any): MailAttachment {
+  const itemNbt = value?.itemNbt == null || value.itemNbt === '' ? null : String(value.itemNbt)
+  return {
+    type: value?.type,
+    data: String(value?.data ?? ''),
+    amount: Number(value?.amount ?? 0),
+    itemNbt,
+    dataVersion: itemNbt == null ? null : mailItemDataVersion(value?.dataVersion, false),
+  }
 }
 
 const MAIL_TITLE_MAX = 256
@@ -242,7 +271,9 @@ export function requireMailAttachments(value: unknown): MailAttachment[] {
     if (type === 'ITEM' && !itemNbt) {
       throw createError({ statusCode: 400, message: '物品附件缺少物品数据' })
     }
-    return { type: type as MailAttachmentType, data, amount, itemNbt }
+    // 旧版模组不发送 data_version，其物品数据按 26.2 记录
+    const dataVersion = itemNbt == null ? null : mailItemDataVersion(item?.data_version ?? item?.dataVersion, true)
+    return { type: type as MailAttachmentType, data, amount, itemNbt, dataVersion }
   })
 }
 

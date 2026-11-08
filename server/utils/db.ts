@@ -16,7 +16,8 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { getCookie, getHeader, createError, type H3Event } from 'h3'
 import { dataDir, ensureDataDirs } from './data-dir'
-import { offlinePlayerUuid, requireEmailAddress, requireGameUsername, requirePlayerUuid } from './game-input'
+import { MAIL_ITEM_LEGACY_DATA_VERSION, normalizeStoredMailAttachment, offlinePlayerUuid, requireEmailAddress,
+  requireGameUsername, requirePlayerUuid } from './game-input'
 import type { MailAction, MailAttachment, MailTargetSpec, MailType } from './game-input'
 import type { InboundMailPayload } from './inbound-mail'
 import {
@@ -550,6 +551,38 @@ for (const [column, definition] of [
   } catch (error) {
     const migratedColumns = db.prepare('PRAGMA table_info(game_player_stats)').all() as { name?: string }[]
     if (!migratedColumns.some((item) => item.name === column)) throw error
+  }
+}
+
+// 26.3 起邮件物品附件记录写出时的 Minecraft 数据版本，此前保存的物品均由 26.2 写出。
+// 一次性为缺少版本号的旧附件补齐，模组读取时据此用原版 DataFixer 升级物品；已补齐的行不会再改动。
+{
+  const legacyMails = db.prepare("SELECT id, attachments FROM game_mails WHERE attachments LIKE '%\"itemNbt\"%'").all() as
+    { id: string; attachments: string }[]
+  const updateAttachments = db.prepare('UPDATE game_mails SET attachments = ? WHERE id = ?')
+  const pending: { id: string; attachments: string }[] = []
+  for (const row of legacyMails) {
+    let parsed: unknown
+    try { parsed = JSON.parse(row.attachments) } catch { continue }
+    if (!Array.isArray(parsed)) continue
+    let changed = false
+    for (const attachment of parsed as Record<string, unknown>[]) {
+      if (attachment && attachment.itemNbt != null && attachment.itemNbt !== '' && attachment.dataVersion == null) {
+        attachment.dataVersion = MAIL_ITEM_LEGACY_DATA_VERSION
+        changed = true
+      }
+    }
+    if (changed) pending.push({ id: row.id, attachments: JSON.stringify(parsed) })
+  }
+  if (pending.length) {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      for (const row of pending) updateAttachments.run(row.attachments, row.id)
+      db.exec('COMMIT')
+    } catch (error) {
+      db.exec('ROLLBACK')
+      throw error
+    }
   }
 }
 
@@ -5095,7 +5128,7 @@ function mapGameMail(row: Record<string, unknown>): GameMail {
     expireTime: expireTime != null && Number.isFinite(expireTime) ? expireTime : null,
     claimed: Number(row.claimed ?? 0) === 1,
     hidden: Number(row.hidden ?? 0) === 1,
-    attachments: parseJsonArray<MailAttachment>(row.attachments),
+    attachments: parseJsonArray<unknown>(row.attachments).map(normalizeStoredMailAttachment),
   }
 }
 
@@ -5126,6 +5159,7 @@ export function gameMailWire(mail: GameMail) {
       data: attachment.data,
       amount: attachment.amount,
       item_nbt: attachment.itemNbt,
+      data_version: attachment.dataVersion,
     })),
   }
 }
