@@ -102,8 +102,18 @@ A complete account system for offline-mode Minecraft servers, consumed by the Yo
 | `/api/donors` | Donor list (avatar / name / intro / amount), managed from the dashboard |
 | `/api/bans` | Ban list (player / ban time / unban time / reason), managed from the dashboard |
 | `/api/updates` + `/api/update/[key]` | Update service: query latest version, type, forced-update flag, release date and changelog by key — **consumed by the mod / modpack update checker** |
+| `/api/announcement/core` | Public Core title-screen announcement; dashboard `/core-announcement`, management API `/api/admin/core-announcement` supports GET / PATCH |
 | `/api/downloads` | Download projects (modpacks / mods: name / URL / version / description), managed from the dashboard |
 | `/api/chat*` | Website chat: guests post behind Turnstile (nickname 2–16 chars, content 2–200 chars, 5 messages / minute, latest 500 retained); game players speak with account login (role badge + avatar); admins moderate / delete / clear; IP geolocation cached 7 days by hash |
+
+### Core Title-Screen Announcement
+
+- Open **Core 公告** in the dashboard to edit the title, optional subtitle and plain-text paragraphs with a live preview. Enable the online announcement and save to publish. Disabling and saving restores Core's built-in localized announcement while retaining the draft.
+- Stored in SQLite `settings` under `core.announcement`; reads require this page's view permission, writes require edit permission, and successful saves are audited.
+- The public endpoint requires no game API secret. It returns `{ enabled, title, subtitle, body, updatedAt }` when enabled, or only `{ "enabled": false }` when disabled, keeping drafts private. Initially disabled.
+- Update the Core client alongside the API: its title screen fetches `https://api.mcyzw.top/api/announcement/core` asynchronously every 60 seconds, with duplicate requests suppressed during window recreation. Failures retain the last successful announcement for the current session, or the built-in content if none exists. Update prompts take priority; announcement fetching is independent of update-check settings. Disabling YZUI retains the vanilla title screen.
+- Submit paragraphs as `body: string[]`, preserving blank lines. Limits: 80 characters for title, 160 for subtitle, 120 body lines, 500 characters per line, and 20000 total including newlines. HTML and Markdown display as plain text.
+- Isolated checks: `node scripts/check-core-announcement.mjs` uses a temporary SQLite database without starting the server or reading production data. Run `pnpm build` for static verification.
 
 ### Server Status Worker
 

@@ -1,6 +1,8 @@
 import type { MapUpload, MapViewport } from './game-map-input'
 import { MAP_PAGE_TILES, type GameMapWorld, type GameMapDimension, type GameMapLayerSummary, type GameMapTilePage } from '#shared/game-map'
 import { DatabaseSync } from 'node:sqlite'
+import { DEFAULT_CORE_ANNOUNCEMENT, validateCoreAnnouncementContent, type CoreAnnouncement, type CoreAnnouncementContent,
+  type PublicCoreAnnouncement } from '#shared/core-announcement'
 import {
   createCipheriv,
   createDecipheriv,
@@ -914,6 +916,40 @@ export function setSetting(key: string, value: string) {
 
 export function deleteSetting(key: string) {
   run('DELETE FROM settings WHERE key = ?', key)
+}
+
+// ===== Core 标题页公告 =====
+
+const CORE_ANNOUNCEMENT_SETTING_KEY = 'core.announcement'
+
+export function getCoreAnnouncement(): CoreAnnouncement {
+  const stored = getSetting(CORE_ANNOUNCEMENT_SETTING_KEY)
+  if (!stored) return { ...DEFAULT_CORE_ANNOUNCEMENT, body: [...DEFAULT_CORE_ANNOUNCEMENT.body] }
+  try {
+    const value = JSON.parse(stored)
+    const content = validateCoreAnnouncementContent(value)
+    return { ...content, updatedAt: typeof value.updatedAt === 'string' ? value.updatedAt : null }
+  } catch {
+    throw createError({ statusCode: 500, statusMessage: '公告数据格式异常，请重新保存公告' })
+  }
+}
+
+export function setCoreAnnouncement(value: unknown): CoreAnnouncement {
+  let content: CoreAnnouncementContent
+  try {
+    content = validateCoreAnnouncementContent(value)
+  } catch (error) {
+    throw createError({ statusCode: 400, statusMessage: error instanceof Error ? error.message : '公告内容格式不正确' })
+  }
+  const announcement = { ...content, updatedAt: new Date().toISOString() }
+  setSetting(CORE_ANNOUNCEMENT_SETTING_KEY, JSON.stringify(announcement))
+  return announcement
+}
+
+export function getPublicCoreAnnouncement(): PublicCoreAnnouncement {
+  const announcement = getCoreAnnouncement()
+  // 停用时不公开后台保存的草稿。
+  return announcement.enabled ? announcement : { enabled: false }
 }
 
 export interface StatusHistorySampleInput {

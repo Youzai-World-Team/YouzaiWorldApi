@@ -102,8 +102,18 @@
 | `/api/donors` | 捐赠列表（头像 / 昵称 / 简介 / 金额），后台增删改 |
 | `/api/bans` | 封禁列表（玩家 / 封禁时间 / 解封时间 / 原因），后台增删改 |
 | `/api/updates` + `/api/update/[key]` | 更新服务：按 key 查询最新版本、类型、强制更新标记、发布日期与更新日志，**供模组 / 整合包更新检查器调用** |
+| `/api/announcement/core` | 公开读取 Core 标题页公告；后台 `/core-announcement` 编辑，管理接口 `/api/admin/core-announcement` 支持 GET / PATCH |
 | `/api/downloads` | 下载项目（整合包 / 模组，名称 / 地址 / 版本 / 描述），后台增删改 |
 | `/api/chat*` | 官网聊天区：访客经 Turnstile 发言（昵称 2–16 位、内容 2–200 字、5 条 / 分钟限流、保留最近 500 条）；游戏玩家凭账户登录发言（角色标记 + 头像）；后台账户可管理 / 删除 / 清空；IP 归属地按哈希缓存 7 天 |
+
+### Core 标题页公告
+
+- 后台导航进入 **Core 公告**，编辑标题、可选副标题和多行纯文本正文，可实时预览；打开「启用线上公告」后点击「保存并发布」。关闭开关并保存后，Core 回到内置多语言公告，草稿仍保存在后台。
+- 公告保存在 SQLite `settings` 表的 `core.announcement` 项；查看需要该页面「查看」权限，发布需要「编辑」权限，成功保存自动写入审计日志。
+- 公开接口无需游戏 Api 密钥：启用时返回 `{ enabled, title, subtitle, body, updatedAt }`，停用时只返回 `{ "enabled": false }`，不会公开草稿。首次部署默认停用。
+- 需要同步更新 YouzaiWorldCore 客户端：标题页异步读取 `https://api.mcyzw.top/api/announcement/core`，每 60 秒检查一次，窗口重建不会重复请求；失败保留本次运行已获取的公告，没有缓存时使用内置公告。更新提示优先于公告，公告不受更新检查开关影响；关闭 YZUI 时仍为原版标题页。
+- 正文以 `body: string[]` 提交，空行保留；标题最多 80 字、副标题最多 160 字，正文最多 120 行、每行 500 字、总计 20000 字（含换行）。HTML 和 Markdown 均按普通文字显示。
+- 隔离检查：`node scripts/check-core-announcement.mjs`（临时 SQLite，不启动服务、不读取生产数据）；静态验证仍运行 `pnpm build`。
 
 ### 服务器状态 Worker
 

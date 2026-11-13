@@ -1,6 +1,7 @@
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
 
 export function pageKeyForApi(path: string): string | undefined {
+  if (path.startsWith('/api/admin/core-announcement')) return 'core-announcement'
   if (path.startsWith('/api/admin/permissions')) return 'permissions'
   if (path.startsWith('/api/admin/users')) return 'admin-users'
   if (path.startsWith('/api/admin/audit-logs')) return 'audit-logs'
