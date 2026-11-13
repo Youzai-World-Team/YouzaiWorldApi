@@ -835,8 +835,6 @@ body .api-redesign-page :is(.page-heading, .status-heading, .dashboard-header) .
 .game-titles-page .page-title::before { content: '账户中心'; }
 .email-template-page .page-title::before { content: '消息模板'; }
 .server-manage-page .page-title::before { content: '基础设施'; }
-.server-files-page .page-title::before { content: '基础设施'; }
-.server-file-preview-page .page-title::before { content: '文件查看'; }
 
 body .api-redesign-page .card,
 body .api-redesign-page .details-card,
@@ -988,7 +986,7 @@ body .api-redesign-page code {
   overflow-wrap: anywhere;
 }
 
-body .api-redesign-page :is(.chat-page .card, .mail-page .card, .domain-mail-page .mail-list-card, .game-accounts-page .card, .game-cosmetics-page .card, .game-titles-page .card, .server-manage-page .card, .server-files-page .card, .email-template-page .editor-card, .email-template-page .preview-card) {
+body .api-redesign-page :is(.chat-page .card, .mail-page .card, .domain-mail-page .mail-list-card, .game-accounts-page .card, .game-cosmetics-page .card, .game-titles-page .card, .server-manage-page .card, .email-template-page .editor-card, .email-template-page .preview-card) {
   border: 1px solid var(--api-border);
   border-radius: 8px;
   background: var(--api-surface);
@@ -996,7 +994,6 @@ body .api-redesign-page :is(.chat-page .card, .mail-page .card, .domain-mail-pag
 
 .server-manage-page .instance-grid,
 .server-manage-page .manage-grid,
-.server-files-page .file-layout,
 .game-cosmetics-page .cosmetics-grid,
 .game-titles-page .titles-layout {
   gap: 14px;
@@ -1008,18 +1005,9 @@ body .api-redesign-page :is(.chat-page .card, .mail-page .card, .domain-mail-pag
 }
 
 .email-template-page textarea,
-.email-template-page .monaco-editor,
-.server-files-page textarea,
-.server-files-page .monaco-editor {
+.email-template-page .monaco-editor {
   border-color: var(--api-border);
   border-radius: 8px;
-}
-
-.server-file-preview-page .preview-shell,
-.server-file-preview-page pre {
-  border: 1px solid var(--api-border);
-  border-radius: 8px;
-  background: var(--api-surface);
 }
 
 /* 页面级构图 */
@@ -1047,14 +1035,12 @@ body .api-redesign-page :is(.chat-page .card, .mail-page .card, .domain-mail-pag
 .game-accounts-page > .card,
 .game-cosmetics-page > .card,
 .game-titles-page > .card,
-.server-manage-page > .card,
-.server-files-page > .card {
+.server-manage-page > .card {
   padding: 20px;
 }
 
 .mail-page .toolbar,
-.game-cosmetics-page .toolbar,
-.server-files-page .toolbar {
+.game-cosmetics-page .toolbar {
   margin-bottom: 16px;
   padding: 10px;
   border: 1px solid var(--api-border);
@@ -1065,8 +1051,7 @@ body .api-redesign-page :is(.chat-page .card, .mail-page .card, .domain-mail-pag
 .mail-page .data-table,
 .game-accounts-page .data-table,
 .game-titles-page .data-table,
-.server-manage-page .data-table,
-.server-files-page .data-table {
+.server-manage-page .data-table {
   min-width: 720px;
 }
 
@@ -1131,16 +1116,6 @@ body .api-redesign-page :is(.chat-page .card, .mail-page .card, .domain-mail-pag
   border-bottom: 1px solid color-mix(in srgb, var(--api-border) 72%, transparent);
 }
 
-.server-files-page .browser {
-  overflow: hidden;
-}
-
-.server-files-page .browser > .toolbar {
-  border-inline: 0;
-  border-top: 0;
-  border-radius: 0;
-}
-
 .email-template-page .email-template-tabs {
   padding: 4px;
   border: 1px solid var(--api-border);
@@ -1175,7 +1150,6 @@ body .api-redesign-page :is(.chat-page .card, .mail-page .card, .domain-mail-pag
   .game-cosmetics-page > .card,
   .game-titles-page > .card,
   .server-manage-page > .card,
-  .server-files-page > .card,
   .status-page .details-card,
   .status-page .history-card {
     padding: 14px;
@@ -1308,8 +1282,7 @@ body .api-redesign-page :is(.chat-page .card, .mail-page .card, .domain-mail-pag
   .game-cosmetics-page .cosmetics-grid,
   .game-titles-page .titles-layout,
   .server-manage-page .instance-grid,
-  .server-manage-page .manage-grid,
-  .server-files-page .file-layout {
+  .server-manage-page .manage-grid {
     grid-template-columns: 1fr;
   }
 

@@ -867,7 +867,7 @@ const PASSWORD_EXPIRY_DAYS_SETTING = 'password_expiry.days'
 const STATUS_HISTORY_CLEARED_AT_SETTING = 'status_history.cleared_at'
 const RESERVED_ADMIN_ENTRIES = new Set([
   'login', 'account', 'activity', 'donors', 'bans', 'updates', 'game-accounts',
-  'game-cosmetics', 'game-stats', 'game-maps', 'game-account-email-templates', 'server-manage', 'server-files',
+  'game-cosmetics', 'game-stats', 'game-maps', 'game-account-email-templates', 'server-manage',
   'admin-users', 'audit-logs', 'chat', 'mail', 'domain-mail', 'settings', 'permissions', 'api', '_nuxt', '_ipx', 'favicon', '__nuxt_error',
 ])
 
@@ -1906,8 +1906,7 @@ export function adminFeatureAllows(
 /**
  * 多个页面共用的接口：任一页面达到所需权限即可放行。
  * <p>
- * 「服务器管理」和「服务器文件」都要读实例列表，而页面权限中间件按路径只能
- * 认一个页面键，所以这类接口从 {@code pageKeyForApi} 里排除、改由自己判定。
+ * 页面权限中间件按路径只能识别一个页面键，共用接口可通过此函数逐个核对页面权限。
  * </p>
  */
 export function requireAnyPagePermission(

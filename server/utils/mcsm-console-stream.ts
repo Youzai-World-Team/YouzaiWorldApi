@@ -16,8 +16,6 @@ import { openStreamTicket, stripAnsi } from './mcsm'
  */
 
 const AUTH_TIMEOUT_MS = 10_000
-// engine.io 默认 pingInterval 20s、pingTimeout 10s，握手响应里会给准确值。
-const DEFAULT_PING_INTERVAL_MS = 20_000
 
 export interface ConsoleStream {
   close: () => void
@@ -48,13 +46,18 @@ export async function openConsoleStream(
   const socket = new WebSocket(wsUrl)
   let closed = false
   let authed = false
-  let pingTimer: ReturnType<typeof setInterval> | null = null
+  let resolveReady!: () => void
+  let rejectReady!: (error: Error) => void
+  const ready = new Promise<void>((resolve, reject) => {
+    resolveReady = resolve
+    rejectReady = reject
+  })
 
   function shutdown(reason: string) {
     if (closed) return
     closed = true
-    if (pingTimer) clearInterval(pingTimer)
-    pingTimer = null
+    clearTimeout(authTimer)
+    if (!authed) rejectReady(new Error(reason))
     try {
       socket.close()
     } catch {
@@ -88,21 +91,11 @@ export async function openConsoleStream(
 
     // engine.io OPEN：握手包，回 socket.io CONNECT。
     if (raw.startsWith('0')) {
-      try {
-        const info = JSON.parse(raw.slice(1))
-        const interval = Number(info?.pingInterval) || DEFAULT_PING_INTERVAL_MS
-        // 由客户端主动按 interval 发心跳（engine.io v4 允许双向 ping）。
-        pingTimer = setInterval(() => {
-          if (!closed) trySend('2')
-        }, interval)
-      } catch {
-        // 握手包解析失败不致命，仍尝试 CONNECT。
-      }
       trySend('40')
       return
     }
 
-    // engine.io PING：回 PONG。
+    // engine.io v4 由服务端发 PING，客户端只回 PONG；主动发 PING 会被节点断开。
     if (raw === '2') {
       trySend('3')
       return
@@ -130,6 +123,7 @@ export async function openConsoleStream(
         if (ok) {
           authed = true
           clearTimeout(authTimer)
+          resolveReady()
         } else {
           clearTimeout(authTimer)
           shutdown('守护进程拒绝了实时控制台鉴权')
@@ -155,6 +149,8 @@ export async function openConsoleStream(
     }
   }
 
+  // 鉴权成功后接口才能上报「实时」，防止尚未连接就误报通道已打开。
+  await ready
   return { close: () => shutdown('客户端断开') }
 }
 

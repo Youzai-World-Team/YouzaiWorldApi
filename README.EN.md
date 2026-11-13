@@ -85,14 +85,13 @@ A complete account system for offline-mode Minecraft servers, consumed by the Yo
 - **Visibility scopes**: each non-owner always retains the mailbox matching their username (for example, `zhangshan@mcyzw.top`); the initial owner can append one or more local-part prefixes per user from the **Permissions** page (prefixes are additive and an empty list adds nothing), and the same scope is enforced for details, attachments, EML/HTML exports, unread counts, and deletion. These additions affect inbound viewing only and never grant a non-owner permission to send as another address
 - **The inbound key is independent from the game API key**: a compromised Email Worker can only write incoming mail and can never touch `/api/game/*`
 
-### 7. Server Management (MCSManager Gateway)
+### 7. Server Management (MCSManager / ElementsPanel Gateway)
 
-- **Instance control**: instance list and status, start / stop / restart / terminate; every operation first verifies the uuid / daemonId actually belongs to the configured ApiKey
-- **Console**: real-time streaming + historical logs (tail-only by character count to avoid freezing the page on huge histories) + command dispatch
-- **File management**: directory browsing, text editing (Monaco), rename, delete, create, archive/extract, **128 KiB chunked uploads** (large-file friendly), preview (including docx / Markdown / spreadsheets)
-- **Backups**: stored in the instance's `/backups` directory; list / create (restricted filename pattern) / restore / delete / download
-- **Configuration**: visual server.properties editing, scheduled task management, instance info
-- The ApiKey is equivalent to full panel permissions — it **stays server-side only**, and the dashboard only reports "configured or not", never the plaintext
+- **Logs**: real-time SSE output, historical log tails by character count, pause / manual refresh, and automatic scrolling
+- **Server power**: start / stop / restart / force terminate; stop, restart, and force termination require confirmation
+- **Commands**: one command per request, with quick fill and command history
+- Configure the panel connection and select the managed instance in Site Settings; every operation checks the saved target and ApiKey ownership, while power and commands have separate feature permissions and audit records
+- Panel requests and real-time node connections run server-side; logs and instance summaries contain no ApiKey
 
 ### 8. Website Content & Chat
 
@@ -136,7 +135,7 @@ The website status page and this dashboard use the Cloudflare Worker at `https:/
 - **Material Web Components** (`@material/web`) + dark / light / system theme switching (with transition animations)
 - **PWA**: manifest + icons + client registration, installable as a standalone app
 - Page transitions, global toasts, unified confirmation dialogs, custom scrollbars
-- **skinview3d** live 3D skin / cape preview (classic and slim models), **Monaco Editor** for code editing, mammoth / marked / xlsx file previews
+- **skinview3d** live 3D skin / cape preview (classic and slim models), **Monaco Editor** for code editing
 
 ---
 

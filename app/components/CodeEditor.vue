@@ -6,7 +6,7 @@ import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
  * <p>
  * 加载方式沿用「游戏账户邮件模板」页那一套：Monaco 的 ESM 构建在 Vite/Nuxt 下
  * 必须显式提供 worker 构造器，中文语言包又得先临时垫一个 AMD 的 define。
- * 这里额外挂了 json / css / ts 的 worker，因为文件管理要打开的类型比模板页多。
+ * 同时提供 json / css / ts 的 worker，供调用方按内容类型选择语言支持。
  * </p>
  * <p>
  * 移动端不加载 Monaco（体积和触屏体验都不合适），由调用方用 fallback 插槽给一个

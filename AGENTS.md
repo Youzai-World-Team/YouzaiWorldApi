@@ -24,7 +24,7 @@
 - **服内邮件**：面向游戏内玩家的邮件系统（发送、收件、领取附件、星标、隐藏、过期清理），供模组读写
 - **称号系统**：称号目录（文字/贴图/组合三种渲染）、玩家授权（注册/手动/权限三种来源）、佩戴状态，供模组同步
 - **域名邮件**：`@mcyzw.top` 收件（Cloudflare Email Worker 投递）+ 后台 HTML 编写/预览/发送/附件/EML 导出
-- **服务器管理**：MCSManager 面板网关（实例电源、控制台流、命令、文件管理、分块上传、备份、server.properties、计划任务）
+- **服务器管理**：MCSManager / ElementsPanel 面板网关（显示日志、服务器电源管理、发送指令；站点设置绑定实例）
 - **官网内容接口**：服务器动态、捐赠列表、封禁列表、更新服务（`/api/update/[key]`，供模组/整合包更新检查器调用）、下载项目、带 Turnstile 与玩家登录的官网聊天区
 - **自动部署**：GitHub Release → Actions 构建 → `POST /api/deploy`（令牌校验 + zip 安全检查 + 原子替换 `.output`）
 
@@ -43,8 +43,7 @@
 | node:sqlite | 内置 `DatabaseSync` | 唯一持久化：`server/data/database.db`，**无 ORM、无第三方数据库驱动** |
 | @material/web | ^2.5.0 | Material Web Components（`md-*` 自定义元素，已在 `nuxt.config.ts` 声明 `isCustomElement`） |
 | jszip | ^3.10.1 | 部署 zip 解包（`server/utils/deploy.ts`） |
-| mammoth / marked / xlsx | 各最新 | 文件预览：docx → HTML、Markdown 渲染、表格预览 |
-| monaco-editor | 0.52.2 | 「服务器文件」页代码编辑器 |
+| monaco-editor | 0.52.2 | 「域名邮件」页代码编辑器 |
 | skinview3d | 3.4.1 | 「账户装扮」页 3D 皮肤预览 |
 | vue-router | ^5.2.0 | 路由（Nuxt 内置配套） |
 
@@ -69,8 +68,8 @@ YouzaiWorldApi/
 │   ├── app.vue / layouts/default.vue # 侧边栏 + 顶栏布局（导航按权限渲染、可排序/隐藏）
 │   ├── assets/css/main.css           # 全局样式
 │   ├── components/                   # AdminSetup(OOBE)、ConfirmDialog、AppToast、CodeEditor(Monaco)、
-│   │                                 #   FilePreview、SkinFigure/SkinModelViewer(skinview3d)、ServerProperties、
-│   │                                 #   ServerSchedules、PasswordStrength、AdminPasswordDialog、AppScrollbar、
+│   │                                 #   SkinFigure/SkinModelViewer(skinview3d)、
+│   │                                 #   PasswordStrength、AdminPasswordDialog、AppScrollbar、
 │   │                                 #   AppLoadingBar、DeviceClientIcon、DashboardPermissionPlaceholder
 │   ├── composables/                  # useAdminAccess(会话与权限)、useEntry(隐藏入口)、useToast、
 │   │                                 #   useThemeTransition(深色模式)、usePasswordPolicy、useDomainMailUnread、
@@ -79,7 +78,7 @@ YouzaiWorldApi/
 │   ├── pages/                        # 22 个路由：index(仪表盘)、[entry](隐藏登录页)、account、activity、status、
 │   │                                 #   chat、donors、bans、updates、downloads、game-accounts、
 │   │                                 #   game-account-email-templates(归 game-accounts 权限)、game-cosmetics、
-│   │                                 #   game-titles、mail、domain-mail、server-manage、server-files/{index,preview}、
+│   │                                 #   game-titles、mail、domain-mail、server-manage、
 │   │                                 #   admin-users、audit-logs、permissions、settings
 │   ├── plugins/                      # material-web.client.ts（md-* 组件按需导入）、pwa.client.ts（PWA 注册）
 │   ├── types/turnstile.d.ts
@@ -93,8 +92,7 @@ YouzaiWorldApi/
 │   │   ├── admin/                    # 后台管理（requireAuth + 页面/功能权限）：users、permissions、audit-logs、
 │   │   │                             #   status、chat、game-accounts(+settings/uuid/email-preview)、game-cosmetics、
 │   │   │                             #   game-titles、mails(服内邮件)、domain-mails(域名邮件)、mcsm-settings、
-│   │   │                             #   mcsm/{instance,instances,power,command,log,stream,files*,file,backup*,
-│   │   │                             #   properties,schedules}、password-policy/-expiry、turnstile
+│   │   │                             #   mcsm/{instance,power,command,log,stream}、password-policy/-expiry、turnstile
 │   │   ├── game/                     # ⭐ 模组专用（HMAC 签名中间件保护）：account(增删改查/ensure)、login/logout、
 │   │   │                             #   session、change-password、account-email(验证/换绑)、account-password-reset、
 │   │   │                             #   cosmetic(上传/快照)、titles(equip/sync)、mail(inbox/send/claim/read/…)、
@@ -110,7 +108,7 @@ YouzaiWorldApi/
 │   ├── plugins/                      # init.ts(启动迁移 + 运行时安全配置校验)、audit.ts(afterResponse 写审计日志)
 │   ├── utils/                        # db.ts(⭐ 5498 行核心：全部表结构、迁移、鉴权、各业务域函数)、
 │   │                                 #   data-dir.ts(数据目录解析)、deploy.ts(zip 安全校验+原子交换+重启)、
-│   │                                 #   mcsm*.ts(面板客户端/文件/控制台流/上传/备份)、smtp*.ts(原生 SMTP 客户端与报文)、
+│   │                                 #   mcsm*.ts(面板客户端/控制台流)、smtp*.ts(原生 SMTP 客户端与报文)、
 │   │                                 #   email-template*.ts(验证邮件模板)、domain-mail*.ts(编写/发送/HTML/附件)、
 │   │                                 #   eml.ts(EML 导出)、mojang.ts(档案查询+材质代理+限流)、turnstile.ts、
 │   │                                 #   ip-location.ts、status.ts(节点与 MC 服务器状态)、html-sanitize.ts、

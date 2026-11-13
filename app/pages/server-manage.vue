@@ -10,31 +10,8 @@ interface InstanceSummary {
   nickname: string
   status: number
   statusLabel: string
-  hostIp: string
-  remarks: string
-  processType: string
-  stopCommand: string
-  lastDatetime: number
-  endTime: number
   currentPlayers: number
   maxPlayers: number
-  version: string
-  latency: number
-  online: boolean
-}
-
-interface InstanceDetail extends InstanceSummary {
-  started: number
-  cwd: string
-  type: string
-  startCommandConfigured: boolean
-  createDatetime: number
-  storageUsage: number
-  storageLimit: number
-  processInfo: { cpu: number; memory: number; pid: number; elapsed: number }
-  pingConfig: { ip: string; port: number }
-  autoStart: boolean
-  autoRestart: boolean
 }
 
 type PowerAction = 'open' | 'stop' | 'restart' | 'kill'
@@ -60,7 +37,7 @@ const LOG_SIZE_OPTIONS = [
   { value: 60000, label: '最近 6 万字符' },
   { value: 200000, label: '最近 20 万字符' },
 ]
-// 状态轮询周期：控制台走 SSE 后，这里只剩玩家数/CPU/内存要刷，放宽到 10 秒。
+// 状态轮询周期：控制台走 SSE，这里每 10 秒更新运行状态与在线玩家数。
 const STATUS_INTERVAL_MS = 10000
 const QUICK_COMMANDS = ['list', 'save-all', 'whitelist list']
 
@@ -69,14 +46,6 @@ const access = useAdminAccess()
 const canEditPage = computed(() => access.levelForKey('server-manage') === 'edit')
 const canPower = computed(() => canEditPage.value && access.featureLevelForKey('server-manage-power') === 'edit')
 const canCommand = computed(() => canEditPage.value && access.featureLevelForKey('server-manage-command') === 'edit')
-const backupLevel = computed(() => access.featureLevelForKey('server-manage-backup'))
-const canBackup = computed(() => canEditPage.value && access.featureLevelForKey('server-manage-backup') === 'edit')
-// 可选管理卡片各自有独立区域权限：hidden 时整个卡片不渲染，view 时只读。
-const propertiesLevel = computed(() => access.featureLevelForKey('server-manage-properties'))
-const scheduleLevel = computed(() => access.featureLevelForKey('server-manage-schedule'))
-const canEditProperties = computed(() => canEditPage.value && propertiesLevel.value === 'edit')
-const canEditSchedule = computed(() => canEditPage.value && scheduleLevel.value === 'edit')
-const instanceConfigLevel = computed(() => access.featureLevelForKey('server-manage-instance-config'))
 const canConfigureMcsm = computed(() => access.levelForKey('settings') === 'edit'
   && access.featureLevelForKey('settings-mcsm') === 'edit')
 
@@ -85,7 +54,7 @@ const configured = ref(false)
 const instanceConfigured = ref(false)
 const loadError = ref('')
 
-const detail = ref<InstanceDetail | null>(null)
+const detail = ref<InstanceSummary | null>(null)
 const detailLoading = ref(false)
 
 const logText = ref('')
@@ -132,38 +101,7 @@ function statusClass(status: number | undefined) {
   return 'badge-pending'
 }
 
-function formatBytes(value: number) {
-  if (!value) return '0 B'
-  if (value < 1024) return `${value} B`
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`
-  if (value < 1024 * 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} MiB`
-  return `${(value / 1024 / 1024 / 1024).toFixed(2)} GiB`
-}
-
-function formatDate(value: number) {
-  if (!value) return '—'
-  return new Date(value).toLocaleString('zh-CN')
-}
-
-/** 面板给的是毫秒级运行时长。 */
-function formatDuration(value: number) {
-  if (!value || value < 0) return '—'
-  const totalMinutes = Math.floor(value / 60000)
-  const days = Math.floor(totalMinutes / 1440)
-  const hours = Math.floor((totalMinutes % 1440) / 60)
-  const minutes = totalMinutes % 60
-  if (days) return `${days} 天 ${hours} 小时`
-  if (hours) return `${hours} 小时 ${minutes} 分`
-  return `${minutes} 分`
-}
-
-/** 守护进程上报的 CPU 占用在不同版本里有时是 0~1 的比例、有时已经是百分数。 */
-function formatCpu(value: number) {
-  if (!Number.isFinite(value) || value <= 0) return '0%'
-  return `${(value <= 1 ? value * 100 : value).toFixed(1)}%`
-}
-
-function playersLabel(item: InstanceSummary | InstanceDetail | null) {
+function playersLabel(item: InstanceSummary | null) {
   if (!item || item.currentPlayers < 0) return '—'
   return `${item.currentPlayers} / ${item.maxPlayers}`
 }
@@ -180,7 +118,7 @@ async function loadDetail(quiet = false) {
     const result = await $fetch<{
       configured: boolean
       instanceConfigured: boolean
-      instance: InstanceDetail | null
+      instance: InstanceSummary | null
     }>('/api/admin/mcsm/instance')
     if (disposed || requestId !== detailRequestId) return
     configured.value = result.configured
@@ -538,20 +476,6 @@ onBeforeUnmount(() => {
 
           <dl class="meta">
             <div><dt>在线玩家</dt><dd>{{ playersLabel(current) }}</dd></div>
-            <div><dt>服务器版本</dt><dd>{{ current.version || '—' }}</dd></div>
-            <div><dt>节点</dt><dd>{{ current.remarks || '—' }} <span class="mono">{{ current.hostIp }}</span></dd></div>
-            <div><dt>Ping 延迟</dt><dd>{{ current.latency >= 0 ? current.latency + ' ms' : '—' }}</dd></div>
-            <div><dt>最近启动</dt><dd>{{ formatDate(current.lastDatetime) }}</dd></div>
-            <div><dt>到期时间</dt><dd>{{ current.endTime ? formatDate(current.endTime) : '无限期' }}</dd></div>
-            <template v-if="detail">
-              <div><dt>已运行</dt><dd>{{ formatDuration(detail.processInfo.elapsed) }}</dd></div>
-              <div><dt>CPU / 内存</dt><dd>{{ formatCpu(detail.processInfo.cpu) }} · {{ formatBytes(detail.processInfo.memory) }}</dd></div>
-              <div><dt>磁盘占用</dt><dd>{{ formatBytes(detail.storageUsage) }}{{ detail.storageLimit ? ' / ' + formatBytes(detail.storageLimit) : '' }}</dd></div>
-              <div><dt>启动次数</dt><dd>{{ detail.started }}</dd></div>
-              <div><dt>实例类型</dt><dd>{{ detail.type || '—' }} / {{ detail.processType || '—' }}</dd></div>
-              <div><dt>自动启动 / 自动重启</dt><dd>{{ detail.autoStart ? '开' : '关' }} / {{ detail.autoRestart ? '开' : '关' }}</dd></div>
-              <div class="meta-wide"><dt>工作目录</dt><dd class="mono">{{ detail.cwd || '—' }}</dd></div>
-            </template>
           </dl>
 
           <h3 class="section-title">电源</h3>
@@ -646,40 +570,6 @@ onBeforeUnmount(() => {
             <md-text-button v-for="item in QUICK_COMMANDS" :key="item" @click="command = item">{{ item }}</md-text-button>
           </div>
         </section>
-
-        <ServerBackups
-          v-if="backupLevel !== 'hidden'"
-          :uuid="current.instanceUuid"
-          :daemon-id="current.daemonId"
-          :status="current.status"
-          :status-label="current.statusLabel"
-          :can-edit="canBackup"
-          @refresh-instance="loadDetail(true)"
-        />
-
-        <ServerProperties
-          v-if="propertiesLevel !== 'hidden'"
-          :uuid="current.instanceUuid"
-          :daemon-id="current.daemonId"
-          :can-edit="canEditProperties"
-        />
-
-        <ServerSchedules
-          v-if="scheduleLevel !== 'hidden'"
-          :uuid="current.instanceUuid"
-          :daemon-id="current.daemonId"
-          :can-edit="canEditSchedule"
-        />
-
-        <ServerInstanceTools
-          v-if="instanceConfigLevel !== 'hidden'"
-          :uuid="current.instanceUuid"
-          :daemon-id="current.daemonId"
-          :instance="detail || current"
-          :can-view="instanceConfigLevel !== 'hidden'"
-          :can-edit="canEditPage && instanceConfigLevel === 'edit'"
-        />
-
     </template>
 
     <ConfirmDialog
@@ -715,10 +605,8 @@ onBeforeUnmount(() => {
 .section-title { margin: 22px 0 10px; font-size: 13px; font-weight: 600; color: var(--md-sys-color-on-surface-variant); }
 .size-select { min-width: 160px; }
 .meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px 20px; margin: 18px 0 0; }
-.meta-wide { grid-column: 1 / -1; }
 .meta dt { color: var(--md-sys-color-on-surface-variant); font-size: 12px; }
 .meta dd { margin: 2px 0 0; font-size: 14px; overflow-wrap: anywhere; }
-.mono { font-family: 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 .badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 11px; line-height: 18px; background: var(--md-sys-color-surface-variant); color: var(--md-sys-color-on-surface-variant); }
 .badge-running { background: var(--md-sys-color-primary-container); color: var(--md-sys-color-on-primary-container); }
 .badge-stopped { background: var(--md-sys-color-surface-variant); color: var(--md-sys-color-on-surface-variant); }

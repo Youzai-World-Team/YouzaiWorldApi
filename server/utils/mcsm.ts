@@ -7,7 +7,7 @@ export { MCSM_UUID_RE } from '#shared/mcsm-instance'
 /**
  * MCSManager 面板客户端。
  * <p>
- * 面板的 ApiKey 等价于该账户的全部权限（发命令、改文件、停服），所以它只留在服务端：
+ * 面板的 ApiKey 等价于该账户的全部权限，所以它只留在服务端：
  * 浏览器永远只跟本服务端的 {@code /api/admin/mcsm/*} 说话，由这里代为外呼并把 ApiKey
  * 拼进查询串。所有实例操作都必须先经过 {@link assertInstanceAllowed} 校验，
  * 确保 uuid / daemonId 确实属于该 ApiKey 名下的实例，避免后台用户拿别人的实例 ID 越权。
@@ -55,35 +55,8 @@ export interface McsmInstanceSummary {
   statusLabel: string
   hostIp: string
   remarks: string
-  processType: string
-  stopCommand: string
-  lastDatetime: number
-  endTime: number
   currentPlayers: number
   maxPlayers: number
-  version: string
-  latency: number
-  online: boolean
-}
-
-export interface McsmInstanceDetail extends McsmInstanceSummary {
-  started: number
-  cwd: string
-  type: string
-  startCommandConfigured: boolean
-  createDatetime: number
-  storageUsage: number
-  storageLimit: number
-  processInfo: { cpu: number; memory: number; pid: number; elapsed: number }
-  pingConfig: { ip: string; port: number }
-  autoStart: boolean
-  autoRestart: boolean
-  enableRcon: boolean
-  rconIp: string
-  rconPort: number
-  terminalOption: { haveColor: boolean; pty: boolean; ptyWindowCol: number; ptyWindowRow: number }
-  fileCode: string
-  crlf: number
 }
 
 function requireConfig(): McsmConfig {
@@ -107,10 +80,6 @@ export function mcsmReady(): boolean {
  * <p>
  * 面板把鉴权失败也用 200 外壳里的 {@code status} 表达，所以 HTTP 状态和信封都要判。
  * 抛出的错误信息里绝不会带上 ApiKey——它只出现在这里拼好的 URL 中。
- * </p>
- * <p>
- * 导出给同目录的 {@code mcsm-server-config.ts} 复用：面板接口都走这一个出口，
- * 免得 ApiKey 拼装和错误映射散落多处。
  * </p>
  */
 export async function callPanel<T>(
@@ -194,15 +163,8 @@ function mapSummary(raw: any): McsmInstanceSummary {
     statusLabel: statusLabel(status),
     hostIp: String(raw?.hostIp || ''),
     remarks: String(raw?.remarks || ''),
-    processType: String(raw?.processType ?? config.processType ?? ''),
-    stopCommand: String(raw?.stopCommand ?? config.stopCommand ?? ''),
-    lastDatetime: toNumber(raw?.lastDatetime ?? config.lastDatetime),
-    endTime: toNumber(raw?.endTime ?? config.endTime),
     currentPlayers: toNumber(info.currentPlayers, -1),
     maxPlayers: toNumber(info.maxPlayers, -1),
-    version: String(info.version || ''),
-    latency: toNumber(info.latency, -1),
-    online: Boolean(info.mcPingOnline),
   }
 }
 
@@ -259,7 +221,7 @@ export async function assertInstanceAllowed(uuid: string, daemonId: string): Pro
   return matched
 }
 
-/** 管理页和文件页只能操作站点设置中明确指定的同一个实例；页面权限仍分别校验。 */
+/** 日志、电源与指令操作只能使用站点设置中明确指定的实例。 */
 export function requireManagedInstanceTarget(uuid: string, daemonId: string): McsmInstanceTarget {
   if (!MCSM_UUID_RE.test(uuid) || !MCSM_UUID_RE.test(daemonId)) {
     throw createError({ statusCode: 400, statusMessage: '实例 ID 或节点 ID 格式不正确' })
@@ -292,50 +254,6 @@ export async function assertManagedInstanceAllowed(uuid: string, daemonId: strin
   const instance = await assertInstanceAllowed(uuid, daemonId)
   assertCurrent()
   return instance
-}
-
-export async function getInstanceDetail(uuid: string, daemonId: string): Promise<McsmInstanceDetail> {
-  const summary = await assertManagedInstanceAllowed(uuid, daemonId)
-  const raw = await callPanel<any>('/api/instance', { query: { uuid, daemonId } })
-  requireManagedInstanceTarget(uuid, daemonId)
-  const config = raw?.config || {}
-  const info = raw?.info || {}
-  const runtime = raw?.processInfo || {}
-  return {
-    ...summary,
-    ...mapSummary({ ...raw, daemonId, hostIp: summary.hostIp, remarks: summary.remarks }),
-    started: toNumber(raw?.started),
-    cwd: String(config.cwd || ''),
-    type: String(config.type || ''),
-    // 启动命令可能含有内网路径与 Java 参数，后台只需要知道「配好了没有」。
-    startCommandConfigured: Boolean(String(config.startCommand || '').trim()),
-    createDatetime: toNumber(config.createDatetime),
-    storageUsage: toNumber(info.storageUsage),
-    storageLimit: toNumber(info.storageLimit),
-    processInfo: {
-      cpu: toNumber(runtime.cpu),
-      memory: toNumber(runtime.memory),
-      pid: toNumber(runtime.pid),
-      elapsed: toNumber(runtime.elapsed),
-    },
-    pingConfig: {
-      ip: String(config.pingConfig?.ip || ''),
-      port: toNumber(config.pingConfig?.port),
-    },
-    autoStart: Boolean(config.eventTask?.autoStart),
-    autoRestart: Boolean(config.eventTask?.autoRestart),
-    enableRcon: Boolean(config.enableRcon),
-    rconIp: String(config.rconIp || ''),
-    rconPort: toNumber(config.rconPort),
-    terminalOption: {
-      haveColor: Boolean(config.terminalOption?.haveColor),
-      pty: Boolean(config.terminalOption?.pty),
-      ptyWindowCol: toNumber(config.terminalOption?.ptyWindowCol, 120),
-      ptyWindowRow: toNumber(config.terminalOption?.ptyWindowRow, 30),
-    },
-    fileCode: String(config.fileCode || 'utf-8'),
-    crlf: toNumber(config.crlf),
-  }
 }
 
 export type PowerAction = 'open' | 'stop' | 'restart' | 'kill'

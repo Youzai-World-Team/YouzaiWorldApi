@@ -858,7 +858,7 @@ function generateInboundMailKey() {
 
       <p v-if="!mcsmLoading && !mcsmState?.configured" class="inherit-warning">
         <md-icon>warning</md-icon>
-        <span>尚未配置，「服务器管理」与「服务器文件」页会提示去这里填写。</span>
+        <span>尚未配置，「服务器管理」页会提示去这里填写。</span>
       </p>
       <p v-else-if="!mcsmLoading && mcsmState?.apiKeySource === 'env'" class="source-note">
         <md-icon>info</md-icon>
@@ -928,7 +928,7 @@ function generateInboundMailKey() {
               @click="loadMcsmInstances"
             ><md-icon>refresh</md-icon></md-icon-button>
           </div>
-          <p class="card-note">「服务器管理」与「服务器文件」共用这里保存的实例。更换面板地址或 ApiKey 后，需要重新选择。</p>
+          <p class="card-note">「服务器管理」的日志、电源与指令操作使用这里保存的实例。更换面板地址或 ApiKey 后，需要重新选择。</p>
           <p v-if="!mcsmLoading && !mcsmState?.configured" class="card-note">请先保存面板连接信息。</p>
           <template v-else>
             <p v-if="mcsmPanelUser" class="card-note">

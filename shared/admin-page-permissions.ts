@@ -58,9 +58,6 @@ export const ADMIN_PAGE_DEFINITIONS: AdminPageDefinition[] = [
   // 这一页能停服和发送任意后台命令，默认只给「查看」：新管理员先能看控制台，
   // 需要动电源和发命令时再由所有者单独放开到「编辑」。
   { key: 'server-manage', label: '服务器管理', route: '/server-manage', icon: 'dns', defaultLevel: 'view' },
-  // 这一页能读写实例目录里的任意文件（含 jar 与启动脚本），默认整页隐藏，
-  // 需要时由所有者单独放开。
-  { key: 'server-files', label: '服务器文件', route: '/server-files', icon: 'folder', defaultLevel: 'hidden' },
   { key: 'game-accounts', label: '游戏账户', route: '/game-accounts', icon: 'manage_accounts', defaultLevel: 'edit' },
   {
     key: 'game-stats',
@@ -109,7 +106,6 @@ export const ADMIN_NAVIGATION_ORDER = [
   'status',
   'activity',
   'server-manage',
-  'server-files',
   'game-accounts',
   'game-stats',
   'game-maps',
@@ -309,36 +305,6 @@ export const ADMIN_FEATURE_DEFINITIONS: AdminFeatureDefinition[] = [
     availableLevels: ['hidden', 'edit'],
   },
   {
-    key: 'server-files-edit',
-    label: '服务器文件：修改文件',
-    icon: 'edit_document',
-    description: '允许编辑、新建、重命名、复制、移动、压缩和解压实例文件。',
-    parentKey: 'server-files',
-    pageKey: 'server-files',
-    defaultLevel: 'edit',
-    availableLevels: ['hidden', 'edit'],
-  },
-  {
-    key: 'server-files-upload',
-    label: '服务器文件：上传文件',
-    icon: 'upload_file',
-    description: '允许向实例目录上传文件。',
-    parentKey: 'server-files',
-    pageKey: 'server-files',
-    defaultLevel: 'edit',
-    availableLevels: ['hidden', 'edit'],
-  },
-  {
-    key: 'server-files-delete',
-    label: '服务器文件：删除文件',
-    icon: 'delete_forever',
-    description: '允许永久删除实例文件和目录。',
-    parentKey: 'server-files',
-    pageKey: 'server-files',
-    defaultLevel: 'edit',
-    availableLevels: ['hidden', 'edit'],
-  },
-  {
     key: 'settings-game-api-key',
     label: '站点设置：游戏 API 密钥',
     icon: 'vpn_key',
@@ -378,7 +344,7 @@ export const ADMIN_FEATURE_DEFINITIONS: AdminFeatureDefinition[] = [
     key: 'settings-mcsm',
     label: '站点设置：MCSM 面板与管理实例',
     icon: 'lan',
-    description: '查看或修改 MCSManager 面板连接信息，并指定「服务器管理」与「服务器文件」共用的实例。',
+    description: '查看或修改 MCSManager 面板连接信息，并指定日志、电源与指令操作使用的实例。',
     parentKey: 'settings',
     pageKey: 'settings',
     defaultLevel: 'hidden',
@@ -402,44 +368,6 @@ export const ADMIN_FEATURE_DEFINITIONS: AdminFeatureDefinition[] = [
     pageKey: 'server-manage',
     defaultLevel: 'hidden',
     availableLevels: ['hidden', 'edit'],
-  },
-  {
-    key: 'server-manage-backup',
-    label: '服务器管理：备份管理',
-    icon: 'backup',
-    description: '允许创建、恢复与删除实例备份。恢复会覆盖服务器现有文件。',
-    parentKey: 'server-manage',
-    pageKey: 'server-manage',
-    defaultLevel: 'hidden',
-    availableLevels: ['hidden', 'edit'],
-  },
-  {
-    key: 'server-manage-properties',
-    label: '服务器管理：服务器设置',
-    icon: 'tune',
-    description: '允许修改 server.properties，包括白名单、正版验证、难度与游戏模式等。',
-    parentKey: 'server-manage',
-    pageKey: 'server-manage',
-    defaultLevel: 'hidden',
-  },
-  {
-    key: 'server-manage-schedule',
-    label: '服务器管理：计划任务',
-    icon: 'schedule',
-    description: '允许创建、编辑与删除定时任务（定时执行命令、定时启动或停止实例）。',
-    parentKey: 'server-manage',
-    pageKey: 'server-manage',
-    defaultLevel: 'hidden',
-  },
-  {
-    key: 'server-manage-instance-config',
-    label: '服务器管理：实例高级设置',
-    icon: 'tune',
-    description: '查看和修改实例终端、Ping、RCON、自动启动与异步任务设置。',
-    parentKey: 'server-manage',
-    pageKey: 'server-manage',
-    defaultLevel: 'hidden',
-    availableLevels: ['hidden', 'view', 'edit'],
   },
 ]
 
@@ -465,9 +393,6 @@ export function ownerAdminFeaturePermissions(): Record<string, AdminFeaturePermi
 export function adminPageKeyForPath(path: string): string | undefined {
   const normalized = path.length > 1 ? path.replace(/\/+$/, '') : path
   if (normalized === '/game-account-email-templates') return 'game-accounts'
-  // 独立预览页是「服务器文件」的子路由，权限必须跟着主页面走，
-  // 否则它会因为匹配不到页面定义而绕过页面权限检查。
-  if (normalized.startsWith('/server-files/')) return 'server-files'
   return ADMIN_PAGE_DEFINITIONS.find((page) => page.route === normalized)?.key
 }
 
