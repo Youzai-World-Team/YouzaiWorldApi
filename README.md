@@ -169,7 +169,7 @@ YouzaiWorldCore 模组（Minecraft 服务端）调用 `/api/game/*` 时必须携
 
 ### 环境要求
 
-- Node.js **22+**（`node:sqlite` 要求）
+- Node.js **22.22.3+**（`node:sqlite` 与 Nuxt 4.6 要求；亦支持 24.15+ / 26+）
 - pnpm 10+（CI 使用 `pnpm/action-setup`）
 - 无需外部数据库 / Redis：SQLite 文件位于 `server/data/database.db`，首次启动自动建表与迁移
 

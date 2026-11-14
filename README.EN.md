@@ -169,7 +169,7 @@ The YouzaiWorldCore mod (Minecraft server) must send signature headers when call
 
 ### Requirements
 
-- Node.js **22+** (required by `node:sqlite`)
+- Node.js **22.22.3+** (required by `node:sqlite` and Nuxt 4.6; 24.15+ / 26+ are also supported)
 - pnpm 10+ (CI uses `pnpm/action-setup`)
 - No external database / Redis needed: the SQLite file lives at `server/data/database.db`, with tables created and migrated automatically on first start
 

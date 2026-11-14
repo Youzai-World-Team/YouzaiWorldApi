@@ -36,16 +36,16 @@
 
 | 依赖 | 版本 | 来源 / 用途 |
 |------|------|------------|
-| Nuxt | **^4.5.2**（`type: module`） | 全栈框架：`app/` 前端 + `server/` Nitro API |
-| Vue | ^3.5.41 | 前端框架 |
-| Node.js | **22**（CI 固定；本地需 22+，`node:sqlite` 需要） | 运行时 |
+| Nuxt | **^4.6.4**（`type: module`） | 全栈框架：`app/` 前端 + `server/` Nitro API |
+| Vue | ^3.5.45 | 前端框架 |
+| Node.js | **22**（CI 固定；本地需 22.22.3+，Nuxt 4.6 与 `node:sqlite` 要求） | 运行时 |
 | pnpm | 10.32.1（`packageManager` 字段；仓库另有 `bun.lock` 历史文件） | 包管理 |
 | node:sqlite | 内置 `DatabaseSync` | 唯一持久化：`server/data/database.db`，**无 ORM、无第三方数据库驱动** |
 | @material/web | ^2.5.0 | Material Web Components（`md-*` 自定义元素，已在 `nuxt.config.ts` 声明 `isCustomElement`） |
 | jszip | ^3.10.1 | 部署 zip 解包（`server/utils/deploy.ts`） |
 | monaco-editor | 0.52.2 | 「域名邮件」页代码编辑器 |
 | skinview3d | 3.4.1 | 「账户装扮」页 3D 皮肤预览 |
-| vue-router | ^5.2.0 | 路由（Nuxt 内置配套） |
+| vue-router | ^5.5.1 | 路由（Nuxt 内置配套） |
 
 - **无 TypeScript 检查脚本**（未配置 `typecheck`/`lint` script），验证以 `pnpm build` 的静态验证为准。
 - **无测试框架**，无自动化测试。
@@ -267,7 +267,7 @@ GitHub Actions
 ## 7. 常见问题
 
 ### 环境与运行
-- **Node 必须 22+**（`node:sqlite` 与 Nitro 要求）；本地装依赖后 `postinstall` 会自动 `nuxt prepare`。
+- **Node 必须 22.22.3+**（Nuxt 4.6 与 `node:sqlite` 要求；亦支持 24.15+ / 26+）；本地装依赖后 `postinstall` 会自动 `nuxt prepare`。
 - **首次访问根路径触发 OOBE**：未初始化时所有页面重定向到 `/`，由 `AdminSetup` 组件完成所有者账户 + 登录入口 + 游戏 API 密钥的初始化；也可用 `YZWC_ADMIN_USERNAME/PASSWORD/ENTRY` 无人值守初始化。
 - **登录入口是隐藏路径 `/<entry>`**（12–64 位，`RESERVED_ADMIN_ENTRIES` 保留字不可用）；忘记入口需直接查 `settings` 表 `entry` 键。
 - **登录报 429**：同 IP 15 分钟内失败 5 次触发限流，等待或清 `admin_login_rate_limits` 表。
