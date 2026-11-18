@@ -1,271 +1,134 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { MAP_CHUNK_LIMIT, MAP_MAX_VIEW_CHUNKS, MAP_TILE_BYTES, mapLayerLabel,
-  type GameMapLayer, type GameMapTilePage, type GameMapWorld } from '#shared/game-map'
-
+import { mapLayerDescription, mapLayerLabel, type GameMapLayer } from '#shared/game-map'
 useHead({ title: '服务器地图' })
-const worlds = ref<GameMapWorld[]>([])
-const worldId = ref(''), dimension = ref(''), layer = ref<GameMapLayer>('SURFACE'), height = ref(0)
-const surface = ref<HTMLCanvasElement | null>(null), container = ref<HTMLElement | null>(null)
-const busy = ref(false), refreshing = ref(false), error = ref(''), loaded = ref(0)
-const centerX = ref(0), centerZ = ref(0), scale = ref(2), goX = ref('0'), goZ = ref('0'), hover = ref('')
-const lighting = ref(false), grid = ref(false)
-const world = computed(() => worlds.value.find((value) => value.id === worldId.value))
-const dimensions = computed(() => [...new Set(world.value?.layers.map((value) => value.dimension) ?? [])])
-const layers = computed(() => [...new Set(world.value?.layers.filter((value) => value.dimension === dimension.value).map((value) => value.layer) ?? [])])
-const heights = computed(() => world.value?.layers.filter((value) => value.dimension === dimension.value && value.layer === layer.value).map((value) => value.height).sort((a, b) => a - b) ?? [])
-const selected = computed(() => world.value?.layers.find((value) => value.dimension === dimension.value && value.layer === layer.value && value.height === height.value))
-const syncText = computed(() => {
-  const value = world.value
-  if (!value) return ''
-  if (!value.syncing) return value.last_success ? '同步完成' : '尚未完成首次同步'
-  return Date.now() - value.last_activity > 5 * 60_000 ? '上次上传尚未完成，等待服务器重试' : '服务器正在上传'
-})
-const DIMENSION_LABELS: Record<string, string> = { 'minecraft:overworld': '主世界', 'minecraft:the_nether': '下界', 'minecraft:the_end': '末地' }
-const labelDimension = (id: string) => DIMENSION_LABELS[id] || id
-const date = (time: number) => time ? new Date(time).toLocaleString('zh-CN') : '尚无完整同步'
-const WORLD_LIMIT = MAP_CHUNK_LIMIT * 16
-let width = 900, canvasHeight = 560, controller: AbortController | undefined, generation = 0
-let timer: ReturnType<typeof setTimeout> | undefined, frame = 0, observer: ResizeObserver | undefined
-let mounted = false, drag: { id: number; x: number; y: number } | null = null
-let raster: { canvas: HTMLCanvasElement; x: number; z: number; scale: number; width: number; height: number } | undefined
-
-function cancel() { generation++; controller?.abort(); controller = undefined; busy.value = false; clearTimeout(timer) }
-function paintSoon() { if (!frame) frame = requestAnimationFrame(() => { frame = 0; paint() }) }
-function paint() {
-  const canvas = surface.value, ctx = canvas?.getContext('2d')
-  if (!canvas || !ctx) return
-  const ratio = Math.min(window.devicePixelRatio || 1, 2)
-  if (canvas.width !== Math.round(width * ratio) || canvas.height !== Math.round(canvasHeight * ratio)) {
-    canvas.width = Math.round(width * ratio); canvas.height = Math.round(canvasHeight * ratio)
-  }
-  ctx.setTransform(ratio, 0, 0, ratio, 0, 0); ctx.clearRect(0, 0, width, canvasHeight); ctx.imageSmoothingEnabled = false
-  if (raster) {
-    const zoom = scale.value / raster.scale
-    ctx.drawImage(raster.canvas, width / 2 + (raster.x - centerX.value) * scale.value - raster.width * zoom / 2,
-      canvasHeight / 2 + (raster.z - centerZ.value) * scale.value - raster.height * zoom / 2, raster.width * zoom, raster.height * zoom)
-  }
-  if (grid.value && scale.value >= 2) {
-    ctx.strokeStyle = 'rgba(127,127,127,.4)'; ctx.lineWidth = 1; ctx.beginPath()
-    const step = 16 * scale.value
-    const x0 = ((width / 2 - centerX.value * scale.value) % step + step) % step
-    const z0 = ((canvasHeight / 2 - centerZ.value * scale.value) % step + step) % step
-    for (let x = x0; x <= width; x += step) { ctx.moveTo(x, 0); ctx.lineTo(x, canvasHeight) }
-    for (let y = z0; y <= canvasHeight; y += step) { ctx.moveTo(0, y); ctx.lineTo(width, y) }
-    ctx.stroke()
-  }
-}
-
-function clampCenter() {
-  centerX.value = Math.max(-WORLD_LIMIT, Math.min(WORLD_LIMIT, centerX.value))
-  centerZ.value = Math.max(-WORLD_LIMIT, Math.min(WORLD_LIMIT, centerZ.value))
-  // 为一次浏览设置有界范围；仍可平移到全部已记录区域。
-  scale.value = Math.max(Math.max(width, canvasHeight) / ((MAP_MAX_VIEW_CHUNKS - 2) * 16), Math.min(16, scale.value))
-}
-function schedule() { if (!mounted) return; clampCenter(); cancel(); paintSoon(); timer = setTimeout(fetchTiles, 180) }
-function centerOnData() {
-  const bounds = selected.value
-  if (!bounds) return
-  centerX.value = (bounds.min_x + bounds.max_x + 1) * 8
-  centerZ.value = (bounds.min_z + bounds.max_z + 1) * 8
-  goX.value = String(Math.floor(centerX.value)); goZ.value = String(Math.floor(centerZ.value)); schedule()
-}
-function chooseWorld() {
-  dimension.value = dimensions.value.includes('minecraft:overworld') ? 'minecraft:overworld' : dimensions.value[0] || ''
-  chooseDimension()
-}
-function chooseDimension() {
-  layer.value = layers.value.includes('SURFACE') ? 'SURFACE' : layers.value[0] || 'SURFACE'; chooseLayer()
-}
-function chooseLayer() {
-  height.value = heights.value.includes(height.value) ? height.value : heights.value.reduce((a, b) => Math.abs(b - 63) < Math.abs(a - 63) ? b : a, heights.value[0] ?? 0)
-  cancel(); raster = undefined; loaded.value = 0; centerOnData(); paintSoon()
-}
-function chooseHeight() { cancel(); raster = undefined; loaded.value = 0; schedule() }
-function moveTo() {
-  const x = Number(goX.value), z = Number(goZ.value)
-  if (!goX.value.trim() || !goZ.value.trim() || !Number.isFinite(x) || !Number.isFinite(z) || Math.abs(x) > WORLD_LIMIT || Math.abs(z) > WORLD_LIMIT) {
-    error.value = '请输入世界边界内的有效 X、Z 坐标'; return
-  }
-  centerX.value = x; centerZ.value = z; error.value = ''; schedule()
-}
-function zoom(factor: number, x = width / 2, y = canvasHeight / 2) {
-  const wx = centerX.value + (x - width / 2) / scale.value, wz = centerZ.value + (y - canvasHeight / 2) / scale.value
-  scale.value *= factor; clampCenter()
-  centerX.value = wx - (x - width / 2) / scale.value; centerZ.value = wz - (y - canvasHeight / 2) / scale.value; schedule()
-}
-function wheel(event: WheelEvent) {
-  event.preventDefault()
-  const rect = surface.value!.getBoundingClientRect()
-  zoom(event.deltaY < 0 ? 1.25 : 0.8, event.clientX - rect.left, event.clientY - rect.top)
-}
-function pointerDown(event: PointerEvent) {
-  if (event.button !== 0 || drag) return
-  cancel(); surface.value?.focus(); surface.value?.setPointerCapture(event.pointerId)
-  drag = { id: event.pointerId, x: event.clientX, y: event.clientY }
-}
-function pointerMove(event: PointerEvent) {
-  if (drag?.id === event.pointerId) {
-    centerX.value -= (event.clientX - drag.x) / scale.value; centerZ.value -= (event.clientY - drag.y) / scale.value
-    drag.x = event.clientX; drag.y = event.clientY; clampCenter(); paintSoon()
-  }
-  const rect = surface.value!.getBoundingClientRect()
-  hover.value = `X ${Math.floor(centerX.value + (event.clientX - rect.left - width / 2) / scale.value)} · Z ${Math.floor(centerZ.value + (event.clientY - rect.top - canvasHeight / 2) / scale.value)}`
-}
-function pointerUp(event: PointerEvent) { if (drag?.id === event.pointerId) { drag = null; schedule() } }
-function keydown(event: KeyboardEvent) {
-  if (event.key === '+' || event.key === '=') zoom(1.25)
-  else if (event.key === '-') zoom(0.8)
-  else if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) {
-    centerX.value += (event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0) * 80 / scale.value
-    centerZ.value += (event.key === 'ArrowDown' ? 1 : event.key === 'ArrowUp' ? -1 : 0) * 80 / scale.value; schedule()
-  } else return
-  event.preventDefault()
-}
-
-/** 每次请求只保留当前视口的一张位图；快速切换维度时丢弃旧响应。 */
-async function fetchTiles() {
-  if (!selected.value || !mounted) return
-  const token = ++generation, abort = new AbortController(); controller = abort
-  const captured = { canvas: document.createElement('canvas'), x: centerX.value, z: centerZ.value, scale: scale.value, width, height: canvasHeight }
-  captured.canvas.width = Math.ceil(width); captured.canvas.height = Math.ceil(canvasHeight)
-  const ctx = captured.canvas.getContext('2d')!
-  ctx.imageSmoothingEnabled = false
-  const tileCanvas = document.createElement('canvas'); tileCanvas.width = 16; tileCanvas.height = 16
-  const tileContext = tileCanvas.getContext('2d')!
-  const chunk = (v: number) => Math.max(-MAP_CHUNK_LIMIT, Math.min(MAP_CHUNK_LIMIT, Math.floor(v / 16)))
-  const query = { world: worldId.value, dimension: dimension.value, layer: layer.value, height: height.value,
-    min_x: chunk(captured.x - width / (2 * captured.scale)), max_x: chunk(captured.x + width / (2 * captured.scale)),
-    min_z: chunk(captured.z - canvasHeight / (2 * captured.scale)), max_z: chunk(captured.z + canvasHeight / (2 * captured.scale)) }
-  const useLight = lighting.value, nether = dimension.value === 'minecraft:the_nether'
-  busy.value = true; loaded.value = 0; error.value = ''; raster = captured; paintSoon()
-  try {
-    let after: number | null = -1
-    do {
-      const page: GameMapTilePage = await $fetch('/api/admin/game-maps/tiles', { query: { ...query, after }, signal: abort.signal })
-      if (token !== generation) return
-      for (const tile of page.tiles) {
-        const binary = atob(tile.data)
-        if (binary.length !== MAP_TILE_BYTES) throw new Error('地图数据长度无效')
-        const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0)), data = new DataView(bytes.buffer)
-        const image = tileContext.createImageData(16, 16)
-        for (let i = 0; i < 256; i++) {
-          const elevation = data.getInt16(1024 + i * 2)
-          const west = i % 16 ? data.getInt16(1024 + (i - 1) * 2) : elevation
-          const north = i >= 16 ? data.getInt16(1024 + (i - 16) * 2) : elevation
-          let shade = 0.93 + Math.max(-6, Math.min(6, (west === -32768 ? elevation : west) + (north === -32768 ? elevation : north) - 2 * elevation)) * 0.022
-          if (useLight) {
-            const light = bytes[1536 + i]!, brightness = Math.max(light & 15, light >>> 4), ambient = nether ? 0.48 : 0.25
-            shade *= Math.min(1, ambient + brightness / 15 * (1 - ambient) + 0.15)
-          }
-          for (let channel = 0; channel < 3; channel++) image.data[i * 4 + channel] = Math.min(255, Math.floor(bytes[i * 4 + channel]! * shade))
-          image.data[i * 4 + 3] = bytes[i * 4 + 3]!
-        }
-        tileContext.putImageData(image, 0, 0)
-        ctx.drawImage(tileCanvas, width / 2 + (tile.x * 16 - captured.x) * captured.scale,
-          canvasHeight / 2 + (tile.z * 16 - captured.z) * captured.scale, 16 * captured.scale, 16 * captured.scale)
-      }
-      loaded.value += page.tiles.length; paintSoon(); after = page.next
-    } while (after !== null)
-  } catch (failure: any) {
-    if (!abort.signal.aborted && token === generation) error.value = failure?.data?.statusMessage || failure?.message || '地图读取失败，请稍后重试'
-  } finally { if (token === generation) busy.value = false }
-}
-
-async function refreshWorlds() {
-  refreshing.value = true; error.value = ''
-  try {
-    const result = await $fetch<{ worlds: GameMapWorld[] }>('/api/admin/game-maps')
-    if (!mounted) return
-    worlds.value = result.worlds
-    if (!world.value) { worldId.value = worlds.value[0]?.id || ''; chooseWorld() }
-    else if (!selected.value) chooseWorld()
-    else schedule()
-  } catch (failure: any) { error.value = failure?.data?.statusMessage || '无法获取服务器地图' }
-  finally { refreshing.value = false }
-}
-watch(lighting, schedule); watch(grid, paintSoon)
-onMounted(async () => {
-  mounted = true; await nextTick()
-  observer = new ResizeObserver(([entry]) => {
-    if (!entry) return
-    width = Math.max(1, entry.contentRect.width); canvasHeight = Math.max(1, entry.contentRect.height); schedule()
-  })
-  if (container.value) observer.observe(container.value)
-  await refreshWorlds()
-})
-onBeforeUnmount(() => { mounted = false; cancel(); observer?.disconnect(); if (frame) cancelAnimationFrame(frame); raster = undefined })
+const {
+  index, worlds, worldId, world, dimension, dimensions, layers, layer, height, heights, heightIndex, selected,
+  centerX, centerZ, location, card, surface, container, busy, refreshing, error, statusError, loaded,
+  lighting, grid, overviewOpen, overview, overviewBusy, overviewError, viewport, fullScreen, hover, pointed,
+  coordinateText, pointerElevation, landmarks, recent, landmarkOpen, landmarkName, snapshotAge, stale, stalled, syncText,
+  uploadPending, uploadRequest, canRequestUpload, canViewSettings, labelDimension, setWorld, setDimension, setLayer,
+  chooseHeight, goToRecorded, chooseRegion, moveTo, jumpSaved, zoom, wheel, pointerDown, pointerMove, pointerUp, keydown,
+  openLandmark, saveLandmark, removeLandmark, copyCoordinates, copyUploadCommand, requestUpload,
+  toggleOverview, toggleFullscreen, refreshWorlds, loadOverview, schedule,
+} = useGameMap()
+const layerTitle = (value: GameMapLayer) => value === 'ROOF' ? (dimension.value === 'minecraft:the_nether' ? '下界顶板' : '顶层') : value === 'FIXED' ? '高度切片' : mapLayerLabel(value)
+const exactTime = (time: number) => time ? new Date(time).toLocaleString('zh-CN') : '尚无完整同步'
 </script>
 
 <template>
   <section class="map-page">
-    <div class="map-heading">
-      <div><h1>服务器地图</h1><p>浏览 Minecraft 服务端记录并定期同步的地表和地下切片。</p></div>
-      <md-outlined-button :disabled="refreshing" @click="refreshWorlds"><md-icon slot="icon">refresh</md-icon>刷新数据</md-outlined-button>
-    </div>
-    <div v-if="error" class="map-error" role="alert">{{ error }}</div>
+    <header class="map-heading">
+      <div><h1>服务器地图</h1><p>查看已记录地形，切换地表和地下时保持当前位置。</p></div>
+      <md-outlined-button :disabled="refreshing" title="重新读取已经上传的快照；不会触发服务器上传" @click="refreshWorlds(true)"><md-icon slot="icon">refresh</md-icon>{{ refreshing ? '正在读取…' : '重读快照' }}</md-outlined-button>
+    </header>
+    <div v-if="statusError" class="map-error" role="alert">{{ statusError }} <button type="button" @click="refreshWorlds(true)">重试</button></div>
+    <div v-if="error" class="map-error" role="alert">{{ error }} <button type="button" @click="schedule">重试读取地形</button></div>
     <div v-if="!refreshing && !worlds.length" class="map-empty">
-      <md-icon>map</md-icon><h2>等待服务器上传地图</h2>
-      <p>首次同步完成后，可以在这里选择存档、维度和地下高度。请确认模组的 Api 网桥与地图上传已开启。</p>
-    </div>
-    <div v-show="worlds.length" class="map-card">
-      <div class="map-toolbar">
-        <label>存档<select v-model="worldId" @change="chooseWorld"><option v-for="item in worlds" :key="item.id" :value="item.id">{{ item.name }} · {{ item.id.slice(0, 8) }}</option></select></label>
-        <label>维度<select v-model="dimension" @change="chooseDimension"><option v-for="id in dimensions" :key="id" :value="id">{{ labelDimension(id) }}</option></select></label>
-        <label>图层<select v-model="layer" @change="chooseLayer"><option v-for="value in layers" :key="value" :value="value">{{ mapLayerLabel(value) }}</option></select></label>
-        <label v-if="layer === 'FIXED' || layer === 'CAVE'">高度 Y<select v-model.number="height" @change="chooseHeight"><option v-for="y in heights" :key="y" :value="y">Y {{ y }}</option></select></label>
-        <label class="map-check"><input v-model="lighting" type="checkbox">光照</label>
-        <label class="map-check"><input v-model="grid" type="checkbox">区块网格</label>
+      <md-icon>map</md-icon><h2>{{ index?.reset ? '地图已清空，等待全量上传' : '等待服务器上传地图' }}</h2>
+      <p v-if="index?.reset">{{ index.reset.message }}</p><p v-else>首次上传后会自动显示已记录区域。以下步骤可以帮助确认同步是否已经开启。</p>
+      <ol>
+        <li v-if="!index?.diagnostics.game_api_configured">在站点设置配置游戏 API 密钥，并在 Core 的 Api 网桥中填写相同密钥和本 API 地址。</li>
+        <li v-else>确认 Core 的 Api 网桥指向此 API，且游戏 API 密钥一致。</li>
+        <li>确认服务端地图模块和地图上传已开启，等待区块扫描生成地形。</li>
+        <li>在游戏服务器控制台执行 <code>yzwc map upload</code>，查看控制台中的上传结果；页面每 15 秒自动检查。</li>
+      </ol>
+      <div class="map-empty-actions">
+        <md-outlined-button v-if="canRequestUpload" :disabled="uploadPending" @click="requestUpload"><md-icon slot="icon">sync</md-icon>{{ uploadPending ? '正在请求…' : '请求服务器上传' }}</md-outlined-button>
+        <md-outlined-button @click="copyUploadCommand">复制上传命令</md-outlined-button>
+        <NuxtLink v-if="canViewSettings" to="/settings#game-map-data">前往站点设置</NuxtLink>
       </div>
+    </div>
+    <div ref="card" v-show="worlds.length" class="map-card" :class="{ 'map-card-fullscreen': fullScreen }">
+      <div class="map-toolbar">
+        <label>存档<select :value="worldId" @change="setWorld(($event.target as HTMLSelectElement).value)"><option v-for="item in worlds" :key="item.id" :value="item.id">{{ item.name }} · {{ item.id.slice(0, 8) }}</option></select></label>
+        <label>维度<select :value="dimension" @change="setDimension(($event.target as HTMLSelectElement).value)"><option v-for="id in dimensions" :key="id" :value="id">{{ labelDimension(id) }}</option></select></label>
+        <details class="map-display-options"><summary>显示选项</summary><div><label><input v-model="lighting" type="checkbox">光照</label><label><input v-model="grid" type="checkbox">区块网格</label></div></details>
+      </div>
+      <div class="map-layer-tabs" role="group" aria-label="选择地形图层"><button v-for="value in layers" :key="value" type="button" :aria-pressed="layer === value" @click="setLayer(value)">{{ layerTitle(value) }}</button></div>
+      <div v-if="layer === 'CAVE' || layer === 'FIXED'" class="map-height-controls">
+        <span>地下高度</span><button type="button" :disabled="heightIndex === 0" aria-label="查看更低一层" @click="heightIndex--">−</button>
+        <input :value="height" type="number" :min="heights[0]" :max="heights.at(-1)" aria-label="目标地下高度" @change="chooseHeight(Number(($event.target as HTMLInputElement).value))">
+        <button type="button" :disabled="heightIndex >= heights.length - 1" aria-label="查看更高一层" @click="heightIndex++">+</button>
+        <input v-model.number="heightIndex" type="range" min="0" :max="Math.max(0, heights.length - 1)" step="1" :disabled="heights.length < 2" aria-label="连续查看已记录的地下高度" :aria-valuetext="`高度 Y ${height}`">
+      </div>
+      <p class="map-layer-description">{{ mapLayerDescription(layer) }}</p>
       <div class="map-navigation">
-        <md-outlined-button title="放大地图" @click="zoom(1.5)"><md-icon>add</md-icon></md-outlined-button>
-        <md-outlined-button title="缩小地图" @click="zoom(1 / 1.5)"><md-icon>remove</md-icon></md-outlined-button>
-        <md-outlined-button @click="centerOnData">已记录区域中心</md-outlined-button>
-        <form class="map-location" @submit.prevent="moveTo"><label>X<input v-model="goX" inputmode="numeric" aria-label="目标 X 坐标"></label><label>Z<input v-model="goZ" inputmode="numeric" aria-label="目标 Z 坐标"></label><md-outlined-button type="submit">定位</md-outlined-button></form>
+        <form class="map-location" @submit.prevent="moveTo"><label class="sr-only" for="map-location">目标坐标</label><input id="map-location" v-model="location" placeholder="输入或粘贴 X Z / X Y Z" autocomplete="off" aria-label="输入或粘贴目标坐标"><button type="submit">定位</button></form>
+        <button type="button" :disabled="!selected || overviewBusy" @click="goToRecorded">定位到有地形区域</button>
+        <button type="button" :aria-expanded="overviewOpen" @click="toggleOverview">{{ overviewOpen ? '收起区域总览' : '区域总览' }}</button>
       </div>
       <div ref="container" class="map-viewport">
-        <canvas ref="surface" tabindex="0" aria-label="服务器地图，拖动平移、滚轮缩放，也可使用方向键和加减键"
-          @wheel="wheel" @pointerdown="pointerDown" @pointermove="pointerMove" @pointerup="pointerUp"
-          @pointercancel="pointerUp" @lostpointercapture="pointerUp" @keydown="keydown" />
+        <canvas ref="surface" tabindex="0" aria-label="服务器地图：拖动平移，滚轮或双指缩放，点击选点；方向键移动，加减键缩放"
+          @wheel="wheel" @pointerdown="pointerDown" @pointermove="pointerMove" @pointerup="pointerUp" @pointercancel="pointerUp" @lostpointercapture="pointerUp" @pointerleave="hover = null" @keydown="keydown" />
         <span class="map-north" aria-hidden="true">↑ 北</span>
-        <span v-if="!selected" class="map-overlay">当前存档尚未上传地形</span>
-        <span v-else-if="!busy && !loaded" class="map-overlay">此处暂无已记录地形，可拖动地图或重新定位</span>
-        <span class="map-loading" role="status">{{ busy ? `正在载入 · ${loaded} 个区块` : `${loaded} 个区块` }}</span>
+        <div class="map-float-actions">
+          <button type="button" title="放大地图" aria-label="放大地图" @click="zoom(1.5)"><md-icon>add</md-icon></button>
+          <button type="button" title="缩小地图" aria-label="缩小地图" @click="zoom(1 / 1.5)"><md-icon>remove</md-icon></button>
+          <button type="button" :title="fullScreen ? '退出全屏' : '全屏地图'" :aria-label="fullScreen ? '退出全屏' : '全屏地图'" @click="toggleFullscreen"><md-icon>{{ fullScreen ? 'fullscreen_exit' : 'fullscreen' }}</md-icon></button>
+        </div>
+        <div v-if="!selected" class="map-overlay"><span>此图层尚未上传地形，页面会自动检查同步状态。</span></div>
+        <div v-else-if="!busy && !loaded && !error" class="map-overlay"><span>当前位置没有已记录地形。</span><button type="button" @click="goToRecorded">前往有地形区域</button><button type="button" @click="toggleOverview">查看区域总览</button></div>
+        <span v-if="busy" class="map-loading" role="status">正在补充地形 · 已显示 {{ loaded }} 个区块</span>
       </div>
-      <div class="map-footer"><span>{{ hover || `中心 X ${Math.floor(centerX)} · Z ${Math.floor(centerZ)}` }} · {{ scale.toFixed(2) }}×</span><span>拖动平移 · 滚轮缩放 · 棋盘格表示暂无地形</span></div>
+      <div class="map-footer">
+        <div><span>{{ pointed ? '选点' : '中心' }} {{ coordinateText }}<template v-if="pointerElevation !== null"> · 地形 Y {{ pointerElevation }}</template></span><small v-if="hover">鼠标 X {{ hover.x }} · Z {{ hover.z }}</small></div>
+        <div class="map-coordinate-actions"><button type="button" @click="copyCoordinates">复制坐标</button><button type="button" @click="openLandmark">保存地标</button></div>
+      </div>
+      <GameMapOverview v-if="overviewOpen" :overview="overview" :viewport="viewport" :busy="overviewBusy" :error="overviewError" @choose="chooseRegion" @retry="loadOverview(true)" />
+      <details class="map-saved-places"><summary>地标与最近位置 <span>{{ landmarks.length }} 个地标</span></summary>
+        <p>保存在当前浏览器，按后台账户区分；清空对应存档的地图后，旧位置会自动失效。</p>
+        <div v-if="landmarks.length" class="map-place-list"><div v-for="item in landmarks" :key="item.id" class="map-place"><button type="button" @click="jumpSaved(item)"><strong>{{ item.name }}</strong><small>X {{ item.x }} · Z {{ item.z }} · {{ mapLayerLabel(item.layer) }}</small></button><button type="button" :aria-label="`移除地标 ${item.name}`" @click="removeLandmark(item.id)"><md-icon>close</md-icon></button></div></div>
+        <p v-else>点击地图选点，再选择“保存地标”，方便下次直接定位。</p>
+        <div v-if="recent.length" class="map-recent-list"><strong>最近定位</strong><button v-for="(item, i) in recent" :key="`${item.world}-${item.dimension}-${i}`" type="button" @click="jumpSaved(item)">{{ worlds.find(value => value.id === item.world)?.name || '存档' }} · {{ labelDimension(item.dimension) }} · X {{ Math.floor(item.x) }} Z {{ Math.floor(item.z) }}</button></div>
+      </details>
     </div>
-    <div v-if="world" class="map-sync" aria-live="polite">
-      <span>{{ syncText }}</span><span>最近完整同步：{{ date(world.last_success) }}</span><span>已保存 {{ world.tile_count.toLocaleString() }} 个图层区块</span>
+    <div v-if="world" class="map-sync" :class="{ 'map-sync-stale': stale || stalled }" aria-live="polite">
+      <div><strong>{{ syncText }}</strong><span :title="exactTime(world.last_success)">最近完整同步：{{ snapshotAge }}</span><span>已保存 {{ world.tile_count.toLocaleString() }} 个图层区块</span></div>
+      <md-outlined-button v-if="canRequestUpload" :disabled="uploadPending" @click="requestUpload"><md-icon slot="icon">sync</md-icon>{{ uploadPending ? '正在请求…' : '请求服务器上传' }}</md-outlined-button>
     </div>
-    <p v-if="world" class="map-note">地图根据服务端已保存的区块逐步生成，区块修改保存后自动更新。地下高度每 8 格记录；此页显示最近上传的快照。</p>
+    <p v-if="uploadRequest" class="map-request-result" role="status">{{ uploadRequest.message }}</p>
+    <details class="map-help"><summary>同步说明与排查</summary>
+      <p>这里展示最近上传的地形快照。Core 默认每 48 小时上传一次；“重读快照”只重新读取已有数据，不会更新游戏服务器的采样或触发上传。</p>
+      <p>需要立即更新时，在游戏服务器控制台执行 <code>yzwc map upload</code>；已获授权的管理员也可通过页面向站点绑定的管理实例发送上传命令。</p>
+      <p>超过五分钟没有收到数据，会显示上传停顿；Core 失败后默认十分钟重试。地下只列出已上传的高度，默认每 8 格记录。</p>
+      <div class="map-empty-actions"><md-text-button @click="copyUploadCommand">复制上传命令</md-text-button><NuxtLink v-if="canRequestUpload" to="/settings#game-map-data">清空旧地图与重新上传</NuxtLink></div>
+    </details>
+    <ConfirmDialog :open="landmarkOpen" title="保存地标" icon="bookmark_add" message="保存选点或地图中心，方便下次直接定位。" confirm-label="保存地标" @confirm="saveLandmark" @cancel="landmarkOpen = false">
+      <label class="map-landmark-name">地标名称<input v-model="landmarkName" maxlength="40" placeholder="例如：主城、地下仓库" @keydown.enter.prevent="saveLandmark"></label><p>{{ coordinateText }} · {{ labelDimension(dimension) }}</p>
+    </ConfirmDialog>
   </section>
 </template>
 
 <style scoped>
 .map-page { display: flex; flex-direction: column; gap: 18px; }
 .map-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
-h1 { margin: 0 0 6px; font-size: 28px; font-weight: 600; }
-.map-heading p, .map-note { margin: 0; color: var(--md-sys-color-on-surface-variant); line-height: 1.7; }
+h1 { margin: 0 0 6px; font-size: 28px; font-weight: 600; }.map-heading p { margin: 0; color: var(--md-sys-color-on-surface-variant); line-height: 1.7; }
 .map-card { border: 1px solid var(--md-sys-color-outline-variant); border-radius: 24px; overflow: hidden; background: var(--md-sys-color-surface-container-low); }
 .map-toolbar, .map-navigation { display: flex; align-items: end; gap: 12px; padding: 16px; flex-wrap: wrap; }
-.map-navigation { align-items: center; padding-top: 0; }
-.map-toolbar label, .map-location label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--md-sys-color-on-surface-variant); }
-select, .map-location input { font: inherit; color: var(--md-sys-color-on-surface); background: var(--md-sys-color-surface); border: 1px solid var(--md-sys-color-outline); border-radius: 10px; padding: 10px 12px; min-height: 42px; max-width: 290px; }
-select:focus-visible, input:focus-visible, canvas:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: -2px; }
-.map-toolbar .map-check { flex-direction: row; align-items: center; min-height: 42px; }
-input[type=checkbox] { accent-color: var(--md-sys-color-primary); width: 18px; height: 18px; }
-.map-location { margin-left: auto; display: flex; gap: 10px; align-items: end; flex-wrap: wrap; }
-.map-location input { width: 110px; box-sizing: border-box; }
+.map-toolbar > label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--md-sys-color-on-surface-variant); }
+select, input:not([type=checkbox]):not([type=range]) { font: inherit; color: var(--md-sys-color-on-surface); background: var(--md-sys-color-surface); border: 1px solid var(--md-sys-color-outline); border-radius: 10px; padding: 10px 12px; min-height: 42px; box-sizing: border-box; max-width: 100%; }
+select { max-width: 290px; }button { font: inherit; color: var(--md-sys-color-on-surface); border: 1px solid var(--md-sys-color-outline-variant); background: var(--md-sys-color-surface); border-radius: 12px; padding: 10px 14px; min-height: 42px; cursor: pointer; }
+button:disabled { cursor: default; opacity: .5; }button:hover:not(:disabled) { background: var(--md-sys-color-surface-container-high); }
+button:focus-visible, select:focus-visible, input:focus-visible, canvas:focus-visible, summary:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: -2px; }
+.map-layer-tabs { display: flex; gap: 8px; padding: 0 16px; overflow-x: auto; }.map-layer-tabs button { flex-shrink: 0; border-radius: 24px; }.map-layer-tabs button[aria-pressed=true] { background: var(--md-sys-color-secondary-container); color: var(--md-sys-color-on-secondary-container); border-color: transparent; }
+.map-layer-description { margin: 10px 16px 0; color: var(--md-sys-color-on-surface-variant); font-size: 13px; line-height: 1.6; }
+.map-display-options { margin-left: auto; position: relative; min-height: 42px; }summary { cursor: pointer; color: var(--md-sys-color-on-surface-variant); }.map-display-options summary { padding: 12px; }.map-display-options > div { position: absolute; right: 0; top: 46px; display: flex; flex-direction: column; gap: 14px; min-width: 150px; padding: 16px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 12px; background: var(--md-sys-color-surface-container); z-index: 5; box-shadow: 0 8px 28px #0002; }.map-display-options label { display: flex; gap: 8px; align-items: center; }
+input[type=checkbox], input[type=range] { accent-color: var(--md-sys-color-primary); }input[type=checkbox] { width: 18px; height: 18px; }
+.map-height-controls { display: flex; gap: 8px; align-items: center; padding: 12px 16px 0; }.map-height-controls > span { font-size: 13px; white-space: nowrap; }.map-height-controls input[type=number] { width: 85px; text-align: center; }.map-height-controls input[type=range] { flex: 1; min-width: 60px; }
+.map-navigation { align-items: center; padding-top: 12px; }.map-location { display: flex; gap: 8px; flex: 1; min-width: 240px; }.map-location input { width: 100%; min-width: 0; }.map-location button { flex-shrink: 0; }
 .map-viewport { height: clamp(350px, 62vh, 820px); width: 100%; position: relative; overflow: hidden; background-color: var(--md-sys-color-surface); background-image: conic-gradient(var(--md-sys-color-surface-container-high) 25%, transparent 0 50%, var(--md-sys-color-surface-container-high) 0 75%, transparent 0); background-size: 24px 24px; }
-canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
-canvas:active { cursor: grabbing; }
-.map-north, .map-loading, .map-overlay { position: absolute; pointer-events: none; background: var(--md-sys-color-surface-container-high); color: var(--md-sys-color-on-surface); border-radius: 12px; padding: 9px 13px; font-size: 13px; }
-.map-north { top: 12px; left: 12px; }.map-loading { right: 12px; bottom: 12px; }
-.map-overlay { left: 50%; top: 50%; transform: translate(-50%, -50%); text-align: center; max-width: 80%; }
-.map-footer, .map-sync { display: flex; gap: 10px 24px; justify-content: space-between; flex-wrap: wrap; font-size: 13px; color: var(--md-sys-color-on-surface-variant); }
-.map-footer { padding: 12px 16px; }.map-sync { justify-content: start; }
-.map-error { border-radius: 14px; padding: 14px 18px; background: var(--md-sys-color-error-container); color: var(--md-sys-color-on-error-container); }
-.map-empty { text-align: center; padding: 64px 24px; border-radius: 24px; background: var(--md-sys-color-surface-container-low); }
-.map-empty md-icon { --md-icon-size: 48px; color: var(--md-sys-color-primary); }.map-empty p { max-width: 600px; margin: auto; line-height: 1.8; color: var(--md-sys-color-on-surface-variant); }
-@media (max-width: 640px) { .map-toolbar label { flex: 1; min-width: 110px; } select { width: 100%; max-width: none; }.map-location { margin-left: 0; }.map-heading { align-items: start; }.map-card { border-radius: 18px; } }
+canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }canvas:active { cursor: grabbing; }
+.map-north, .map-loading, .map-overlay, .map-float-actions { position: absolute; background: var(--md-sys-color-surface-container-high); color: var(--md-sys-color-on-surface); border-radius: 12px; padding: 9px 13px; font-size: 13px; }
+.map-north { top: 12px; left: 12px; pointer-events: none; }.map-loading { right: 12px; bottom: 12px; pointer-events: none; }.map-float-actions { right: 12px; top: 12px; display: flex; flex-direction: column; gap: 4px; padding: 4px; }.map-float-actions button { display: grid; place-items: center; padding: 8px; border: none; background: transparent; }
+.map-overlay { left: 50%; top: 50%; transform: translate(-50%, -50%); text-align: center; max-width: 80%; display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }.map-overlay span { flex-basis: 100%; line-height: 1.6; }
+.map-footer { display: flex; padding: 12px 16px; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; font-size: 13px; }.map-footer > div:first-child { display: flex; flex-direction: column; gap: 4px; }.map-footer small { color: var(--md-sys-color-on-surface-variant); }.map-coordinate-actions { display: flex; gap: 8px; }
+.map-saved-places { padding: 16px; border-top: 1px solid var(--md-sys-color-outline-variant); }.map-saved-places summary { display: flex; justify-content: space-between; }.map-saved-places p, .map-help p { color: var(--md-sys-color-on-surface-variant); font-size: 13px; line-height: 1.7; }
+.map-place-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 8px; }.map-place { display: flex; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 12px; overflow: hidden; }.map-place button { border: 0; border-radius: 0; }.map-place button:first-child { flex: 1; text-align: left; display: flex; flex-direction: column; gap: 4px; min-width: 0; }.map-place strong { overflow-wrap: anywhere; }.map-place small { color: var(--md-sys-color-on-surface-variant); }.map-place button:last-child { align-self: stretch; padding: 10px; }
+.map-recent-list { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 16px; }.map-recent-list strong { font-size: 13px; }.map-recent-list button { font-size: 12px; }
+.map-sync { padding: 14px 16px; border-radius: 16px; background: var(--md-sys-color-surface-container); display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; }.map-sync > div { display: flex; gap: 8px 20px; flex-wrap: wrap; font-size: 13px; }.map-sync-stale { border: 1px solid var(--md-sys-color-tertiary); }
+.map-error, .map-request-result { border-radius: 14px; padding: 14px 18px; margin: 0; line-height: 1.7; }.map-error { color: var(--md-sys-color-on-error-container); background: var(--md-sys-color-error-container); }.map-request-result { background: var(--md-sys-color-surface-container); }
+.map-empty { text-align: center; padding: 40px 24px; border-radius: 24px; background: var(--md-sys-color-surface-container-low); }.map-empty > md-icon { --md-icon-size: 48px; color: var(--md-sys-color-primary); }.map-empty p, .map-empty ol { max-width: 680px; margin: 16px auto; line-height: 1.8; color: var(--md-sys-color-on-surface-variant); }.map-empty ol { text-align: left; padding-left: 24px; }.map-empty li + li { margin-top: 8px; }.map-empty-actions { display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap; }
+.map-help { padding: 16px; border-radius: 16px; background: var(--md-sys-color-surface-container-low); }.map-landmark-name { display: flex; flex-direction: column; gap: 8px; }.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; }
+.map-card-fullscreen { border-radius: 0; height: 100dvh; width: 100vw; display: flex; flex-direction: column; }.map-card-fullscreen .map-viewport { flex: 1; min-height: 0; height: auto; }.map-card-fullscreen .map-saved-places, .map-card-fullscreen :deep(.map-overview) { display: none; }
+@media (max-width: 640px) { .map-toolbar { gap: 10px; padding: 12px; }.map-toolbar > label { flex: 1; min-width: 100px; }select { width: 100%; max-width: none; }.map-display-options { margin-left: 0; }.map-display-options summary { padding: 10px 0; }.map-display-options > div { right: 0; }.map-layer-tabs { padding: 0 12px; }.map-layer-description { margin-left: 12px; margin-right: 12px; }.map-navigation { padding: 12px; gap: 8px; }.map-location { flex-basis: 100%; }.map-navigation > button { flex: 1; font-size: 12px; padding: 8px; }.map-height-controls { padding: 12px 12px 0; flex-wrap: wrap; }.map-height-controls input[type=range] { flex-basis: 100%; }.map-card { border-radius: 18px; }.map-viewport { height: 55vh; min-height: 320px; }.map-float-actions { right: 8px; top: 8px; }.map-footer { padding: 12px; }.map-coordinate-actions { width: 100%; }.map-coordinate-actions button { flex: 1; }.map-card-fullscreen { border-radius: 0; }.map-card-fullscreen .map-toolbar, .map-card-fullscreen .map-layer-description, .map-card-fullscreen .map-navigation { display: none; } }
 </style>

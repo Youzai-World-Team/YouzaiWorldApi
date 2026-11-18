@@ -621,6 +621,8 @@ function generateInboundMailKey() {
 
     <div class="settings-sections">
 
+    <GameMapDataSettings />
+
     <section v-if="canManageSecurityEntry" class="card settings-card">
       <h2 class="card-title">后台安全入口</h2>
       <p class="card-note">当前入口：<code>/{{ currentSecurityEntry || '…' }}</code></p>

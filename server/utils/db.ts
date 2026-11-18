@@ -1,5 +1,7 @@
-import type { MapUpload, MapViewport } from './game-map-input'
-import { MAP_PAGE_TILES, type GameMapWorld, type GameMapDimension, type GameMapLayerSummary, type GameMapTilePage } from '#shared/game-map'
+import type { MapUpload, MapViewport, MapSelection } from './game-map-input'
+import { MAP_PAGE_TILES, MAP_CHUNK_LIMIT, type GameMapWorld, type GameMapDimension, type GameMapLayerSummary,
+  type GameMapTilePage, type GameMapOverview, type GameMapIndex, type GameMapReset, type GameMapUploadRequest } from '#shared/game-map'
+import { mapOverviewCellSize, mapOverviewFocus } from '#shared/game-map-view'
 import { DatabaseSync } from 'node:sqlite'
 import { DEFAULT_CORE_ANNOUNCEMENT, validateCoreAnnouncementContent, type CoreAnnouncement, type CoreAnnouncementContent,
   type PublicCoreAnnouncement } from '#shared/core-announcement'
@@ -73,6 +75,7 @@ const db = new DatabaseSync(path.join(dataDir, 'database.db'))
 db.exec(`
   CREATE TABLE IF NOT EXISTS game_map_v2_worlds (
     id TEXT PRIMARY KEY,
+    data_id TEXT NOT NULL DEFAULT '',
     name TEXT NOT NULL,
     source_revision INTEGER NOT NULL DEFAULT 0,
     upload_revision INTEGER NOT NULL DEFAULT 0,
@@ -111,6 +114,9 @@ db.exec(`
     max_z INTEGER NOT NULL,
     PRIMARY KEY (world_id, dimension, layer, height)
   ) WITHOUT ROWID;
+
+  CREATE INDEX IF NOT EXISTS game_map_v2_tiles_view_idx
+    ON game_map_v2_tiles (world_id, dimension, layer, height, z, x);
 
   CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
@@ -268,14 +274,10 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS game_titles (
     id TEXT PRIMARY KEY,
     display_name TEXT NOT NULL,
-    render_type TEXT NOT NULL,
     text_content TEXT NOT NULL DEFAULT '',
     text_color TEXT NOT NULL DEFAULT '#FFFFFF',
     bold INTEGER NOT NULL DEFAULT 0,
     italic INTEGER NOT NULL DEFAULT 0,
-    texture_key TEXT NOT NULL DEFAULT '',
-    font_id TEXT NOT NULL DEFAULT 'youzaiworldcore:title',
-    glyph TEXT NOT NULL DEFAULT '',
     enabled INTEGER NOT NULL DEFAULT 1,
     sort_order INTEGER NOT NULL DEFAULT 0,
     system_managed INTEGER NOT NULL DEFAULT 0,
@@ -534,6 +536,19 @@ db.exec(`
     ON domain_mail_sent (created_at DESC, id);
 `)
 
+// ===== 地图数据身份迁移：仅补充 v2 元数据，不读取或转换旧地图 =====
+const gameMapWorldColumns = db.prepare('PRAGMA table_info(game_map_v2_worlds)').all() as { name?: string }[]
+if (!gameMapWorldColumns.some(column => column.name === 'data_id')) {
+  try {
+    db.exec("ALTER TABLE game_map_v2_worlds ADD COLUMN data_id TEXT NOT NULL DEFAULT ''")
+  } catch (error) {
+    const columns = db.prepare('PRAGMA table_info(game_map_v2_worlds)').all() as { name?: string }[]
+    if (!columns.some(column => column.name === 'data_id')) throw error
+  }
+}
+db.exec("UPDATE game_map_v2_worlds SET data_id = run_id WHERE data_id = ''")
+// ===== 地图数据身份迁移结束 =====
+
 const gamePlayerStatsColumns = db.prepare('PRAGMA table_info(game_player_stats)').all() as { name?: string }[]
 if (!gamePlayerStatsColumns.some((column) => column.name === 'stats_updated_json')) {
   try {
@@ -588,19 +603,41 @@ for (const [column, definition] of [
   }
 }
 
+// 文字称号升级只清理旧图片字段，保留目录、授权和玩家的佩戴选择。
+function removeLegacyGameTitleImageFields(): void {
+  const legacyColumns = ['render_type', 'texture_key', 'font_id', 'glyph']
+  const columns = db.prepare('PRAGMA table_info(game_titles)').all() as { name?: string }[]
+  if (!columns.some((column) => legacyColumns.includes(String(column.name)))) return
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    // 取得写锁后重新检查，另一进程可能已经完成升级。
+    const currentColumns = db.prepare('PRAGMA table_info(game_titles)').all() as { name?: string }[]
+    db.exec("UPDATE game_titles SET text_content = display_name WHERE trim(text_content) = ''")
+    for (const column of legacyColumns) {
+      if (currentColumns.some((item) => item.name === column)) {
+        db.exec(`ALTER TABLE game_titles DROP COLUMN ${column}`)
+      }
+    }
+    db.exec('COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+}
+removeLegacyGameTitleImageFields()
+
 const defaultGameTitles = [
-  ['newbie_plea', '萌新求饶', 'texture', '萌新求饶', '#55FF55', 'new', '\uE100', 10, 1],
-  ['admin_junior', '初级管理员', 'texture', '初级管理员', '#55FFFF', 'junior_administrator', '\uE101', 20, 1],
-  ['admin_middle', '中级管理员', 'texture', '中级管理员', '#FFAA00', 'middle_administrator', '\uE102', 30, 1],
-  ['admin_senior', '高级管理员', 'texture', '高级管理员', '#FF5555', 'senior_administrator', '\uE103', 40, 1],
+  ['newbie_plea', '萌新求饶', '萌新求饶', '#55FF55', 10, 1],
+  ['admin_junior', '初级管理员', '初级管理员', '#55FFFF', 20, 1],
+  ['admin_middle', '中级管理员', '中级管理员', '#FFAA00', 30, 1],
+  ['admin_senior', '高级管理员', '高级管理员', '#FF5555', 40, 1],
 ] as const
 const seedGameTitle = db.prepare(`INSERT OR IGNORE INTO game_titles
-  (id, display_name, render_type, text_content, text_color, texture_key, font_id, glyph,
-   enabled, sort_order, system_managed, created_at, updated_at)
-  VALUES (?, ?, ?, ?, ?, ?, 'youzaiworldcore:title', ?, 1, ?, ?, ?, ?)`)
-for (const [id, displayName, renderType, textContent, textColor, textureKey, glyph, sortOrder, systemManaged] of defaultGameTitles) {
+  (id, display_name, text_content, text_color, enabled, sort_order, system_managed, created_at, updated_at)
+  VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)`)
+for (const [id, displayName, textContent, textColor, sortOrder, systemManaged] of defaultGameTitles) {
   const now = Date.now()
-  seedGameTitle.run(id, displayName, renderType, textContent, textColor, textureKey, glyph, sortOrder, systemManaged, now, now)
+  seedGameTitle.run(id, displayName, textContent, textColor, sortOrder, systemManaged, now, now)
 }
 
 // 默认称号只在账户第一次完成注册时发放。触发器与账户写入处于同一 SQLite 事务，
@@ -3538,19 +3575,13 @@ export function deleteGameAccount(username: string): boolean {
   return Number(result.changes ?? 0) > 0
 }
 
-export type GameTitleRenderType = 'text' | 'texture' | 'text_texture'
-
 export interface GameTitle {
   id: string
   displayName: string
-  renderType: GameTitleRenderType
   textContent: string
   textColor: string
   bold: boolean
   italic: boolean
-  textureKey: string
-  fontId: string
-  glyph: string
   enabled: boolean
   sortOrder: number
   systemManaged: boolean
@@ -3579,14 +3610,10 @@ function mapGameTitle(row: Record<string, unknown>): GameTitle {
   return {
     id: String(row.id ?? ''),
     displayName: String(row.display_name ?? ''),
-    renderType: String(row.render_type ?? 'text') as GameTitleRenderType,
     textContent: String(row.text_content ?? ''),
     textColor: String(row.text_color ?? '#FFFFFF'),
     bold: Number(row.bold ?? 0) === 1,
     italic: Number(row.italic ?? 0) === 1,
-    textureKey: String(row.texture_key ?? ''),
-    fontId: String(row.font_id ?? 'youzaiworldcore:title'),
-    glyph: String(row.glyph ?? ''),
     enabled: Number(row.enabled ?? 0) === 1,
     sortOrder: Number(row.sort_order ?? 0),
     systemManaged: Number(row.system_managed ?? 0) === 1,
@@ -3599,14 +3626,10 @@ export function gameTitleWire(title: GameTitle) {
   return {
     id: title.id,
     display_name: title.displayName,
-    render_type: title.renderType,
     text_content: title.textContent,
     text_color: title.textColor,
     bold: title.bold,
     italic: title.italic,
-    texture_key: title.textureKey,
-    font_id: title.fontId,
-    glyph: title.glyph,
     enabled: title.enabled,
     sort_order: title.sortOrder,
     system_managed: title.systemManaged,
@@ -3653,52 +3676,28 @@ export function saveGameTitle(input: Partial<GameTitle> & Pick<GameTitle, 'id' |
     throw createError({ statusCode: 400, statusMessage: '称号名称长度需要为 1 至 32 个字符' })
   }
   const existing = getGameTitle(id)
-  const renderType = input.renderType ?? existing?.renderType ?? 'text'
-  if (!['text', 'texture', 'text_texture'].includes(renderType)) {
-    throw createError({ statusCode: 400, statusMessage: '称号渲染类型不正确' })
-  }
-  const textContent = String(input.textContent ?? existing?.textContent ?? displayName).trim().slice(0, 64)
+  const textContent = String(input.textContent ?? existing?.textContent ?? displayName).trim().slice(0, 64) || displayName
   const textColor = String(input.textColor ?? existing?.textColor ?? '#FFFFFF').trim().toUpperCase()
   if (!/^#[0-9A-F]{6}$/.test(textColor)) {
     throw createError({ statusCode: 400, statusMessage: '称号颜色必须使用 #RRGGBB 格式' })
   }
-  const textureKey = String(input.textureKey ?? existing?.textureKey ?? '').trim()
-  if (textureKey && !/^[a-z0-9_./-]{1,128}$/.test(textureKey)) {
-    throw createError({ statusCode: 400, statusMessage: '贴图资源标识格式不正确' })
-  }
-  const fontId = String(input.fontId ?? existing?.fontId ?? 'youzaiworldcore:title').trim()
-  if (fontId.length > 128) {
-    throw createError({ statusCode: 400, statusMessage: '字体资源标识不能超过 128 个字符' })
-  }
-  if (!/^[a-z0-9_.-]+:[a-z0-9_./-]+$/.test(fontId)) {
-    throw createError({ statusCode: 400, statusMessage: '字体资源标识格式不正确' })
-  }
-  const glyph = String(input.glyph ?? existing?.glyph ?? '').slice(0, 8)
-  if ((renderType === 'texture' || renderType === 'text_texture') && (!textureKey || !glyph)) {
-    throw createError({ statusCode: 400, statusMessage: '贴图称号必须填写贴图标识和字体字符' })
-  }
   const now = Date.now()
   run(`INSERT INTO game_titles
-      (id, display_name, render_type, text_content, text_color, bold, italic, texture_key,
-       font_id, glyph, enabled, sort_order, system_managed, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (id, display_name, text_content, text_color, bold, italic,
+       enabled, sort_order, system_managed, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         display_name = excluded.display_name,
-        render_type = excluded.render_type,
         text_content = excluded.text_content,
         text_color = excluded.text_color,
         bold = excluded.bold,
         italic = excluded.italic,
-        texture_key = excluded.texture_key,
-        font_id = excluded.font_id,
-        glyph = excluded.glyph,
         enabled = excluded.enabled,
         sort_order = excluded.sort_order,
         updated_at = excluded.updated_at`,
-    id, displayName, renderType, textContent, textColor,
+    id, displayName, textContent, textColor,
     (input.bold ?? existing?.bold ?? false) ? 1 : 0,
     (input.italic ?? existing?.italic ?? false) ? 1 : 0,
-    textureKey, fontId, glyph,
     (input.enabled ?? existing?.enabled ?? true) ? 1 : 0,
     Math.max(-100_000, Math.min(100_000, Math.trunc(input.sortOrder ?? existing?.sortOrder ?? 0))),
     (existing?.systemManaged ?? input.systemManaged ?? false) ? 1 : 0,
@@ -6439,9 +6438,16 @@ export async function migrateFromJson() {
 // ===== 已加载地图：HMAC 分批增量上传与后台只读浏览 =====
 const MAX_MAP_WORLDS = 64
 const MAX_MAP_TILES_PER_WORLD = 2_000_000
+const MAX_MAP_OVERVIEW_CACHE = 24
+const MAP_RESET_SETTING = 'game_map.last_reset'
+const mapOverviewCache = new Map<string, { stamp: string; value: GameMapOverview }>()
+
+function invalidateMapOverview(worldId?: string): void {
+  for (const key of mapOverviewCache.keys()) if (!worldId || key.startsWith(worldId + '|')) mapOverviewCache.delete(key)
+}
 
 interface MapWorldRow {
-  id: string; name: string; source_revision: number; upload_revision: number; run_id: string; last_batch: number
+  id: string; data_id: string; name: string; source_revision: number; upload_revision: number; run_id: string; last_batch: number
   last_batch_hash: string; syncing: number; tile_count: number; last_success: number; last_activity: number
 }
 
@@ -6451,6 +6457,7 @@ export function uploadGameMap(input: MapUpload): { ok: true; full_required?: boo
   try {
     const result = applyGameMapBatch(input)
     db.exec('COMMIT')
+    invalidateMapOverview(input.worldId)
     return result
   } catch (error) {
     db.exec('ROLLBACK')
@@ -6468,8 +6475,8 @@ function applyGameMapBatch(input: MapUpload): { ok: true; full_required?: boolea
     if (!world) {
       const count = db.prepare('SELECT COUNT(*) AS total FROM game_map_v2_worlds').get() as { total: number }
       if (count.total >= MAX_MAP_WORLDS) throw createError({ statusCode: 507, statusMessage: '地图存档数量已达上限' })
-      db.prepare('INSERT INTO game_map_v2_worlds (id, name, run_id, upload_revision, last_activity) VALUES (?, ?, ?, ?, ?)')
-        .run(input.worldId, input.name, input.runId, input.revision, now)
+      db.prepare('INSERT INTO game_map_v2_worlds (id, data_id, name, run_id, upload_revision, last_activity) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(input.worldId, randomUUID(), input.name, input.runId, input.revision, now)
     } else if (world.run_id !== input.runId) {
       db.prepare(`UPDATE game_map_v2_worlds SET name = ?, run_id = ?, upload_revision = ?, last_batch = -1,
         last_batch_hash = '', syncing = 1, last_activity = ? WHERE id = ?`)
@@ -6532,8 +6539,8 @@ function applyGameMapBatch(input: MapUpload): { ok: true; full_required?: boolea
 export function listGameMapWorlds(): GameMapWorld[] {
   const worlds = db.prepare('SELECT * FROM game_map_v2_worlds ORDER BY name, id').all() as unknown as MapWorldRow[]
   const layers = db.prepare('SELECT dimension, layer, height, tile_count, min_x, min_z, max_x, max_z FROM game_map_v2_layers WHERE world_id = ? ORDER BY dimension, layer, height')
-  return worlds.map((world) => ({ id: world.id, name: world.name, dimensions: db.prepare('SELECT id,min_y,max_y FROM game_map_v2_dimensions WHERE world_id = ? ORDER BY id').all(world.id) as unknown as GameMapDimension[],
-    source_revision: world.source_revision,
+  return worlds.map((world) => ({ id: world.id, data_id: world.data_id, name: world.name, dimensions: db.prepare('SELECT id,min_y,max_y FROM game_map_v2_dimensions WHERE world_id = ? ORDER BY id').all(world.id) as unknown as GameMapDimension[],
+    source_revision: world.source_revision, upload_batch: world.last_batch,
     layers: layers.all(world.id) as unknown as GameMapLayerSummary[], last_success: world.last_success,
     last_activity: world.last_activity, syncing: !!world.syncing, tile_count: world.tile_count }))
 }
@@ -6554,4 +6561,88 @@ export function readGameMapTiles(view: MapViewport): GameMapTilePage {
   const last = visible.at(-1)
   return { tiles: visible.map((tile) => ({ x: tile.x, z: tile.z, data: Buffer.from(tile.data).toString('base64') })),
     next: rows.length > MAP_PAGE_TILES && last ? (last.z - view.minZ) * width + last.x - view.minX : null }
+}
+
+/** 总览只读取区块坐标与数量，不下载像素；每个区域的定位点必须是已保存的真实瓦片。 */
+export function readGameMapOverview(selection: MapSelection): GameMapOverview {
+  const key = `${selection.worldId}|${selection.dimension}|${selection.layer}|${selection.height}`
+  const world = db.prepare('SELECT * FROM game_map_v2_worlds WHERE id = ?').get(selection.worldId) as unknown as MapWorldRow | undefined
+  if (!world) throw createError({ statusCode: 404, statusMessage: '地图存档不存在' })
+  const stamp = `${world.data_id}|${world.run_id}|${world.last_batch_hash}|${world.source_revision}`
+  const cached = mapOverviewCache.get(key)
+  if (cached?.stamp === stamp) return cached.value
+  const bounds = db.prepare(`SELECT min_x, min_z, max_x, max_z FROM game_map_v2_layers
+    WHERE world_id = ? AND dimension = ? AND layer = ? AND height = ?`)
+    .get(selection.worldId, selection.dimension, selection.layer, selection.height) as unknown as GameMapLayerSummary | undefined
+  if (!bounds) return { cell_size: 1, cells: [], min_x: 0, min_z: 0, max_x: 0, max_z: 0, focus_x: 0, focus_z: 0 }
+  const size = mapOverviewCellSize({ minX: bounds.min_x, minZ: bounds.min_z, maxX: bounds.max_x, maxZ: bounds.max_z })
+  const coordinateWidth = MAP_CHUNK_LIMIT * 2 + 1
+  // SQLite 的整数除法朝零取整，负数先偏移，保持与 Minecraft 的区块划分一致。
+  const rows = db.prepare(`SELECT
+    CASE WHEN x >= 0 THEN x / ${size} ELSE (x - ${size} + 1) / ${size} END AS cell_x,
+    CASE WHEN z >= 0 THEN z / ${size} ELSE (z - ${size} + 1) / ${size} END AS cell_z,
+    COUNT(*) AS count, MIN((z + ${MAP_CHUNK_LIMIT}) * ${coordinateWidth} + x + ${MAP_CHUNK_LIMIT}) AS anchor
+    FROM game_map_v2_tiles WHERE world_id = ? AND dimension = ? AND layer = ? AND height = ?
+    GROUP BY cell_x, cell_z ORDER BY cell_z, cell_x`)
+    .all(selection.worldId, selection.dimension, selection.layer, selection.height) as unknown as { cell_x: number; cell_z: number; count: number; anchor: number }[]
+  const cells = rows.map(row => ({ x: row.cell_x, z: row.cell_z, count: row.count,
+    focus_x: row.anchor % coordinateWidth - MAP_CHUNK_LIMIT,
+    focus_z: Math.floor(row.anchor / coordinateWidth) - MAP_CHUNK_LIMIT }))
+  const focus = mapOverviewFocus(cells)
+  const result: GameMapOverview = { ...bounds, cell_size: size, cells,
+    focus_x: focus?.x ?? 0, focus_z: focus?.z ?? 0 }
+  if (mapOverviewCache.size >= MAX_MAP_OVERVIEW_CACHE) mapOverviewCache.delete(mapOverviewCache.keys().next().value!)
+  mapOverviewCache.set(key, { stamp, value: result })
+  return result
+}
+
+export function getGameMapReset(): GameMapReset | null {
+  try { return JSON.parse(getSetting(MAP_RESET_SETTING) || 'null') as GameMapReset | null }
+  catch { return null }
+}
+
+export function getGameMapIndex(): GameMapIndex {
+  return { worlds: listGameMapWorlds(), reset: getGameMapReset(), diagnostics: {
+    game_api_configured: Boolean(getGameApiKey()),
+    panel_bound: mcsmConfigured() && Boolean(getMcsmManagedInstance()),
+  } }
+}
+
+/** 清空地图与同步游标是同一个事务；在途旧会话失效，下一次 begin 必须全量补传。 */
+export function clearGameMapData(worldId: string | null, expectedDataIds?: Record<string, string>): GameMapReset {
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    const worlds = worldId
+      ? db.prepare('SELECT id, data_id, name FROM game_map_v2_worlds WHERE id = ?').all(worldId)
+      : db.prepare('SELECT id, data_id, name FROM game_map_v2_worlds').all()
+    if (worldId && !worlds.length) throw createError({ statusCode: 404, statusMessage: '要清空的地图存档不存在，请刷新后重试' })
+    if (expectedDataIds && (Object.keys(expectedDataIds).length !== worlds.length
+      || worlds.some(value => expectedDataIds[String(value.id)] !== value.data_id))) {
+      throw createError({ statusCode: 409, statusMessage: '地图存档已发生变化，请刷新并重新确认清空范围' })
+    }
+    const predicate = worldId ? ' WHERE world_id = ?' : ''
+    const params = worldId ? [worldId] : []
+    const tiles = Number(db.prepare('DELETE FROM game_map_v2_tiles' + predicate).run(...params).changes)
+    db.prepare('DELETE FROM game_map_v2_layers' + predicate).run(...params)
+    db.prepare('DELETE FROM game_map_v2_dimensions' + predicate).run(...params)
+    db.prepare('DELETE FROM game_map_v2_worlds' + (worldId ? ' WHERE id = ?' : '')).run(...params)
+    const reset: GameMapReset = { id: randomUUID(), at: Date.now(), world: worldId,
+      world_name: worldId ? String(worlds[0]?.name || worldId) : '全部存档',
+      removed_worlds: worlds.length, removed_tiles: tiles,
+      status: 'waiting', message: '地图已清空，等待服务器重新全量上传。' }
+    setSetting(MAP_RESET_SETTING, JSON.stringify(reset))
+    db.exec('COMMIT')
+    invalidateMapOverview(worldId ?? undefined)
+    return reset
+  } catch (error) { db.exec('ROLLBACK'); throw error }
+}
+
+export function updateGameMapResetRequest(id: string, request: GameMapUploadRequest): GameMapReset | null {
+  const raw = getSetting(MAP_RESET_SETTING)
+  const current = getGameMapReset()
+  if (current?.id !== id) return current
+  const updated = { ...current, ...request }
+  const changed = db.prepare('UPDATE settings SET value = ? WHERE key = ? AND value = ?')
+    .run(JSON.stringify(updated), MAP_RESET_SETTING, raw || '').changes
+  return changed ? updated : getGameMapReset()
 }

@@ -1,23 +1,17 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { webAssetUrl } from '#shared/web-assets'
 
 useHead({ title: '玩家称号' })
 
-type RenderType = 'text' | 'texture' | 'text_texture'
 type GrantSource = 'registration' | 'manual' | 'permission'
 
 interface GameTitle {
   id: string
   display_name: string
-  render_type: RenderType
   text_content: string
   text_color: string
   bold: boolean
   italic: boolean
-  texture_key: string
-  font_id: string
-  glyph: string
   enabled: boolean
   sort_order: number
   system_managed: boolean
@@ -69,14 +63,10 @@ const { apply: applyDialogAnimation } = useDialogAnimation()
 const form = ref({
   id: '',
   display_name: '',
-  render_type: 'text' as RenderType,
   text_content: '',
   text_color: '#FFFFFF',
   bold: false,
   italic: false,
-  texture_key: '',
-  font_id: 'youzaiworldcore:title',
-  glyph: '',
   enabled: true,
   sort_order: 0,
 })
@@ -89,11 +79,18 @@ const filteredPlayers = computed(() => {
     || String(player.uuid || '').toLocaleLowerCase('en-US').includes(query))
 })
 
-function textureUrl(title: GameTitle) {
-  const key = title.texture_key.split('/').map((part) => encodeURIComponent(part)).join('/')
-  return title.texture_key
-    ? webAssetUrl(`/images/titles/${key}.png`)
-    : ''
+function titleLabel(title: Pick<GameTitle, 'text_content' | 'display_name'>) {
+  const text = title.text_content.trim() || title.display_name.trim()
+  return text ? `{${text}}` : ''
+}
+
+function titleStyle(title: Pick<GameTitle, 'text_color' | 'bold' | 'italic'>) {
+  return { color: title.text_color, fontWeight: title.bold ? '700' : '400', fontStyle: title.italic ? 'italic' : 'normal' }
+}
+
+function ownedTitleLabel(id: string) {
+  const title = titleMap.value.get(id)
+  return title ? titleLabel(title) : `{${id}}`
 }
 
 function sourceLabel(source: GrantSource) {
@@ -111,7 +108,7 @@ function hasEditableGrant(player: PlayerTitles | null | undefined, titleId: stri
 }
 
 function equippedName(player: PlayerTitles) {
-  return player.equipped_title_id ? titleMap.value.get(player.equipped_title_id)?.display_name || player.equipped_title_id : '未佩戴'
+  return player.equipped_title_id ? ownedTitleLabel(player.equipped_title_id) : '不佩戴称号'
 }
 
 async function loadOverview() {
@@ -132,8 +129,8 @@ function openCreate() {
   editTarget.value = null
   editorOpen.value = true
   form.value = {
-    id: '', display_name: '', render_type: 'text', text_content: '', text_color: '#FFFFFF',
-    bold: false, italic: false, texture_key: '', font_id: 'youzaiworldcore:title', glyph: '',
+    id: '', display_name: '', text_content: '', text_color: '#FFFFFF',
+    bold: false, italic: false,
     enabled: true, sort_order: 0,
   }
 }
@@ -144,14 +141,10 @@ function openEdit(title: GameTitle) {
   form.value = {
     id: title.id,
     display_name: title.display_name,
-    render_type: title.render_type,
     text_content: title.text_content,
     text_color: title.text_color,
     bold: title.bold,
     italic: title.italic,
-    texture_key: title.texture_key,
-    font_id: title.font_id,
-    glyph: title.glyph,
     enabled: title.enabled,
     sort_order: title.sort_order,
   }
@@ -232,10 +225,6 @@ function operationPending(operation: string, player: PlayerTitles, titleId: stri
   return pendingOperation.value === `${operation}:${player.username}:${titleId || 'none'}`
 }
 
-function setRenderType(event: Event) {
-  form.value.render_type = (event.target as HTMLElement & { value: RenderType }).value
-}
-
 onMounted(async () => {
   try {
     await access.load(true)
@@ -290,16 +279,14 @@ onMounted(async () => {
       <EmptyState v-else-if="!overview.titles.length" image="/images/empty-winner.svg">暂无称号</EmptyState>
       <div v-else ref="titlesCatalogWrap" class="table-wrap">
         <table>
-          <thead><tr><th>预览</th><th>称号</th><th>ID</th><th>类型</th><th>状态</th><th class="actions-column">操作</th></tr></thead>
+          <thead><tr><th>佩戴预览</th><th>后台名称</th><th>ID</th><th>状态</th><th class="actions-column">操作</th></tr></thead>
           <tbody>
             <tr v-for="title in overview.titles" :key="title.id">
               <td>
-                <img v-if="title.texture_key" class="title-image" :src="textureUrl(title)" :alt="title.display_name">
-                <span v-else class="text-preview" :style="{ color: title.text_color, fontWeight: title.bold ? '700' : '400', fontStyle: title.italic ? 'italic' : 'normal' }">{{ title.text_content }}</span>
+                <span class="text-preview" :style="titleStyle(title)">{{ titleLabel(title) }}</span>
               </td>
               <td class="name">{{ title.display_name }}<span v-if="title.system_managed" class="system-badge">系统</span></td>
               <td class="mono">{{ title.id }}</td>
-              <td>{{ title.render_type === 'text' ? '文字' : title.render_type === 'texture' ? '贴图' : '文字 + 贴图' }}</td>
               <td><span class="status-dot" :class="{ disabled: !title.enabled }"></span>{{ title.enabled ? '启用' : '停用' }}</td>
               <td class="actions"><md-icon-button v-if="canEditCatalog" aria-label="编辑称号" @click="openEdit(title)"><md-icon>edit</md-icon></md-icon-button></td>
             </tr>
@@ -332,7 +319,7 @@ onMounted(async () => {
               <tr v-for="player in filteredPlayers" :key="player.username">
                 <td><strong>{{ player.username }}</strong><div class="mono subline">{{ player.uuid || '未绑定 UUID' }}</div></td>
                 <td>{{ equippedName(player) }}</td>
-                <td><span v-if="!player.owned_title_ids.length" class="muted">无</span><span v-for="id in player.owned_title_ids" :key="id" class="title-chip">{{ titleMap.get(id)?.display_name || id }}</span></td>
+                <td><span v-if="!player.owned_title_ids.length" class="muted">无</span><span v-for="id in player.owned_title_ids" :key="id" class="title-chip">{{ ownedTitleLabel(id) }}</span></td>
                 <td class="actions"><md-icon-button aria-label="管理玩家称号" @click="playerTarget = player"><md-icon>manage_accounts</md-icon></md-icon-button></td>
               </tr>
             </tbody>
@@ -345,25 +332,19 @@ onMounted(async () => {
     <md-dialog ref="editorDialog" :open="editorOpen" :aria-busy="saving ? 'true' : 'false'" @closed="closeEditor">
       <div slot="headline">{{ editTarget ? '编辑称号' : '新建称号' }}</div>
       <div slot="content" class="dialog-form title-editor">
-        <md-outlined-text-field label="称号 ID" :readonly="!!editTarget" :value="form.id" @input="form.id = ($event.target as HTMLInputElement).value"></md-outlined-text-field>
-        <md-outlined-text-field label="后台显示名称" :value="form.display_name" @input="form.display_name = ($event.target as HTMLInputElement).value"></md-outlined-text-field>
-        <md-outlined-select label="渲染类型" :value="form.render_type" @change="setRenderType">
-          <md-select-option value="text" :selected="form.render_type === 'text'"><div slot="headline">文字</div></md-select-option>
-          <md-select-option value="texture" :selected="form.render_type === 'texture'"><div slot="headline">贴图</div></md-select-option>
-          <md-select-option value="text_texture" :selected="form.render_type === 'text_texture'"><div slot="headline">文字 + 贴图</div></md-select-option>
-        </md-outlined-select>
-        <md-outlined-text-field label="回退文字" :value="form.text_content" @input="form.text_content = ($event.target as HTMLInputElement).value"></md-outlined-text-field>
+        <div class="two-columns">
+          <md-outlined-text-field label="称号 ID" :readonly="!!editTarget" :value="form.id" @input="form.id = ($event.target as HTMLInputElement).value"></md-outlined-text-field>
+          <md-outlined-text-field label="后台显示名称" :value="form.display_name" @input="form.display_name = ($event.target as HTMLInputElement).value"></md-outlined-text-field>
+        </div>
+        <md-outlined-text-field label="称号文字" maxlength="64" :value="form.text_content" @input="form.text_content = ($event.target as HTMLInputElement).value"></md-outlined-text-field>
+        <div class="title-preview" aria-live="polite">
+          <span class="preview-label">佩戴预览</span>
+          <span class="text-preview" :style="titleStyle(form)">{{ titleLabel(form) || '输入称号文字后预览' }}</span>
+        </div>
         <div class="two-columns">
           <md-outlined-text-field label="文字颜色" :value="form.text_color" @input="form.text_color = ($event.target as HTMLInputElement).value"></md-outlined-text-field>
           <md-outlined-text-field type="number" label="排序" :value="String(form.sort_order)" @input="form.sort_order = Number(($event.target as HTMLInputElement).value) || 0"></md-outlined-text-field>
         </div>
-        <template v-if="form.render_type !== 'text'">
-          <md-outlined-text-field label="贴图资源标识" :value="form.texture_key" @input="form.texture_key = ($event.target as HTMLInputElement).value"></md-outlined-text-field>
-          <div class="two-columns">
-            <md-outlined-text-field label="字体资源 ID" :value="form.font_id" @input="form.font_id = ($event.target as HTMLInputElement).value"></md-outlined-text-field>
-            <md-outlined-text-field label="字体字符" :value="form.glyph" @input="form.glyph = ($event.target as HTMLInputElement).value"></md-outlined-text-field>
-          </div>
-        </template>
         <div class="check-row"><label><md-checkbox :checked="form.bold" @change="form.bold = !form.bold"></md-checkbox>粗体</label><label><md-checkbox :checked="form.italic" @change="form.italic = !form.italic"></md-checkbox>斜体</label><label><md-checkbox :checked="form.enabled" @change="form.enabled = !form.enabled"></md-checkbox>启用</label></div>
       </div>
       <div slot="actions"><md-text-button :disabled="saving" @click="closeEditor">取消</md-text-button><md-filled-button :disabled="saving" @click="saveTitle">{{ saving ? '保存中…' : '保存' }}</md-filled-button></div>
@@ -373,9 +354,9 @@ onMounted(async () => {
       <div slot="headline">管理 {{ playerTarget?.username }} 的称号</div>
       <div slot="content" ref="titleGrantList" class="grant-list">
         <template v-if="playerTarget">
-          <div class="unequip-row"><span>当前佩戴：{{ equippedName(playerTarget) }}</span><md-text-button v-if="canEditGrants && playerTarget.equipped_title_id" :disabled="!!pendingOperation" @click="equipForPlayer(playerTarget, null)">{{ operationPending('equip', playerTarget, null) ? '卸下中…' : '卸下' }}</md-text-button></div>
+          <div class="unequip-row"><span>当前佩戴：{{ equippedName(playerTarget) }}</span><md-text-button v-if="canEditGrants" :disabled="!!pendingOperation || !playerTarget.equipped_title_id" @click="equipForPlayer(playerTarget, null)">{{ operationPending('equip', playerTarget, null) ? '卸下中…' : '不佩戴称号' }}</md-text-button></div>
           <div v-for="title in overview.titles" :key="title.id" class="grant-row">
-            <div><strong>{{ title.display_name }}</strong><span v-if="!title.enabled" class="disabled-badge">已停用</span><div class="source-list"><span v-for="grant in grantsFor(playerTarget, title.id)" :key="`${grant.source}-${grant.source_key}`">{{ sourceLabel(grant.source) }}</span><span v-if="!grantsFor(playerTarget, title.id).length">尚未拥有</span></div></div>
+            <div><span class="text-preview" :style="titleStyle(title)">{{ titleLabel(title) }}</span><span v-if="!title.enabled" class="disabled-badge">已停用</span><div class="source-list"><span v-for="grant in grantsFor(playerTarget, title.id)" :key="`${grant.source}-${grant.source_key}`">{{ sourceLabel(grant.source) }}</span><span v-if="!grantsFor(playerTarget, title.id).length">尚未拥有</span></div></div>
             <div class="grant-actions">
               <md-icon-button v-if="canEditGrants && title.enabled && playerTarget.owned_title_ids.includes(title.id) && playerTarget.equipped_title_id !== title.id" aria-label="佩戴称号" title="佩戴称号" :disabled="!!pendingOperation" @click="equipForPlayer(playerTarget, title.id)"><md-icon>{{ operationPending('equip', playerTarget, title.id) ? 'progress_activity' : 'check_circle' }}</md-icon></md-icon-button>
               <md-icon-button v-if="canEditGrants && title.enabled && !playerTarget.owned_title_ids.includes(title.id)" aria-label="授予称号" title="授予称号" :disabled="!!pendingOperation" @click="changeGrant(playerTarget, title, 'grant')"><md-icon>{{ operationPending('grant', playerTarget, title.id) ? 'progress_activity' : 'add_circle' }}</md-icon></md-icon-button>
@@ -406,13 +387,14 @@ onMounted(async () => {
 .view-panel { min-width: 0; }
 .table-card { overflow: hidden; }
 .table-wrap { width: 100%; max-width: 100%; overflow: auto; }
-table { width: 100%; min-width: 720px; border-collapse: collapse; }
+table { width: 100%; min-width: 640px; border-collapse: collapse; }
 th, td { text-align: left; padding: 13px 16px; border-bottom: 1px solid var(--md-sys-color-outline-variant); vertical-align: middle; }
 th { font-size: 13px; color: var(--md-sys-color-on-surface-variant); font-weight: 600; white-space: nowrap; }
 .actions-column { width: 64px; }
 .actions { text-align: right; }
-.title-image { display: block; max-width: 116px; height: 22px; object-fit: contain; object-position: left center; image-rendering: pixelated; }
-.text-preview { white-space: nowrap; }
+.text-preview { display: inline-block; max-width: 100%; padding: 5px 10px; border-radius: 8px; background: #172723; overflow-wrap: anywhere; line-height: 1.5; }
+.title-preview { display: flex; align-items: flex-start; flex-direction: column; gap: 8px; padding: 12px 14px; border-radius: 12px; background: var(--md-sys-color-surface-container-high); }
+.preview-label { font-size: 12px; color: var(--md-sys-color-on-surface-variant); }
 .name { font-weight: 600; }
 .system-badge, .disabled-badge, .title-chip, .source-list span { display: inline-block; margin-left: 7px; padding: 2px 6px; border-radius: 5px; background: var(--md-sys-color-surface-container-high); font-size: 12px; font-weight: 400; }
 .disabled-badge { color: var(--md-sys-color-error); }
@@ -428,6 +410,8 @@ th { font-size: 13px; color: var(--md-sys-color-on-surface-variant); font-weight
 .check-row label { display: flex; align-items: center; gap: 3px; }
 .grant-list { width: min(560px, calc(100vw - 72px)); min-width: 0; display: grid; gap: 0; max-height: 65vh; overflow: auto; }
 .unequip-row, .grant-row { justify-content: space-between; padding: 12px 2px; border-bottom: 1px solid var(--md-sys-color-outline-variant); }
+.unequip-row { flex-wrap: wrap; }
+.unequip-row md-text-button { flex: 0 0 auto; }
 .grant-row { display: flex; align-items: center; gap: 16px; }
 .grant-row > div:first-child { min-width: 0; }
 .grant-actions { flex: 0 0 auto; }
@@ -442,7 +426,7 @@ th { font-size: 13px; color: var(--md-sys-color-on-surface-variant); font-weight
   .heading-actions { width: 100%; justify-content: flex-end; flex-wrap: wrap; }
   .heading-actions md-filled-button { flex: 1 1 auto; }
   .view-switch { width: 100%; }
-  table { min-width: 580px; }
+  table { min-width: 540px; }
   th:nth-child(3), td:nth-child(3) { display: none; }
   .two-columns { display: grid; grid-template-columns: minmax(0, 1fr); }
   .dialog-form, .grant-list { width: 100%; }

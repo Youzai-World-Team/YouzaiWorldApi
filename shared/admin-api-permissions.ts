@@ -9,6 +9,7 @@ export function pageKeyForApi(path: string): string | undefined {
   // managed from Site Settings and uses that page's edit permission.
   if (path.startsWith('/api/admin/status-history')) return 'settings'
   if (path.startsWith('/api/admin/status')) return 'status'
+  if (path.startsWith('/api/admin/game-map-data')) return 'settings'
   if (path.startsWith('/api/admin/turnstile')
     || path.startsWith('/api/admin/password-policy')
     || path.startsWith('/api/admin/password-expiry')

@@ -71,16 +71,23 @@ export function parseMapUpload(value: unknown): MapUpload {
 }
 
 export interface MapViewport { worldId: string; dimension: string; layer: GameMapLayer; height: number; minX: number; minZ: number; maxX: number; maxZ: number; after: number }
+export type MapSelection = Pick<MapViewport, 'worldId' | 'dimension' | 'layer' | 'height'>
+export function parseMapSelection(query: Record<string, unknown>): MapSelection {
+  const worldId = gameMapId(query.world), dimension = text(query.dimension, 128, DIMENSION)
+  if (!MAP_LAYERS.includes(query.layer as GameMapLayer)) invalid()
+  const layer = query.layer as GameMapLayer
+  if (typeof query.height !== 'string' || !/^-?\d+$/.test(query.height)) invalid()
+  const height = integer(Number(query.height), -4096, 4095)
+  if ((layer === 'SURFACE' || layer === 'ROOF') && height !== 0) invalid()
+  return { worldId, dimension, layer, height }
+}
 /** 视口最多 256×256 区块，按坐标分页，负数坐标使用与 Java 相同的向下取整语义。 */
 export function parseMapViewport(query: Record<string, unknown>): MapViewport {
   const number = (key: string, min: number, max: number) => {
     if (typeof query[key] !== 'string' || !/^-?\d+$/.test(query[key] as string)) invalid()
     return integer(Number(query[key]), min, max)
   }
-  const worldId = gameMapId(query.world), dimension = text(query.dimension, 128, DIMENSION)
-  if (!MAP_LAYERS.includes(query.layer as GameMapLayer)) invalid()
-  const layer = query.layer as GameMapLayer, height = number('height', -4096, 4095)
-  if ((layer === 'SURFACE' || layer === 'ROOF') && height !== 0) invalid()
+  const { worldId, dimension, layer, height } = parseMapSelection(query)
   const minX = number('min_x', -MAP_CHUNK_LIMIT, MAP_CHUNK_LIMIT), maxX = number('max_x', minX, MAP_CHUNK_LIMIT)
   const minZ = number('min_z', -MAP_CHUNK_LIMIT, MAP_CHUNK_LIMIT), maxZ = number('max_z', minZ, MAP_CHUNK_LIMIT)
   if (maxX - minX >= MAP_MAX_VIEW_CHUNKS || maxZ - minZ >= MAP_MAX_VIEW_CHUNKS) invalid()

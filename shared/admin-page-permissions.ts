@@ -350,6 +350,16 @@ export const ADMIN_FEATURE_DEFINITIONS: AdminFeatureDefinition[] = [
     defaultLevel: 'hidden',
   },
   {
+    key: 'settings-game-maps',
+    label: '站点设置：清空地图与重新上传',
+    icon: 'map',
+    description: '允许清空指定或全部存档的地图快照，并通过管理实例请求重新上传。默认仅初始管理员可用。',
+    parentKey: 'settings',
+    pageKey: 'settings',
+    defaultLevel: 'hidden',
+    availableLevels: ['hidden', 'edit'],
+  },
+  {
     key: 'server-manage-power',
     label: '服务器管理：电源操作',
     icon: 'power_settings_new',
