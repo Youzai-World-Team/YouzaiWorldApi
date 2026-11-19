@@ -1,5 +1,5 @@
-import type { MapUpload, MapViewport, MapSelection } from './game-map-input'
-import { MAP_PAGE_TILES, MAP_CHUNK_LIMIT, type GameMapWorld, type GameMapDimension, type GameMapLayerSummary,
+import type { MapUpload, MapViewport, MapSelection, MapPlayerUpload } from './game-map-input'
+import { MAP_PAGE_TILES, MAP_CHUNK_LIMIT, MAP_MAX_PLAYERS, type GameMapPlayer, type GameMapPlayers, type GameMapWorld, type GameMapDimension, type GameMapLayerSummary,
   type GameMapTilePage, type GameMapOverview, type GameMapIndex, type GameMapReset, type GameMapUploadRequest } from '#shared/game-map'
 import { mapOverviewCellSize, mapOverviewFocus } from '#shared/game-map-view'
 import { DatabaseSync } from 'node:sqlite'
@@ -113,6 +113,16 @@ db.exec(`
     max_x INTEGER NOT NULL,
     max_z INTEGER NOT NULL,
     PRIMARY KEY (world_id, dimension, layer, height)
+  ) WITHOUT ROWID;
+
+  CREATE TABLE IF NOT EXISTS game_map_v2_players (
+    world_id TEXT NOT NULL, uuid TEXT NOT NULL, name TEXT NOT NULL, dimension TEXT NOT NULL,
+    x REAL NOT NULL, y REAL NOT NULL, z REAL NOT NULL,
+    recorded_at INTEGER NOT NULL, source TEXT NOT NULL, updated_at INTEGER NOT NULL,
+    PRIMARY KEY (world_id, uuid)
+  ) WITHOUT ROWID;
+  CREATE TABLE IF NOT EXISTS game_map_v2_player_resets (
+    world_id TEXT PRIMARY KEY, at INTEGER NOT NULL
   ) WITHOUT ROWID;
 
   CREATE INDEX IF NOT EXISTS game_map_v2_tiles_view_idx
@@ -6452,7 +6462,7 @@ interface MapWorldRow {
 }
 
 /** 一批内原子写入；重试同一批不重复计数，只有 complete 确认后更新完整同步时间。 */
-export function uploadGameMap(input: MapUpload): { ok: true; full_required?: boolean; accepted_revision?: number } {
+export function uploadGameMap(input: MapUpload): { ok: true; full_required?: boolean; accepted_revision?: number; data_id?: string } {
   db.exec('BEGIN IMMEDIATE')
   try {
     const result = applyGameMapBatch(input)
@@ -6465,18 +6475,19 @@ export function uploadGameMap(input: MapUpload): { ok: true; full_required?: boo
   }
 }
 
-function applyGameMapBatch(input: MapUpload): { ok: true; full_required?: boolean; accepted_revision?: number } {
+function applyGameMapBatch(input: MapUpload): { ok: true; full_required?: boolean; accepted_revision?: number; data_id?: string } {
   const world = db.prepare('SELECT * FROM game_map_v2_worlds WHERE id = ?').get(input.worldId) as unknown as MapWorldRow | undefined
   const now = Date.now()
   if (input.phase === 'begin') {
     if (world && input.revision < world.source_revision) {
       throw createError({ statusCode: 409, statusMessage: '地图来源修订号落后于已保存数据' })
     }
+    const dataId = world?.data_id || randomUUID()
     if (!world) {
       const count = db.prepare('SELECT COUNT(*) AS total FROM game_map_v2_worlds').get() as { total: number }
       if (count.total >= MAX_MAP_WORLDS) throw createError({ statusCode: 507, statusMessage: '地图存档数量已达上限' })
       db.prepare('INSERT INTO game_map_v2_worlds (id, data_id, name, run_id, upload_revision, last_activity) VALUES (?, ?, ?, ?, ?, ?)')
-        .run(input.worldId, randomUUID(), input.name, input.runId, input.revision, now)
+        .run(input.worldId, dataId, input.name, input.runId, input.revision, now)
     } else if (world.run_id !== input.runId) {
       db.prepare(`UPDATE game_map_v2_worlds SET name = ?, run_id = ?, upload_revision = ?, last_batch = -1,
         last_batch_hash = '', syncing = 1, last_activity = ? WHERE id = ?`)
@@ -6487,7 +6498,9 @@ function applyGameMapBatch(input: MapUpload): { ok: true; full_required?: boolea
     db.prepare('DELETE FROM game_map_v2_dimensions WHERE world_id = ?').run(input.worldId)
     const dimension = db.prepare('INSERT INTO game_map_v2_dimensions VALUES (?, ?, ?, ?)')
     for (const value of input.dimensions) dimension.run(input.worldId, value.id, value.min_y, value.max_y)
-    return { ok: true, full_required: !world?.last_success, accepted_revision: world?.source_revision ?? 0 }
+    db.prepare(`DELETE FROM game_map_v2_players WHERE world_id = ? AND dimension NOT IN
+      (SELECT id FROM game_map_v2_dimensions WHERE world_id = ?)`).run(input.worldId, input.worldId)
+    return { ok: true, full_required: !world?.last_success, accepted_revision: world?.source_revision ?? 0, data_id: dataId }
   }
   if (!world || world.run_id !== input.runId || world.upload_revision !== input.revision) {
     throw createError({ statusCode: 409, statusMessage: '地图上传会话已失效，请重新开始' })
@@ -6535,14 +6548,60 @@ function applyGameMapBatch(input: MapUpload): { ok: true; full_required?: boolea
   return { ok: true }
 }
 
-/** 只返回有权限后台页需要的存档、图层范围和同步状态，不含账户信息。 */
+/** 按存档保存每位玩家的最新快照；迟到请求不能覆盖新位置，清空前的本地记录不能补回。 */
+export function uploadGameMapPlayers(input: MapPlayerUpload): { ok: true; saved: number } {
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    const world = db.prepare('SELECT data_id FROM game_map_v2_worlds WHERE id = ?').get(input.worldId)
+    if (!world || world.data_id !== input.dataId) {
+      throw createError({ statusCode: 409, statusMessage: '地图数据已清空或尚未开始同步，请重新同步地图后上传玩家位置' })
+    }
+    const dimensions = new Set(db.prepare('SELECT id FROM game_map_v2_dimensions WHERE world_id = ?').all(input.worldId).map(value => String(value.id)))
+    if (input.players.some(value => !dimensions.has(value.dimension))) {
+      throw createError({ statusCode: 400, statusMessage: '玩家位置维度不属于此存档' })
+    }
+    const cutoff = Number(db.prepare("SELECT COALESCE(MAX(at), 0) AS at FROM game_map_v2_player_resets WHERE world_id IN (?, '*')").get(input.worldId)?.at || 0)
+    const previous = Number(db.prepare('SELECT COALESCE(MAX(updated_at), 0) AS time FROM game_map_v2_players WHERE world_id = ?').get(input.worldId)?.time || 0)
+    const updatedAt = Math.max(Date.now(), previous + 1)
+    const write = db.prepare(`INSERT INTO game_map_v2_players (world_id, uuid, name, dimension, x, y, z, recorded_at, source, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(world_id, uuid) DO UPDATE SET
+      name = excluded.name, dimension = excluded.dimension, x = excluded.x, y = excluded.y, z = excluded.z,
+      recorded_at = excluded.recorded_at, source = excluded.source, updated_at = excluded.updated_at
+      WHERE excluded.recorded_at > game_map_v2_players.recorded_at`)
+    let saved = 0
+    for (const player of input.players) {
+      if (player.recorded_at <= cutoff) continue
+      saved += Number(write.run(input.worldId, player.uuid, player.name, player.dimension, player.x, player.y, player.z,
+        player.recorded_at, player.source, updatedAt).changes)
+    }
+    db.prepare(`DELETE FROM game_map_v2_players WHERE world_id = ? AND uuid IN
+      (SELECT uuid FROM game_map_v2_players WHERE world_id = ? ORDER BY recorded_at DESC, uuid LIMIT -1 OFFSET ?)`)
+      .run(input.worldId, input.worldId, MAP_MAX_PLAYERS)
+    db.exec('COMMIT')
+    return { ok: true, saved }
+  } catch (error) { db.exec('ROLLBACK'); throw error }
+}
+
+/** 只供具备地图查看权限的后台使用，不读取账户凭据或推断实时在线状态。 */
+export function readGameMapPlayers(worldId: string, dataId: string): GameMapPlayers {
+  const world = db.prepare('SELECT data_id FROM game_map_v2_worlds WHERE id = ?').get(worldId)
+  if (!world) throw createError({ statusCode: 404, statusMessage: '地图存档不存在' })
+  if (world.data_id !== dataId) throw createError({ statusCode: 409, statusMessage: '地图数据已变化，请刷新后重试' })
+  const players = db.prepare(`SELECT uuid, name, dimension, x, y, z, recorded_at, source FROM game_map_v2_players
+    WHERE world_id = ? ORDER BY recorded_at DESC, uuid LIMIT ?`).all(worldId, MAP_MAX_PLAYERS) as unknown as GameMapPlayer[]
+  return { world: worldId, data_id: dataId, players }
+}
+
+/** 只返回有权限后台页需要的存档、图层范围、同步状态及玩家快照数量，不含账户凭据。 */
 export function listGameMapWorlds(): GameMapWorld[] {
   const worlds = db.prepare('SELECT * FROM game_map_v2_worlds ORDER BY name, id').all() as unknown as MapWorldRow[]
   const layers = db.prepare('SELECT dimension, layer, height, tile_count, min_x, min_z, max_x, max_z FROM game_map_v2_layers WHERE world_id = ? ORDER BY dimension, layer, height')
   return worlds.map((world) => ({ id: world.id, data_id: world.data_id, name: world.name, dimensions: db.prepare('SELECT id,min_y,max_y FROM game_map_v2_dimensions WHERE world_id = ? ORDER BY id').all(world.id) as unknown as GameMapDimension[],
     source_revision: world.source_revision, upload_batch: world.last_batch,
     layers: layers.all(world.id) as unknown as GameMapLayerSummary[], last_success: world.last_success,
-    last_activity: world.last_activity, syncing: !!world.syncing, tile_count: world.tile_count }))
+    last_activity: world.last_activity, syncing: !!world.syncing, tile_count: world.tile_count,
+    player_count: Number(db.prepare('SELECT COUNT(*) AS n FROM game_map_v2_players WHERE world_id = ?').get(world.id)?.n || 0),
+    player_updated_at: Number(db.prepare('SELECT COALESCE(MAX(updated_at), 0) AS time FROM game_map_v2_players WHERE world_id = ?').get(world.id)?.time || 0) }))
 }
 
 /** 按行分页读取有界视口；查询坐标不会产生 Minecraft 区块加载。 */
@@ -6622,13 +6681,18 @@ export function clearGameMapData(worldId: string | null, expectedDataIds?: Recor
     }
     const predicate = worldId ? ' WHERE world_id = ?' : ''
     const params = worldId ? [worldId] : []
+    const at = Date.now()
+    db.prepare(`INSERT INTO game_map_v2_player_resets (world_id, at) VALUES (?, ?)
+      ON CONFLICT(world_id) DO UPDATE SET at = MAX(at, excluded.at)`).run(worldId || '*', at)
+    if (!worldId) db.prepare("DELETE FROM game_map_v2_player_resets WHERE world_id != '*' AND at <= ?").run(at)
+    const players = Number(db.prepare('DELETE FROM game_map_v2_players' + predicate).run(...params).changes)
     const tiles = Number(db.prepare('DELETE FROM game_map_v2_tiles' + predicate).run(...params).changes)
     db.prepare('DELETE FROM game_map_v2_layers' + predicate).run(...params)
     db.prepare('DELETE FROM game_map_v2_dimensions' + predicate).run(...params)
     db.prepare('DELETE FROM game_map_v2_worlds' + (worldId ? ' WHERE id = ?' : '')).run(...params)
-    const reset: GameMapReset = { id: randomUUID(), at: Date.now(), world: worldId,
+    const reset: GameMapReset = { id: randomUUID(), at, world: worldId,
       world_name: worldId ? String(worlds[0]?.name || worldId) : '全部存档',
-      removed_worlds: worlds.length, removed_tiles: tiles,
+      removed_worlds: worlds.length, removed_tiles: tiles, removed_players: players,
       status: 'waiting', message: '地图已清空，等待服务器重新全量上传。' }
     setSetting(MAP_RESET_SETTING, JSON.stringify(reset))
     db.exec('COMMIT')

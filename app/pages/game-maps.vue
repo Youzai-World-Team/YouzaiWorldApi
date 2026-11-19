@@ -10,6 +10,7 @@ const {
   chooseHeight, goToRecorded, chooseRegion, moveTo, jumpSaved, zoom, wheel, pointerDown, pointerMove, pointerUp, keydown,
   openLandmark, saveLandmark, removeLandmark, copyCoordinates, copyUploadCommand, requestUpload,
   toggleOverview, toggleFullscreen, refreshWorlds, loadOverview, schedule,
+  players, playersBusy, playersError, showPlayers, selectedPlayer, now, loadPlayers, jumpPlayer,
 } = useGameMap()
 const layerTitle = (value: GameMapLayer) => value === 'ROOF' ? (dimension.value === 'minecraft:the_nether' ? '下界顶板' : '顶层') : value === 'FIXED' ? '高度切片' : mapLayerLabel(value)
 const exactTime = (time: number) => time ? new Date(time).toLocaleString('zh-CN') : '尚无完整同步'
@@ -42,7 +43,7 @@ const exactTime = (time: number) => time ? new Date(time).toLocaleString('zh-CN'
       <div class="map-toolbar">
         <label>存档<select :value="worldId" @change="setWorld(($event.target as HTMLSelectElement).value)"><option v-for="item in worlds" :key="item.id" :value="item.id">{{ item.name }} · {{ item.id.slice(0, 8) }}</option></select></label>
         <label>维度<select :value="dimension" @change="setDimension(($event.target as HTMLSelectElement).value)"><option v-for="id in dimensions" :key="id" :value="id">{{ labelDimension(id) }}</option></select></label>
-        <details class="map-display-options"><summary>显示选项</summary><div><label><input v-model="lighting" type="checkbox">光照</label><label><input v-model="grid" type="checkbox">区块网格</label></div></details>
+        <details class="map-display-options"><summary>显示选项</summary><div><label><input v-model="lighting" type="checkbox">光照</label><label><input v-model="grid" type="checkbox">区块网格</label><label><input v-model="showPlayers" type="checkbox">玩家位置标记</label></div></details>
       </div>
       <div class="map-layer-tabs" role="group" aria-label="选择地形图层"><button v-for="value in layers" :key="value" type="button" :aria-pressed="layer === value" @click="setLayer(value)">{{ layerTitle(value) }}</button></div>
       <div v-if="layer === 'CAVE' || layer === 'FIXED'" class="map-height-controls">
@@ -58,7 +59,7 @@ const exactTime = (time: number) => time ? new Date(time).toLocaleString('zh-CN'
         <button type="button" :aria-expanded="overviewOpen" @click="toggleOverview">{{ overviewOpen ? '收起区域总览' : '区域总览' }}</button>
       </div>
       <div ref="container" class="map-viewport">
-        <canvas ref="surface" tabindex="0" aria-label="服务器地图：拖动平移，滚轮或双指缩放，点击选点；方向键移动，加减键缩放"
+        <canvas ref="surface" tabindex="0" aria-label="服务器地图：拖动平移，滚轮或双指缩放，点击玩家标记或选点；方向键移动，加减键缩放"
           @wheel="wheel" @pointerdown="pointerDown" @pointermove="pointerMove" @pointerup="pointerUp" @pointercancel="pointerUp" @lostpointercapture="pointerUp" @pointerleave="hover = null" @keydown="keydown" />
         <span class="map-north" aria-hidden="true">↑ 北</span>
         <div class="map-float-actions">
@@ -66,14 +67,17 @@ const exactTime = (time: number) => time ? new Date(time).toLocaleString('zh-CN'
           <button type="button" title="缩小地图" aria-label="缩小地图" @click="zoom(1 / 1.5)"><md-icon>remove</md-icon></button>
           <button type="button" :title="fullScreen ? '退出全屏' : '全屏地图'" :aria-label="fullScreen ? '退出全屏' : '全屏地图'" @click="toggleFullscreen"><md-icon>{{ fullScreen ? 'fullscreen_exit' : 'fullscreen' }}</md-icon></button>
         </div>
-        <div v-if="!selected" class="map-overlay"><span>此图层尚未上传地形，页面会自动检查同步状态。</span></div>
-        <div v-else-if="!busy && !loaded && !error" class="map-overlay"><span>当前位置没有已记录地形。</span><button type="button" @click="goToRecorded">前往有地形区域</button><button type="button" @click="toggleOverview">查看区域总览</button></div>
+        <div v-if="!selected && !selectedPlayer" class="map-overlay"><span>此图层尚未上传地形，页面会自动检查同步状态。</span></div>
+        <div v-else-if="selected && !selectedPlayer && !busy && !loaded && !error" class="map-overlay"><span>当前位置没有已记录地形。</span><button type="button" @click="goToRecorded">前往有地形区域</button><button type="button" @click="toggleOverview">查看区域总览</button></div>
+        <span v-if="selectedPlayer && !busy && !loaded" class="map-position-note">此位置尚无地形，玩家标记来自位置快照。</span>
         <span v-if="busy" class="map-loading" role="status">正在补充地形 · 已显示 {{ loaded }} 个区块</span>
       </div>
       <div class="map-footer">
-        <div><span>{{ pointed ? '选点' : '中心' }} {{ coordinateText }}<template v-if="pointerElevation !== null"> · 地形 Y {{ pointerElevation }}</template></span><small v-if="hover">鼠标 X {{ hover.x }} · Z {{ hover.z }}</small></div>
+        <div><span v-if="selectedPlayer">{{ selectedPlayer.name }} · {{ coordinateText }} · 玩家 Y {{ Math.floor(selectedPlayer.y) }}</span><span v-else>{{ pointed ? '选点' : '中心' }} {{ coordinateText }}<template v-if="pointerElevation !== null"> · 地形 Y {{ pointerElevation }}</template></span><small v-if="selectedPlayer">记录于 {{ exactTime(selectedPlayer.recorded_at) }} · 最近位置快照</small><small v-if="hover">鼠标 X {{ hover.x }} · Z {{ hover.z }}</small></div>
         <div class="map-coordinate-actions"><button type="button" @click="copyCoordinates">复制坐标</button><button type="button" @click="openLandmark">保存地标</button></div>
       </div>
+      <GameMapPlayers :players="players" :busy="playersBusy" :error="playersError" :dimension="dimension" :selected="selectedPlayer?.uuid"
+        :now="now" :label-dimension="labelDimension" @choose="jumpPlayer" @refresh="loadPlayers(true)" />
       <GameMapOverview v-if="overviewOpen" :overview="overview" :viewport="viewport" :busy="overviewBusy" :error="overviewError" @choose="chooseRegion" @retry="loadOverview(true)" />
       <details class="map-saved-places"><summary>地标与最近位置 <span>{{ landmarks.length }} 个地标</span></summary>
         <p>保存在当前浏览器，按后台账户区分；清空对应存档的地图后，旧位置会自动失效。</p>
@@ -120,6 +124,7 @@ input[type=checkbox], input[type=range] { accent-color: var(--md-sys-color-prima
 canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }canvas:active { cursor: grabbing; }
 .map-north, .map-loading, .map-overlay, .map-float-actions { position: absolute; background: var(--md-sys-color-surface-container-high); color: var(--md-sys-color-on-surface); border-radius: 12px; padding: 9px 13px; font-size: 13px; }
 .map-north { top: 12px; left: 12px; pointer-events: none; }.map-loading { right: 12px; bottom: 12px; pointer-events: none; }.map-float-actions { right: 12px; top: 12px; display: flex; flex-direction: column; gap: 4px; padding: 4px; }.map-float-actions button { display: grid; place-items: center; padding: 8px; border: none; background: transparent; }
+.map-position-note { position: absolute; left: 12px; bottom: 12px; right: 12px; max-width: fit-content; padding: 9px 13px; border-radius: 12px; font-size: 13px; background: var(--md-sys-color-surface-container-high); color: var(--md-sys-color-on-surface-variant); pointer-events: none; }
 .map-overlay { left: 50%; top: 50%; transform: translate(-50%, -50%); text-align: center; max-width: 80%; display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }.map-overlay span { flex-basis: 100%; line-height: 1.6; }
 .map-footer { display: flex; padding: 12px 16px; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; font-size: 13px; }.map-footer > div:first-child { display: flex; flex-direction: column; gap: 4px; }.map-footer small { color: var(--md-sys-color-on-surface-variant); }.map-coordinate-actions { display: flex; gap: 8px; }
 .map-saved-places { padding: 16px; border-top: 1px solid var(--md-sys-color-outline-variant); }.map-saved-places summary { display: flex; justify-content: space-between; }.map-saved-places p, .map-help p { color: var(--md-sys-color-on-surface-variant); font-size: 13px; line-height: 1.7; }
@@ -129,6 +134,6 @@ canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: 
 .map-error, .map-request-result { border-radius: 14px; padding: 14px 18px; margin: 0; line-height: 1.7; }.map-error { color: var(--md-sys-color-on-error-container); background: var(--md-sys-color-error-container); }.map-request-result { background: var(--md-sys-color-surface-container); }
 .map-empty { text-align: center; padding: 40px 24px; border-radius: 24px; background: var(--md-sys-color-surface-container-low); }.map-empty > md-icon { --md-icon-size: 48px; color: var(--md-sys-color-primary); }.map-empty p, .map-empty ol { max-width: 680px; margin: 16px auto; line-height: 1.8; color: var(--md-sys-color-on-surface-variant); }.map-empty ol { text-align: left; padding-left: 24px; }.map-empty li + li { margin-top: 8px; }.map-empty-actions { display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap; }
 .map-help { padding: 16px; border-radius: 16px; background: var(--md-sys-color-surface-container-low); }.map-landmark-name { display: flex; flex-direction: column; gap: 8px; }.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; }
-.map-card-fullscreen { border-radius: 0; height: 100dvh; width: 100vw; display: flex; flex-direction: column; }.map-card-fullscreen .map-viewport { flex: 1; min-height: 0; height: auto; }.map-card-fullscreen .map-saved-places, .map-card-fullscreen :deep(.map-overview) { display: none; }
+.map-card-fullscreen { border-radius: 0; height: 100dvh; width: 100vw; display: flex; flex-direction: column; }.map-card-fullscreen .map-viewport { flex: 1; min-height: 0; height: auto; }.map-card-fullscreen .map-saved-places, .map-card-fullscreen :deep(.map-overview), .map-card-fullscreen :deep(.map-players) { display: none; }
 @media (max-width: 640px) { .map-toolbar { gap: 10px; padding: 12px; }.map-toolbar > label { flex: 1; min-width: 100px; }select { width: 100%; max-width: none; }.map-display-options { margin-left: 0; }.map-display-options summary { padding: 10px 0; }.map-display-options > div { right: 0; }.map-layer-tabs { padding: 0 12px; }.map-layer-description { margin-left: 12px; margin-right: 12px; }.map-navigation { padding: 12px; gap: 8px; }.map-location { flex-basis: 100%; }.map-navigation > button { flex: 1; font-size: 12px; padding: 8px; }.map-height-controls { padding: 12px 12px 0; flex-wrap: wrap; }.map-height-controls input[type=range] { flex-basis: 100%; }.map-card { border-radius: 18px; }.map-viewport { height: 55vh; min-height: 320px; }.map-float-actions { right: 8px; top: 8px; }.map-footer { padding: 12px; }.map-coordinate-actions { width: 100%; }.map-coordinate-actions button { flex: 1; }.map-card-fullscreen { border-radius: 0; }.map-card-fullscreen .map-toolbar, .map-card-fullscreen .map-layer-description, .map-card-fullscreen .map-navigation { display: none; } }
 </style>

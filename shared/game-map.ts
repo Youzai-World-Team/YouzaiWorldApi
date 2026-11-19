@@ -1,10 +1,12 @@
-/** 地图协议的跨端类型与坐标边界；浏览器只读取已上传的地形快照。 */
+/** 地图协议的跨端类型与坐标边界；浏览器只读取已上传的地形和玩家位置快照。 */
 export const MAP_CHUNK_LIMIT = 1_874_999
 export const MAP_MAX_VIEW_CHUNKS = 256
 export const MAP_TILE_BYTES = 1792
 export const MAP_BATCH_TILES = 128
 export const MAP_PAGE_TILES = 256
 export const MAP_OVERVIEW_SIDE = 64
+export const MAP_PLAYER_BATCH = 256
+export const MAP_MAX_PLAYERS = 4096
 export const MAP_UPLOAD_COMMAND = 'yzwc map upload'
 export const MAP_LAYERS = ['SURFACE', 'ROOF', 'CAVE', 'FIXED'] as const
 export type GameMapLayer = typeof MAP_LAYERS[number]
@@ -16,6 +18,17 @@ export interface GameMapLayerSummary {
 export interface GameMapWorld {
   id: string; data_id: string; name: string; dimensions: GameMapDimension[]; layers: GameMapLayerSummary[]
   source_revision: number; upload_batch: number; last_success: number; last_activity: number; syncing: boolean; tile_count: number
+  player_count: number; player_updated_at: number
+}
+export const MAP_PLAYER_SOURCES = ['login', 'logout', 'upload'] as const
+export type GameMapPlayerSource = typeof MAP_PLAYER_SOURCES[number]
+export interface GameMapPlayer {
+  uuid: string; name: string; dimension: string; x: number; y: number; z: number
+  recorded_at: number; source: GameMapPlayerSource
+}
+export interface GameMapPlayers { world: string; data_id: string; players: GameMapPlayer[] }
+export function mapPlayerSourceLabel(source: GameMapPlayerSource): string {
+  return { login: '上线后', logout: '下线前', upload: '地图上传时' }[source]
 }
 export interface GameMapTile { x: number; z: number; data: string }
 export interface GameMapTilePage { tiles: GameMapTile[]; next: number | null }
@@ -34,7 +47,7 @@ export interface GameMapUploadRequest {
 }
 export interface GameMapReset extends GameMapUploadRequest {
   id: string; at: number; world: string | null; world_name: string
-  removed_worlds: number; removed_tiles: number
+  removed_worlds: number; removed_tiles: number; removed_players: number
 }
 export interface GameMapIndex {
   worlds: GameMapWorld[]; reset: GameMapReset | null

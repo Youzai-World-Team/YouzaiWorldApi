@@ -1,6 +1,6 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { MAP_CHUNK_LIMIT, MAP_TILE_BYTES, MAP_UPLOAD_COMMAND, type GameMapIndex, type GameMapLayer,
-  type GameMapOverview, type GameMapTilePage, type GameMapUploadRequest } from '#shared/game-map'
+  type GameMapOverview, type GameMapTilePage, type GameMapUploadRequest, type GameMapPlayers, type GameMapPlayer } from '#shared/game-map'
 import { MAP_BLOCK_LIMIT, MAP_DETAIL_CHUNKS, mapFitScale, mapPinchView, parseMapLocation,
   type MapPoint, type MapRectangle } from '#shared/game-map-view'
 import { GameMapTileCache, mapTileCanvas } from '../utils/game-map-cache'
@@ -25,12 +25,18 @@ export function useGameMap() {
   const busy = ref(false), refreshing = ref(false), error = ref(''), statusError = ref(''), loaded = ref(0)
   const lighting = ref(false), grid = ref(false), overviewOpen = ref(false), fullScreen = ref(false)
   const overview = ref<GameMapOverview | null>(null), overviewBusy = ref(false), overviewError = ref('')
+  const playerSnapshots = ref<GameMapPlayers | null>(null), playersBusy = ref(false), playersError = ref('')
+  const showPlayers = ref(true), selectedPlayerId = ref('')
   const now = ref(Date.now()), hover = ref<MapPoint | null>(null), pointed = ref<MapPoint | null>(null)
   const preferences = ref(emptyMapPreferences()), landmarkOpen = ref(false), landmarkName = ref('')
   const uploadPending = ref(false), uploadRequest = ref<GameMapUploadRequest | null>(null)
   const tileVersion = ref(0)
   let uploadRequestedAt = 0
   const world = computed(() => worlds.value.find(value => value.id === worldId.value))
+  const players = computed(() => playerSnapshots.value?.world === worldId.value
+    && playerSnapshots.value.data_id === world.value?.data_id ? playerSnapshots.value.players : [])
+  const dimensionPlayers = computed(() => players.value.filter(value => value.dimension === dimension.value))
+  const selectedPlayer = computed(() => dimensionPlayers.value.find(value => value.uuid === selectedPlayerId.value))
   const dimensions = computed(() => world.value?.dimensions.map(value => value.id) || [])
   const layers = computed(() => [...new Set(world.value?.layers.filter(value => value.dimension === dimension.value).map(value => value.layer) || [])])
   const heights = computed(() => world.value?.layers.filter(value => value.dimension === dimension.value && value.layer === layer.value).map(value => value.height).sort((a, b) => a - b) || [])
@@ -80,6 +86,7 @@ export function useGameMap() {
   const pointers = new Map<number, MapPoint>()
   let mounted = false, generation = 0, selectionGeneration = 0, frame = 0, sliceHeight = 64
   let controller: AbortController | undefined, overviewController: AbortController | undefined, indexController: AbortController | undefined
+  let playersController: AbortController | undefined, playersStamp = '', playersRequestStamp = ''
   let timer: ReturnType<typeof setTimeout> | undefined, saveTimer: ReturnType<typeof setTimeout> | undefined
   let poll: ReturnType<typeof setInterval> | undefined, clock: ReturnType<typeof setInterval> | undefined, observer: ResizeObserver | undefined
   let drag: { id: number; start: MapPoint; previous: MapPoint; moved: boolean } | null = null
@@ -148,10 +155,52 @@ export function useGameMap() {
       ctx.font = '12px sans-serif'; ctx.lineWidth = 3; ctx.strokeStyle = getComputedStyle(canvas).getPropertyValue('--md-sys-color-surface').trim() || '#fff'
       ctx.strokeText(landmark.name, x + 9, z + 4); ctx.fillText(landmark.name, x + 9, z + 4)
     }
+    if (showPlayers.value) {
+      const markerColor = getComputedStyle(canvas).getPropertyValue('--md-sys-color-tertiary').trim() || '#006a64'
+      const outline = getComputedStyle(canvas).getPropertyValue('--md-sys-color-surface').trim() || '#fff'
+      for (const player of dimensionPlayers.value) {
+        const x = width.value / 2 + (player.x - centerX.value) * scale.value, z = canvasHeight.value / 2 + (player.z - centerZ.value) * scale.value
+        if (x < -80 || x > width.value + 80 || z < -30 || z > canvasHeight.value + 30) continue
+        const chosen = player.uuid === selectedPlayerId.value
+        ctx.fillStyle = chosen ? color : markerColor; ctx.strokeStyle = outline; ctx.lineWidth = 2
+        ctx.beginPath(); ctx.arc(x, z, chosen ? 7 : 5, 0, Math.PI * 2); ctx.fill(); ctx.stroke()
+        if (chosen || dimensionPlayers.value.length <= 200) {
+          ctx.font = '12px sans-serif'; ctx.lineWidth = 3
+          ctx.strokeText(player.name, x + 11, z + 4); ctx.fillText(player.name, x + 11, z + 4)
+        }
+      }
+    }
     if (pointed.value) {
       const x = width.value / 2 + (pointed.value.x - centerX.value) * scale.value, z = canvasHeight.value / 2 + (pointed.value.z - centerZ.value) * scale.value
       ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x - 10, z); ctx.lineTo(x + 10, z); ctx.moveTo(x, z - 10); ctx.lineTo(x, z + 10); ctx.stroke()
     }
+  }
+
+  /** 玩家位置与地形分开读取，位置更新不清空瓦片缓存。 */
+  async function loadPlayers(force = false) {
+    const value = world.value
+    if (!value || !mounted) { playersController?.abort(); playerSnapshots.value = null; playersBusy.value = false; playersError.value = ''; return }
+    const stamp = `${value.id}|${value.data_id}|${value.player_count || 0}|${value.player_updated_at || 0}`
+    if (!force && ((playersBusy.value && playersRequestStamp === stamp) || (playersStamp === stamp && !playersError.value))) return
+    playersController?.abort()
+    const abort = new AbortController(); playersController = abort; playersRequestStamp = stamp
+    playersBusy.value = true; playersError.value = ''
+    try {
+      const result = await $fetch<GameMapPlayers>('/api/admin/game-maps/players', {
+        query: { world: value.id, data_id: value.data_id }, signal: abort.signal })
+      if (!mounted || abort.signal.aborted || world.value?.id !== value.id || world.value?.data_id !== value.data_id) return
+      if (result.world !== value.id || result.data_id !== value.data_id) throw new Error('玩家位置不属于当前地图')
+      const before = selectedPlayer.value
+      playerSnapshots.value = result; playersStamp = stamp
+      if (before) {
+        const current = selectedPlayer.value
+        if (current) pointed.value = { x: current.x, z: current.z }
+        else { selectedPlayerId.value = ''; pointed.value = null }
+      }
+      paintSoon()
+    } catch (failure: any) {
+      if (!abort.signal.aborted) playersError.value = failure?.data?.statusMessage || '玩家位置快照读取失败，稍后会自动重试'
+    } finally { if (playersController === abort) playersBusy.value = false }
   }
 
   async function fetchTiles() {
@@ -212,7 +261,7 @@ export function useGameMap() {
     if (remember) saveCurrentView()
     const token = ++selectionGeneration
     clearTimeout(saveTimer)
-    cancel(); overviewController?.abort(); overview.value = null; pointed.value = null; hover.value = null; error.value = ''
+    cancel(); overviewController?.abort(); overview.value = null; pointed.value = null; selectedPlayerId.value = ''; hover.value = null; error.value = ''
     worldId.value = id
     const saved = preferences.value.views.filter(value => value.world === id && value.dataId === world.value?.data_id).at(-1)
     sliceHeight = saved?.sliceHeight ?? 64
@@ -223,6 +272,7 @@ export function useGameMap() {
     if (layer.value === 'CAVE' || layer.value === 'FIXED') sliceHeight = height.value
     await nextTick(); measure()
     if (token !== selectionGeneration || worldId.value !== id) return
+    void loadPlayers()
     if (saved && selected.value) { centerX.value = saved.x; centerZ.value = saved.z; scale.value = saved.scale; schedule(); void loadOverview() }
     else {
       const value = await loadOverview()
@@ -237,7 +287,7 @@ export function useGameMap() {
     return value ? { minX: value.min_x, minZ: value.min_z, maxX: value.max_x, maxZ: value.max_z } : viewport.value
   }
   async function setDimension(id: string) {
-    saveCurrentView(); const token = ++selectionGeneration; clearTimeout(saveTimer); cancel(); overviewController?.abort(); overview.value = null; pointed.value = null; hover.value = null; error.value = ''
+    saveCurrentView(); const token = ++selectionGeneration; clearTimeout(saveTimer); cancel(); overviewController?.abort(); overview.value = null; pointed.value = null; selectedPlayerId.value = ''; hover.value = null; error.value = ''
     dimension.value = id
     const saved = preferences.value.views.find(value => value.world === worldId.value && value.dataId === world.value?.data_id && value.dimension === id)
     sliceHeight = saved?.sliceHeight ?? 64
@@ -263,10 +313,11 @@ export function useGameMap() {
   async function goToRecorded() {
     const scope = namespace.value, value = await loadOverview()
     if (!value?.cells.length || scope !== namespace.value) return
-    centerX.value = value.focus_x; centerZ.value = value.focus_z; pointed.value = null
+    centerX.value = value.focus_x; centerZ.value = value.focus_z; pointed.value = null; selectedPlayerId.value = ''
     scale.value = mapFitScale(viewBounds(), width.value, canvasHeight.value); schedule(); rememberDestination()
   }
   function chooseRegion(point: MapPoint) {
+    selectedPlayerId.value = ''
     centerX.value = point.x; centerZ.value = point.z; pointed.value = point
     scale.value = Math.max(minimumScale(), 2); schedule(); rememberDestination()
     container.value?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' })
@@ -274,14 +325,34 @@ export function useGameMap() {
   function moveTo() {
     const point = parseMapLocation(location.value)
     if (!point) { showToast('请输入 X Z、X Y Z 或游戏内复制的坐标文本', 'error'); return }
+    selectedPlayerId.value = ''
     if (point.y !== undefined && (layer.value === 'CAVE' || layer.value === 'FIXED')) chooseHeight(point.y)
     centerX.value = point.x; centerZ.value = point.z; pointed.value = { x: point.x, z: point.z }; schedule(); rememberDestination()
   }
   async function jumpSaved(value: SavedMapView) {
+    selectedPlayerId.value = ''
     if (value.world !== worldId.value) await setWorld(value.world)
-    if (value.dimension !== dimension.value) await setDimension(value.dimension)
+    if (value.dimension !== dimension.value) {
+      const pending = setDimension(value.dimension), token = selectionGeneration
+      await pending
+      if (token !== selectionGeneration) return
+    }
     if (layers.value.includes(value.layer)) setLayer(value.layer)
     chooseHeight(value.height); centerX.value = value.x; centerZ.value = value.z; scale.value = value.scale; pointed.value = { x: value.x, z: value.z }
+    schedule(); rememberDestination()
+    container.value?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' })
+  }
+
+  async function jumpPlayer(value: GameMapPlayer) {
+    const identity = world.value?.data_id, id = worldId.value
+    if (!identity || !players.value.some(player => player.uuid === value.uuid) || !dimensions.value.includes(value.dimension)) return
+    if (value.dimension !== dimension.value) await setDimension(value.dimension)
+    if (id !== worldId.value || identity !== world.value?.data_id || value.dimension !== dimension.value) return
+    const current = players.value.find(player => player.uuid === value.uuid)
+    if (!current || current.dimension !== dimension.value) return
+    if (layer.value === 'CAVE' || layer.value === 'FIXED') chooseHeight(current.y)
+    selectedPlayerId.value = current.uuid; pointed.value = { x: current.x, z: current.z }
+    centerX.value = current.x; centerZ.value = current.z; scale.value = Math.max(minimumScale(), 2)
     schedule(); rememberDestination()
     container.value?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' })
   }
@@ -326,8 +397,15 @@ export function useGameMap() {
     if (!pointers.has(event.pointerId)) return
     if (event.type === 'pointerup' && pointers.size === 1 && drag && !drag.moved) {
       const point = screenPoint(event)
-      pointed.value = { x: Math.floor(centerX.value + (point.x - width.value / 2) / scale.value), z: Math.floor(centerZ.value + (point.z - canvasHeight.value / 2) / scale.value) }
-      paintSoon()
+      const hit = showPlayers.value ? dimensionPlayers.value.find(player => Math.hypot(
+        width.value / 2 + (player.x - centerX.value) * scale.value - point.x,
+        canvasHeight.value / 2 + (player.z - centerZ.value) * scale.value - point.z) <= 12) : undefined
+      if (hit) void jumpPlayer(hit)
+      else {
+        selectedPlayerId.value = ''
+        pointed.value = { x: Math.floor(centerX.value + (point.x - width.value / 2) / scale.value), z: Math.floor(centerZ.value + (point.z - canvasHeight.value / 2) / scale.value) }
+        paintSoon()
+      }
     }
     pointers.delete(event.pointerId); pinch = null
     if (pointers.size) { const [id, point] = [...pointers.entries()][0]!; drag = { id, start: point, previous: point, moved: true } }
@@ -358,7 +436,10 @@ export function useGameMap() {
     try { await navigator.clipboard.writeText(text); showToast(message) }
     catch { showToast(`复制失败，可手动复制：${text}`, 'error') }
   }
-  function copyCoordinates() { return copyText(`X: ${Math.floor(coordinate.value.x)}${pointerElevation.value === null ? '' : ` Y: ${pointerElevation.value}`} Z: ${Math.floor(coordinate.value.z)}`, '已复制坐标') }
+  function copyCoordinates() {
+    const elevation = selectedPlayer.value ? Math.floor(selectedPlayer.value.y) : pointerElevation.value
+    return copyText(`X: ${Math.floor(coordinate.value.x)}${elevation === null ? '' : ` Y: ${elevation}`} Z: ${Math.floor(coordinate.value.z)}`, '已复制坐标')
+  }
   function copyUploadCommand() { return copyText(MAP_UPLOAD_COMMAND, '已复制服务器控制台上传命令') }
   async function requestUpload() {
     if (!canRequestUpload.value || uploadPending.value) return
@@ -400,17 +481,23 @@ export function useGameMap() {
       if (uploadRequestedAt && next.worlds.some(value => value.last_success >= uploadRequestedAt && !value.syncing)) uploadRequest.value = null
       preferences.value = pruneMapPreferences(preferences.value, next.worlds)
       if (!world.value) await setWorld(next.worlds.some(value => value.id === preferences.value.lastWorld) ? preferences.value.lastWorld : next.worlds[0]?.id || '', false)
-      else if (previousWorld?.data_id !== world.value.data_id || !selected.value) await setWorld(worldId.value, false)
+      else if (previousWorld?.data_id !== world.value.data_id || !dimensions.value.includes(dimension.value)) await setWorld(worldId.value, false)
       else {
+        if (!selected.value && layers.value.length) {
+          if (!layers.value.includes(layer.value)) layer.value = layers.value.includes('SURFACE') ? 'SURFACE' : layers.value[0]!
+          height.value = nearestHeight(layer.value === 'SURFACE' || layer.value === 'ROOF' ? 0 : sliceHeight)
+        }
         const changed = force || previousWorld?.last_activity !== world.value.last_activity || previousWorld?.upload_batch !== world.value.upload_batch || previousWorld?.source_revision !== world.value.source_revision
         if (changed) { schedule(); if (overviewOpen.value) void loadOverview(true) }
       }
+      await loadPlayers(force)
     } catch (failure: any) {
       if (!abort.signal.aborted) statusError.value = failure?.data?.statusMessage || '快照状态读取失败，稍后会自动重试'
     } finally { if (!abort.signal.aborted) refreshing.value = false }
   }
 
   watch([lighting, grid], () => { paintSoon(); queueSave() })
+  watch([showPlayers, selectedPlayerId], paintSoon)
   watch([centerX, centerZ, scale], queueSave)
   onMounted(async () => {
     mounted = true
@@ -425,7 +512,7 @@ export function useGameMap() {
   })
   onBeforeUnmount(() => {
     saveCurrentView(); mounted = false; cancel(); clearTimeout(saveTimer); clearInterval(poll); clearInterval(clock)
-    overviewController?.abort(); indexController?.abort(); observer?.disconnect(); if (frame) cancelAnimationFrame(frame)
+    overviewController?.abort(); indexController?.abort(); playersController?.abort(); observer?.disconnect(); if (frame) cancelAnimationFrame(frame)
     document.removeEventListener('fullscreenchange', fullscreenChanged); document.removeEventListener('visibilitychange', visibleChanged)
     cache.clear(); overviewCache.clear(); pointers.clear()
   })
@@ -433,6 +520,7 @@ export function useGameMap() {
   return { index, worlds, worldId, world, dimension, dimensions, layers, layer, height, heights, heightIndex, selected,
     centerX, centerZ, scale, location, card, surface, container, busy, refreshing, error, statusError, loaded,
     lighting, grid, overviewOpen, overview, overviewBusy, overviewError, viewport, fullScreen, hover, pointed,
+    players, playersBusy, playersError, showPlayers, selectedPlayer, now, loadPlayers, jumpPlayer,
     coordinateText, pointerElevation, landmarks, recent, landmarkOpen, landmarkName, snapshotAge, stale, stalled, syncText,
     uploadPending, uploadRequest, canRequestUpload, canViewSettings, labelDimension, setWorld, setDimension, setLayer,
     chooseHeight, goToRecorded, chooseRegion, moveTo, jumpSaved, zoom, wheel, pointerDown, pointerMove, pointerUp, keydown,

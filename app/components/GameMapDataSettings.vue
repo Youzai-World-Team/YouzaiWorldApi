@@ -88,7 +88,7 @@ onBeforeUnmount(() => { mounted = false; clearInterval(timer); controller?.abort
 <template>
   <section v-if="canManage" id="game-map-data" class="card settings-card map-data-settings">
     <div class="map-data-heading"><h2 class="card-title">服务器地图数据</h2><NuxtLink to="/game-maps">查看地图</NuxtLink></div>
-    <p class="card-note">重置 Minecraft 存档后，可清空这里保存的旧地图，再从当前游戏服务器全量上传。此功能默认仅初始管理员可用，可在权限管理中授权。</p>
+    <p class="card-note">重置 Minecraft 存档后，可清空这里保存的旧地图和玩家位置，再从当前游戏服务器全量上传。此功能默认仅初始管理员可用，可在权限管理中授权。</p>
     <p v-if="error" class="map-data-error" role="alert">{{ error }}</p>
     <div class="map-data-controls">
       <label>清空范围<select v-model="selected" :disabled="loading || pending || uploadPending">
@@ -106,7 +106,7 @@ onBeforeUnmount(() => { mounted = false; clearInterval(timer); controller?.abort
       <md-text-button @click="copyCommand">复制上传命令</md-text-button>
     </div>
     <ConfirmDialog :open="confirmOpen" title="清空地图并重新上传" icon="delete_sweep" destructive
-      :message="`将永久清空「${target.name}」的地图快照和同步进度，约 ${target.count.toLocaleString()} 个图层区块。请确认 Minecraft 存档已经重置，当前管理实例运行的是新存档。`"
+      :message="`将永久清空「${target.name}」的地图快照、玩家位置和同步进度，约 ${target.count.toLocaleString()} 个图层区块。请确认 Minecraft 存档已经重置，当前管理实例运行的是新存档。`"
       confirm-label="清空并请求上传" :pending="pending" pending-label="正在清空…" @confirm="reset" @cancel="confirmOpen = false" />
   </section>
 </template>

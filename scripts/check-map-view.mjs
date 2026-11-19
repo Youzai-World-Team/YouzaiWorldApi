@@ -87,6 +87,7 @@ let actor
 const auth = new Function('requireAuth', 'createError', 'ADMIN_FEATURE_DEFINITIONS', 'permissionAllows', stripTypeScriptTypes(permissionLogic.replace(/\bexport /g, '')) + '\nreturn {requireFeaturePermission}')
   (() => actor, options => Object.assign(new Error(options.statusMessage), options), api.ADMIN_FEATURE_DEFINITIONS, api.permissionAllows)
 check('地图清空接口归属站点设置权限', () => assert.equal(api.pageKeyForApi('/api/admin/game-map-data/reset'), 'settings'))
+check('玩家位置读取接口沿用地图查看权限', () => assert.equal(api.pageKeyForApi('/api/admin/game-maps/players'), 'game-maps'))
 check('普通管理员默认不能清空，即使站点设置可编辑', () => {
   actor = { permissions: { settings: 'edit' }, featurePermissions: api.defaultAdminFeaturePermissions() }
   assert.throws(() => auth.requireFeaturePermission({}, 'settings-game-maps', 'edit'), error => error.statusCode === 403)
@@ -104,6 +105,7 @@ check('明确授权的普通管理员仍受站点设置页面权限限制', () =
 // 使用真实 composable 和 Vue 响应式，DOM、时钟及 HTTP 由隔离夹具提供。
 const mounted = [], unmounted = [], timeouts = new Map(), intervals = new Map(), frames = new Map(), requests = [], images = []
 let timerId = 0, fixtureNow = 1000000
+let copiedCoordinates = '', overridePlayers = null
 const store = new Map()
 const context = { setTransform() {}, clearRect() {}, drawImage() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, arc() {}, fill() {}, strokeText() {}, fillText() {} }
 const element = { width: 900, height: 560, getBoundingClientRect: () => ({ left: 0, top: 0, width: 900, height: 560 }),
@@ -118,11 +120,22 @@ const world = { id: worldId, data_id: dataId, name: '隔离存档', source_revis
     { dimension: 'minecraft:overworld', layer: 'CAVE', height: 56, tile_count: 1, min_x: -200, min_z: 0, max_x: -200, max_z: 0 },
   ] }
 const index = { worlds: [world], reset: null, diagnostics: { game_api_configured: true, panel_bound: true } }
+const player = { uuid: '44444444-4444-4444-4444-444444444444', name: '测试玩家', dimension: 'minecraft:overworld',
+  x: 16020.75, y: 85.5, z: 8.25, recorded_at: fixtureNow - 60_000, source: 'login' }
+const netherPlayer = { ...player, uuid: '55555555-5555-5555-5555-555555555555', name: '下界玩家',
+  dimension: 'minecraft:the_nether', x: -32.75, y: 120.5, z: -128.25 }
+const players = [player, netherPlayer]
+world.dimensions.push({ id: 'minecraft:the_nether', min_y: 0, max_y: 255 })
+world.player_count = players.length; world.player_updated_at = fixtureNow
 const bytes = Buffer.alloc(1792)
 for (let i = 0; i < 256; i++) { bytes[i * 4 + 3] = 255; bytes.writeInt16BE(64, 1024 + i * 2) }
 const fetch = async (path, options = {}) => {
   requests.push({ path, ...options })
   if (path === '/api/admin/game-maps') return structuredClone(index)
+  if (path.endsWith('/players')) {
+    if (overridePlayers) return overridePlayers(options)
+    return { world: options.query.world, data_id: options.query.data_id, players: structuredClone(players) }
+  }
   const cave = options.query?.layer === 'CAVE', x = cave ? -200 : 1000
   if (path.endsWith('/overview')) return { cell_size: 16, min_x: cave ? -200 : 0, min_z: 0, max_x: x, max_z: 0,
     focus_x: x * 16 + 8, focus_z: 8, cells: [{ x: Math.floor(x / 16), z: 0, count: 1, focus_x: x, focus_z: 0 }] }
@@ -140,6 +153,7 @@ const environment = { ref, computed, watch, nextTick, onMounted: fn => mounted.p
   readMapPreferences: api.readMapPreferences, rememberMapView: api.rememberMapView,
   rememberMapDestination: (value, place) => ({ ...value, recent: [place, ...value.recent].slice(0, 8) }),
   localStorage: { getItem: key => store.get(key) || null, setItem: (key, value) => store.set(key, value) },
+  navigator: { clipboard: { writeText: async value => { copiedCoordinates = value } } },
   Date: { now: () => fixtureNow }, window: { devicePixelRatio: 1 }, document: { hidden: false, addEventListener() {}, removeEventListener() {}, fullscreenElement: null },
   ResizeObserver: class { observe() {} disconnect() {} }, getComputedStyle: () => ({ getPropertyValue: () => '#4469bd' }),
   requestAnimationFrame: fn => { const id = ++timerId; frames.set(id, fn); return id }, cancelAnimationFrame: id => frames.delete(id),
@@ -194,6 +208,53 @@ await checkAsync('自动轮询会读取完成后的实际同步状态', async ()
   assert.equal(browser.syncText.value, '已保存地图快照')
   assert.equal(browser.snapshotAge.value, '不到一分钟前')
 })
+await checkAsync('首次读取玩家位置，状态未变化时不重复下载', async () => {
+  assert.equal(browser.players.value.length, 2)
+  assert.equal(browser.playersError.value, '')
+  const before = requests.filter(value => value.path.endsWith('/players')).length
+  await browser.refreshWorlds(false); await drain()
+  assert.equal(requests.filter(value => value.path.endsWith('/players')).length, before)
+})
+await checkAsync('只更新玩家位置时不重新下载地形或移动浏览中心', async () => {
+  const before = requests.filter(value => value.path.endsWith('/tiles')).length
+  const center = [browser.centerX.value, browser.centerZ.value, browser.scale.value]
+  player.x += 10; player.recorded_at += 100; player.source = 'logout'; world.player_updated_at++
+  await browser.refreshWorlds(false); await loadTiles()
+  assert.equal(browser.players.value[0].x, player.x)
+  assert.deepEqual([browser.centerX.value, browser.centerZ.value, browser.scale.value], center)
+  assert.equal(requests.filter(value => value.path.endsWith('/tiles')).length, before)
+})
+await checkAsync('点击列表跨维度定位；无地形时轮询仍保留所选玩家', async () => {
+  await browser.jumpPlayer(browser.players.value[1]); await loadTiles()
+  assert.equal(browser.dimension.value, 'minecraft:the_nether')
+  assert.deepEqual([browser.centerX.value, browser.centerZ.value], [netherPlayer.x, netherPlayer.z])
+  assert.equal(browser.selectedPlayer.value.uuid, netherPlayer.uuid)
+  await browser.refreshWorlds(false); await loadTiles()
+  assert.equal(browser.dimension.value, 'minecraft:the_nether')
+  assert.deepEqual([browser.centerX.value, browser.centerZ.value], [netherPlayer.x, netherPlayer.z])
+  await browser.jumpPlayer(browser.players.value[0]); await loadTiles()
+})
+await checkAsync('选中玩家复制真实 Y 坐标，关闭标记后点击恢复普通选点', async () => {
+  await browser.copyCoordinates()
+  assert.equal(copiedCoordinates, `X: ${Math.floor(player.x)} Y: ${Math.floor(player.y)} Z: ${Math.floor(player.z)}`)
+  browser.showPlayers.value = false
+  browser.pointerDown({ button: 0, pointerId: 2, clientX: 450, clientY: 280 })
+  browser.pointerUp({ type: 'pointerup', pointerId: 2, clientX: 450, clientY: 280 }); await drain()
+  assert.equal(browser.selectedPlayer.value, undefined)
+  browser.showPlayers.value = true
+  browser.pointerDown({ button: 0, pointerId: 3, clientX: 450, clientY: 280 })
+  browser.pointerUp({ type: 'pointerup', pointerId: 3, clientX: 450, clientY: 280 }); await loadTiles()
+  assert.equal(browser.selectedPlayer.value.uuid, player.uuid)
+})
+await checkAsync('读取位置失败保留已显示快照并允许重试', async () => {
+  overridePlayers = async () => { throw new Error('测试网络故障') }
+  await browser.loadPlayers(true)
+  assert.match(browser.playersError.value, /读取失败/)
+  assert.equal(browser.players.value.length, 2)
+  overridePlayers = null
+  await browser.loadPlayers(true); await drain()
+  assert.equal(browser.playersError.value, '')
+})
 await checkAsync('实际存档身份变化后删除旧地标和浏览位置', async () => {
   browser.landmarkName.value = '旧基地'; browser.saveLandmark()
   assert.equal(browser.landmarks.value.length, 1)
@@ -202,6 +263,20 @@ await checkAsync('实际存档身份变化后删除旧地标和浏览位置', as
   assert.equal(browser.landmarks.value.length, 0)
   assert.equal(browser.recent.value.length, 0)
   assert.equal(browser.centerX.value, 16008)
+})
+await checkAsync('清空期间迟到的位置响应不会显示在新地图', async () => {
+  let resolveOld
+  const oldIdentity = world.data_id
+  overridePlayers = () => { overridePlayers = null; return new Promise(resolve => { resolveOld = resolve }) }
+  const pending = browser.loadPlayers(true)
+  world.data_id = '66666666-6666-6666-6666-666666666666'
+  players.length = 0; world.player_count = 0; world.player_updated_at = 0
+  await browser.refreshWorlds(false); await drain()
+  assert.equal(browser.players.value.length, 0)
+  resolveOld({ world: worldId, data_id: oldIdentity, players: [player] })
+  await pending; await loadTiles()
+  assert.equal(browser.players.value.length, 0)
+  assert.equal(browser.selectedPlayer.value, undefined)
 })
 for (const fn of unmounted) fn()
 scope.stop()

@@ -19,7 +19,7 @@ export default defineEventHandler(async event => {
     expected[id] = dataId
   }
   const reset = clearGameMapData(world, expected)
-  recordAudit(event, user, `清空地图「${reset.world_name}」：${reset.removed_worlds} 个存档、${reset.removed_tiles} 个图层区块，要求重新全量上传`)
+  recordAudit(event, user, `清空地图「${reset.world_name}」：${reset.removed_worlds} 个存档、${reset.removed_tiles} 个图层区块、${reset.removed_players} 位玩家位置，要求重新全量上传`)
   const request = await requestGameMapUpload()
   updateGameMapResetRequest(reset.id, request)
   return { ...reset, ...request }
